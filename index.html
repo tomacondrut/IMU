@@ -2,8 +2,8 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>STAG Telemetrie Hub</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>STAG Telemetrie & Cloud OTA</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -12,6 +12,7 @@
     .card { background-color: #151d2a; border: 1px solid #233145; }
     .stag-green { color: #009B4C; }
     .bg-stag-green { background-color: #009B4C; }
+    .border-stag-green { border-color: #009B4C; }
   </style>
 </head>
 <body class="p-4 md:p-8 max-w-6xl mx-auto">
@@ -19,78 +20,178 @@
   <!-- Header -->
   <header class="card rounded-lg p-4 mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
     <div>
-      <h1 class="text-xl font-bold stag-green tracking-wide">STAG AG &bull; CLOUD DASHBOARD</h1>
+      <h1 class="text-xl font-bold stag-green tracking-wide">STAG AG &bull; CLOUD PORTAL</h1>
       <p class="text-xs text-gray-400" id="device-id-display">Gerät: STAG-IMU-01</p>
     </div>
     <div class="flex items-center gap-3">
       <span id="sync-indicator" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
         <span class="w-2 h-2 rounded-full bg-gray-500"></span> Verbindung prüfen...
       </span>
-      <button onclick="fetchLatestData()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-semibold hover:opacity-90 transition">
+      <button onclick="fetchLatestData(); fetchReleases();" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-semibold hover:opacity-90 transition">
         Aktualisieren
       </button>
     </div>
   </header>
 
-  <!-- Key Metrics -->
-  <section class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-    <div class="card p-4 rounded-lg">
-      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Akkustand</p>
-      <div class="text-2xl font-bold" id="metric-pct">--%</div>
-      <p class="text-xs text-gray-400" id="metric-volt">-- V</p>
-    </div>
-    <div class="card p-4 rounded-lg">
-      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Status</p>
-      <div class="text-base font-bold text-gray-200" id="metric-status">--</div>
-      <p class="text-xs text-gray-400">Stromversorgung</p>
-    </div>
-    <div class="card p-4 rounded-lg">
-      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Boot-Zyklus</p>
-      <div class="text-2xl font-bold" id="metric-boot">#--</div>
-      <p class="text-xs text-gray-400">Deep Sleep Weckungen</p>
-    </div>
-    <div class="card p-4 rounded-lg">
-      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Letzte Messung</p>
-      <div class="text-xs font-semibold mt-1" id="metric-time">--</div>
-      <p class="text-xs text-gray-400" id="metric-ago">Vor --</p>
-    </div>
-  </section>
+  <!-- Navigation Tabs -->
+  <div class="flex gap-2 mb-6">
+    <button id="btn-tab-telemetry" onclick="switchTab('telemetry')" class="bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase transition">
+      Telemetrie & Akkukurve
+    </button>
+    <button id="btn-tab-ota" onclick="switchTab('ota')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase hover:text-white transition">
+      Cloud-OTA & Firmware
+    </button>
+  </div>
 
-  <!-- Battery Discharge Chart -->
-  <section class="card p-4 rounded-lg mb-6">
-    <h2 class="text-sm font-semibold uppercase text-gray-300 mb-4">Spannungsverlauf & Entladekurve</h2>
-    <div class="relative h-64 w-full">
-      <canvas id="batChart"></canvas>
-    </div>
-  </section>
+  <!-- TAB 1: TELEMETRIE -->
+  <main id="tab-telemetry">
+    <!-- Key Metrics -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="card p-4 rounded-lg">
+        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Akkustand</p>
+        <div class="text-2xl font-bold" id="metric-pct">--%</div>
+        <p class="text-xs text-gray-400" id="metric-volt">-- V</p>
+      </div>
+      <div class="card p-4 rounded-lg">
+        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Status</p>
+        <div class="text-base font-bold text-gray-200 truncate" id="metric-status">--</div>
+        <p class="text-xs text-gray-400">Stromversorgung</p>
+      </div>
+      <div class="card p-4 rounded-lg">
+        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Boot-Zyklus</p>
+        <div class="text-2xl font-bold" id="metric-boot">#--</div>
+        <p class="text-xs text-gray-400">Deep Sleep Weckungen</p>
+      </div>
+      <div class="card p-4 rounded-lg">
+        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Letzte Messung</p>
+        <div class="text-xs font-semibold mt-1" id="metric-time">--</div>
+        <p class="text-xs text-gray-400" id="metric-ago">Vor --</p>
+      </div>
+    </section>
 
-  <!-- Raw Log History Table -->
-  <section class="card p-4 rounded-lg overflow-hidden">
-    <h2 class="text-sm font-semibold uppercase text-gray-300 mb-3">Historische Telemetriedaten</h2>
-    <div class="overflow-x-auto">
-      <table class="w-full text-left text-xs font-mono">
-        <thead class="text-gray-400 border-b border-gray-700">
-          <tr>
-            <th class="py-2 px-3">Zeitstempel</th>
-            <th class="py-2 px-3">Spannung</th>
-            <th class="py-2 px-3">Ladung</th>
-            <th class="py-2 px-3">Modus</th>
-            <th class="py-2 px-3">Boot</th>
-          </tr>
-        </thead>
-        <tbody id="log-table-body" class="divide-y divide-gray-800">
-          <tr><td colspan="5" class="py-4 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
-        </tbody>
-      </table>
+    <!-- Battery Discharge Chart -->
+    <section class="card p-4 rounded-lg mb-6">
+      <h2 class="text-sm font-semibold uppercase text-gray-300 mb-4">Spannungsverlauf & Entladekurve</h2>
+      <div class="relative h-64 w-full">
+        <canvas id="batChart"></canvas>
+      </div>
+    </section>
+
+    <!-- Raw Log History Table -->
+    <section class="card p-4 rounded-lg overflow-hidden">
+      <h2 class="text-sm font-semibold uppercase text-gray-300 mb-3">Historische Telemetriedaten</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs font-mono">
+          <thead class="text-gray-400 border-b border-gray-700">
+            <tr>
+              <th class="py-2 px-3">Zeitstempel</th>
+              <th class="py-2 px-3">Spannung</th>
+              <th class="py-2 px-3">Ladung</th>
+              <th class="py-2 px-3">Modus</th>
+              <th class="py-2 px-3">Boot</th>
+            </tr>
+          </thead>
+          <tbody id="log-table-body" class="divide-y divide-gray-800">
+            <tr><td colspan="5" class="py-4 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- TAB 2: CLOUD OTA & FIRMWARE MANAGER -->
+  <main id="tab-ota" class="hidden">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      
+      <!-- Upload Card -->
+      <section class="card p-5 rounded-lg md:col-span-1">
+        <h2 class="text-sm font-bold uppercase text-gray-200 mb-2">Neue Firmware veröffentlichen</h2>
+        <p class="text-xs text-gray-400 mb-4">Lädt das kompilierte Binary (.bin) in Supabase hoch und stößt das Update für den ESP32 an.</p>
+        
+        <form id="ota-upload-form" onsubmit="handleFirmwareUpload(event)" class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">Firmware-Datei (.bin)</label>
+            <input type="file" id="ota-file" accept=".bin" required
+                   class="w-full text-xs text-gray-400 file:mr-2 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 hover:file:bg-gray-700 cursor-pointer">
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">Versions-Tag (z.B. 1.0.1)</label>
+            <input type="text" id="ota-version" placeholder="1.0.1" required
+                   class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-green-500 font-mono">
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">Änderungshinweise (Optional)</label>
+            <textarea id="ota-notes" rows="2" placeholder="z.B. Optimierung des Deep-Sleep Timers"
+                      class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-green-500"></textarea>
+          </div>
+
+          <button type="submit" id="btn-upload-ota"
+                  class="w-full bg-stag-green text-white font-semibold py-2.5 rounded text-xs hover:opacity-90 transition flex justify-center items-center gap-2">
+            <span>⚡ Release Erstellen & Hochladen</span>
+          </button>
+        </form>
+
+        <div id="upload-progress-box" class="hidden mt-3">
+          <div class="w-full bg-gray-800 rounded-full h-2">
+            <div id="upload-progress-bar" class="bg-stag-green h-2 rounded-full w-0 transition-all duration-200"></div>
+          </div>
+          <p id="upload-status-msg" class="text-xs text-gray-400 mt-2 text-center"></p>
+        </div>
+      </section>
+
+      <!-- Releases List -->
+      <section class="card p-5 rounded-lg md:col-span-2 overflow-hidden">
+        <h2 class="text-sm font-bold uppercase text-gray-200 mb-2">Verfügbare Cloud-Releases</h2>
+        <p class="text-xs text-gray-400 mb-4">Der ESP32 vergleicht seine Version regelmäßig mit dem neuesten Eintrag.</p>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="text-gray-400 border-b border-gray-700">
+              <tr>
+                <th class="py-2 px-3">Version</th>
+                <th class="py-2 px-3">Veröffentlicht</th>
+                <th class="py-2 px-3">Hinweise</th>
+                <th class="py-2 px-3 text-right">Aktion</th>
+              </tr>
+            </thead>
+            <tbody id="releases-table-body" class="divide-y divide-gray-800">
+              <tr><td colspan="4" class="py-4 text-center text-gray-500">Lade Release-Verlauf...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
     </div>
-  </section>
+  </main>
 
   <script>
-    const SUPABASE_URL = "https://<YOUR_PROJECT_REF>.supabase.co";
-    const SUPABASE_KEY = "<YOUR_SUPABASE_ANON_KEY>";
+    const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhand1c253Znl3ZmVieWZmeHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NzYxMjcsImV4cCI6MjEwNDU1MjEyN30.Yt-COlgIh5TySB01EGrdddrZguxW30cwhCeXdMjQ0aM";
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     let chartInstance = null;
+
+    function switchTab(tab) {
+      const tabTel = document.getElementById('tab-telemetry');
+      const tabOta = document.getElementById('tab-ota');
+      const btnTel = document.getElementById('btn-tab-telemetry');
+      const btnOta = document.getElementById('btn-tab-ota');
+
+      if (tab === 'telemetry') {
+        tabTel.classList.remove('hidden');
+        tabOta.classList.add('hidden');
+        btnTel.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase transition";
+        btnOta.className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase hover:text-white transition";
+      } else {
+        tabTel.classList.add('hidden');
+        tabOta.classList.remove('hidden');
+        btnOta.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase transition";
+        btnTel.className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase hover:text-white transition";
+        fetchReleases();
+      }
+    }
 
     function initChart(labels, voltages, percents) {
       const ctx = document.getElementById('batChart').getContext('2d');
@@ -156,11 +257,10 @@
         .limit(100);
 
       if (error || !data || data.length === 0) {
-        document.getElementById('sync-indicator').innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Offline';
+        document.getElementById('sync-indicator').innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Keine Daten';
         return;
       }
 
-      // Indicator Update
       const latest = data[0];
       const recTime = new Date(latest.recorded_at);
       const isRecent = (Date.now() - recTime.getTime()) < (1000 * 60 * 15);
@@ -169,7 +269,6 @@
         ? '<span class="w-2 h-2 rounded-full bg-green-500"></span> Online (Aktiv)'
         : '<span class="w-2 h-2 rounded-full bg-yellow-500"></span> Standby (Deep Sleep)';
 
-      // Metrics
       document.getElementById('metric-pct').innerText = `${latest.battery_percent}%`;
       document.getElementById('metric-volt').innerText = `${Number(latest.battery_voltage).toFixed(3)} V`;
       document.getElementById('metric-status').innerText = latest.charging_status;
@@ -177,7 +276,6 @@
       document.getElementById('metric-time').innerText = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       document.getElementById('metric-ago').innerText = recTime.toLocaleDateString();
 
-      // Table & Chart arrays
       const reversed = [...data].reverse();
       const labels = reversed.map(r => new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       const volts = reversed.map(r => r.battery_voltage);
@@ -197,8 +295,108 @@
       document.getElementById('log-table-body').innerHTML = tableRows;
     }
 
-    // Auto-refresh every 30 seconds
+    async function fetchReleases() {
+      const { data, error } = await supabase
+        .from('firmware_releases')
+        .select('*')
+        .order('id', { ascending: false });
+
+      const tbody = document.getElementById('releases-table-body');
+      if (error || !data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="py-4 text-center text-gray-500">Keine Firmware-Releases gefunden.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.map((rel, idx) => `
+        <tr class="hover:bg-gray-800/40 ${idx === 0 ? 'bg-green-950/20' : ''}">
+          <td class="py-2 px-3 font-bold text-green-400">
+            ${rel.version} ${idx === 0 ? '<span class="ml-1 text-[10px] bg-stag-green text-white px-1.5 py-0.5 rounded">LATEST</span>' : ''}
+          </td>
+          <td class="py-2 px-3 text-gray-400">${new Date(rel.created_at).toLocaleString()}</td>
+          <td class="py-2 px-3 text-gray-300 max-w-xs truncate">${rel.release_notes || '-'}</td>
+          <td class="py-2 px-3 text-right">
+            <a href="${rel.bin_url}" download class="text-green-500 hover:underline">Download</a>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function handleFirmwareUpload(e) {
+      e.preventDefault();
+      const fileInput = document.getElementById('ota-file');
+      const versionInput = document.getElementById('ota-version');
+      const notesInput = document.getElementById('ota-notes');
+      const btn = document.getElementById('btn-upload-ota');
+      const progressBox = document.getElementById('upload-progress-box');
+      const progressBar = document.getElementById('upload-progress-bar');
+      const statusMsg = document.getElementById('upload-status-msg');
+
+      const file = fileInput.files[0];
+      const version = versionInput.value.trim();
+      const notes = notesInput.value.trim();
+
+      if (!file || !version) return;
+
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+      progressBox.classList.remove('hidden');
+      progressBar.style.width = '20%';
+      statusMsg.innerText = 'Lade .bin in Supabase Storage hoch...';
+
+      try {
+        // 1. Datei in Supabase Storage (Bucket 'firmware') ablegen
+        const storagePath = `releases/${version}_${Date.now()}.bin`;
+        const { data: storageData, error: storageError } = await supabase
+          .storage
+          .from('firmware')
+          .upload(storagePath, file, { upsert: true });
+
+        if (storageError) throw storageError;
+
+        progressBar.style.width = '60%';
+        statusMsg.innerText = 'Ermittle öffentliche URL...';
+
+        // 2. Öffentliche URL beziehen
+        const { data: urlData } = supabase.storage.from('firmware').getPublicUrl(storagePath);
+        const publicUrl = urlData.publicUrl;
+
+        progressBar.style.width = '80%';
+        statusMsg.innerText = 'Erstelle Release-Eintrag in Datenbank...';
+
+        // 3. Eintrag in firmware_releases anlegen
+        const { error: dbError } = await supabase
+          .from('firmware_releases')
+          .insert([
+            {
+              version: version,
+              bin_url: publicUrl,
+              release_notes: notes
+            }
+          ]);
+
+        if (dbError) throw dbError;
+
+        progressBar.style.width = '100%';
+        statusMsg.innerText = 'Firmware v' + version + ' erfolgreich veröffentlicht!';
+        statusMsg.className = "text-xs text-green-400 mt-2 text-center font-bold";
+
+        fileInput.value = '';
+        versionInput.value = '';
+        notesInput.value = '';
+        fetchReleases();
+      } catch (err) {
+        console.error(err);
+        statusMsg.innerText = 'Fehler beim Upload: ' + (err.message || err.error_description || JSON.stringify(err));
+        statusMsg.className = "text-xs text-red-400 mt-2 text-center font-bold";
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+    }
+
+    // Initialer Abruf
     fetchLatestData();
+    fetchReleases();
     setInterval(fetchLatestData, 30000);
   </script>
 </body>
