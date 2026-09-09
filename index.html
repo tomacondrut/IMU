@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STAG Telemetrie Hub</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background-color: #0b0f17; color: #ecf0f1; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    .card { background-color: #151d2a; border: 1px solid #233145; }
+    .stag-green { color: #009B4C; }
+    .bg-stag-green { background-color: #009B4C; }
+  </style>
+</head>
+<body class="p-4 md:p-8 max-w-6xl mx-auto">
+
+  <!-- Header -->
+  <header class="card rounded-lg p-4 mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+    <div>
+      <h1 class="text-xl font-bold stag-green tracking-wide">STAG AG &bull; CLOUD DASHBOARD</h1>
+      <p class="text-xs text-gray-400" id="device-id-display">Gerät: STAG-IMU-01</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="sync-indicator" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
+        <span class="w-2 h-2 rounded-full bg-gray-500"></span> Verbindung prüfen...
+      </span>
+      <button onclick="fetchLatestData()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-semibold hover:opacity-90 transition">
+        Aktualisieren
+      </button>
+    </div>
+  </header>
+
+  <!-- Key Metrics -->
+  <section class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="card p-4 rounded-lg">
+      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Akkustand</p>
+      <div class="text-2xl font-bold" id="metric-pct">--%</div>
+      <p class="text-xs text-gray-400" id="metric-volt">-- V</p>
+    </div>
+    <div class="card p-4 rounded-lg">
+      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Status</p>
+      <div class="text-base font-bold text-gray-200" id="metric-status">--</div>
+      <p class="text-xs text-gray-400">Stromversorgung</p>
+    </div>
+    <div class="card p-4 rounded-lg">
+      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Boot-Zyklus</p>
+      <div class="text-2xl font-bold" id="metric-boot">#--</div>
+      <p class="text-xs text-gray-400">Deep Sleep Weckungen</p>
+    </div>
+    <div class="card p-4 rounded-lg">
+      <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Letzte Messung</p>
+      <div class="text-xs font-semibold mt-1" id="metric-time">--</div>
+      <p class="text-xs text-gray-400" id="metric-ago">Vor --</p>
+    </div>
+  </section>
+
+  <!-- Battery Discharge Chart -->
+  <section class="card p-4 rounded-lg mb-6">
+    <h2 class="text-sm font-semibold uppercase text-gray-300 mb-4">Spannungsverlauf & Entladekurve</h2>
+    <div class="relative h-64 w-full">
+      <canvas id="batChart"></canvas>
+    </div>
+  </section>
+
+  <!-- Raw Log History Table -->
+  <section class="card p-4 rounded-lg overflow-hidden">
+    <h2 class="text-sm font-semibold uppercase text-gray-300 mb-3">Historische Telemetriedaten</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs font-mono">
+        <thead class="text-gray-400 border-b border-gray-700">
+          <tr>
+            <th class="py-2 px-3">Zeitstempel</th>
+            <th class="py-2 px-3">Spannung</th>
+            <th class="py-2 px-3">Ladung</th>
+            <th class="py-2 px-3">Modus</th>
+            <th class="py-2 px-3">Boot</th>
+          </tr>
+        </thead>
+        <tbody id="log-table-body" class="divide-y divide-gray-800">
+          <tr><td colspan="5" class="py-4 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const SUPABASE_URL = "https://<YOUR_PROJECT_REF>.supabase.co";
+    const SUPABASE_KEY = "<YOUR_SUPABASE_ANON_KEY>";
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let chartInstance = null;
+
+    function initChart(labels, voltages, percents) {
+      const ctx = document.getElementById('batChart').getContext('2d');
+      if (chartInstance) chartInstance.destroy();
+
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Spannung (V)',
+              data: voltages,
+              borderColor: '#009B4C',
+              backgroundColor: 'rgba(0, 155, 76, 0.1)',
+              yAxisID: 'yVolt',
+              tension: 0.25,
+              fill: true
+            },
+            {
+              label: 'Kapazität (%)',
+              data: percents,
+              borderColor: '#3498db',
+              yAxisID: 'yPct',
+              borderDash: [5, 5],
+              tension: 0.2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { ticks: { color: '#7f8c8d', maxTicksLimit: 8 }, grid: { color: '#1a2332' } },
+            yVolt: {
+              type: 'linear',
+              position: 'left',
+              min: 3.2,
+              max: 4.3,
+              ticks: { color: '#009B4C' },
+              grid: { color: '#1a2332' }
+            },
+            yPct: {
+              type: 'linear',
+              position: 'right',
+              min: 0,
+              max: 100,
+              ticks: { color: '#3498db' },
+              grid: { display: false }
+            }
+          },
+          plugins: { legend: { labels: { color: '#ecf0f1' } } }
+        }
+      });
+    }
+
+    async function fetchLatestData() {
+      const { data, error } = await supabase
+        .from('battery_logs')
+        .select('*')
+        .eq('device_id', 'STAG-IMU-01')
+        .order('recorded_at', { ascending: false })
+        .limit(100);
+
+      if (error || !data || data.length === 0) {
+        document.getElementById('sync-indicator').innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Offline';
+        return;
+      }
+
+      // Indicator Update
+      const latest = data[0];
+      const recTime = new Date(latest.recorded_at);
+      const isRecent = (Date.now() - recTime.getTime()) < (1000 * 60 * 15);
+
+      document.getElementById('sync-indicator').innerHTML = isRecent
+        ? '<span class="w-2 h-2 rounded-full bg-green-500"></span> Online (Aktiv)'
+        : '<span class="w-2 h-2 rounded-full bg-yellow-500"></span> Standby (Deep Sleep)';
+
+      // Metrics
+      document.getElementById('metric-pct').innerText = `${latest.battery_percent}%`;
+      document.getElementById('metric-volt').innerText = `${Number(latest.battery_voltage).toFixed(3)} V`;
+      document.getElementById('metric-status').innerText = latest.charging_status;
+      document.getElementById('metric-boot').innerText = `#${latest.boot_cycle}`;
+      document.getElementById('metric-time').innerText = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('metric-ago').innerText = recTime.toLocaleDateString();
+
+      // Table & Chart arrays
+      const reversed = [...data].reverse();
+      const labels = reversed.map(r => new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      const volts = reversed.map(r => r.battery_voltage);
+      const pcts = reversed.map(r => r.battery_percent);
+
+      initChart(labels, volts, pcts);
+
+      const tableRows = data.slice(0, 20).map(r => `
+        <tr class="hover:bg-gray-800/40">
+          <td class="py-2 px-3 text-gray-300">${new Date(r.recorded_at).toLocaleString()}</td>
+          <td class="py-2 px-3 text-green-400 font-semibold">${Number(r.battery_voltage).toFixed(3)} V</td>
+          <td class="py-2 px-3">${r.battery_percent}%</td>
+          <td class="py-2 px-3 text-gray-400">${r.charging_status}</td>
+          <td class="py-2 px-3">#${r.boot_cycle}</td>
+        </tr>
+      `).join('');
+      document.getElementById('log-table-body').innerHTML = tableRows;
+    }
+
+    // Auto-refresh every 30 seconds
+    fetchLatestData();
+    setInterval(fetchLatestData, 30000);
+  </script>
+</body>
+</html>
