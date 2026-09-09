@@ -38,16 +38,19 @@
   <!-- Navigation Tabs -->
   <div class="flex gap-2 mb-5 overflow-x-auto pb-1">
     <button id="btn-tab-3d" onclick="switchTab('3d')" class="bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition">
-      3D Live-Stream (Realtime)
+      3D Live-Stream
     </button>
     <button id="btn-tab-telemetry" onclick="switchTab('telemetry')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      Telemetrie & Akkukurve
+      Telemetrie & Akku
+    </button>
+    <button id="btn-tab-files" onclick="switchTab('files')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
+      SD-Dateimanager
     </button>
     <button id="btn-tab-settings" onclick="switchTab('settings')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      Geräte-Parameter & Sleep
+      Parameter & Sleep
     </button>
     <button id="btn-tab-ota" onclick="switchTab('ota')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      Cloud-OTA & Firmware
+      Cloud-OTA
     </button>
   </div>
 
@@ -115,14 +118,58 @@
     </section>
   </main>
 
-  <!-- TAB 2: GERÄTE-PARAMETER & SLEEP -->
+  <!-- TAB 2: SD-DATEIMANAGER -->
+  <main id="tab-files" class="hidden">
+    <div class="card p-5 rounded-lg mb-5">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-gray-700">
+        <div>
+          <h2 class="text-sm font-bold uppercase text-gray-200">SD-Explorer & Dateimanager</h2>
+          <p class="text-xs text-gray-400">Verbinde direkt mit dem Board (Hotspot oder Heim-WLAN).</p>
+        </div>
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <input type="text" id="board-endpoint" value="http://10.10.10.1" placeholder="http://10.10.10.1"
+                 class="bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white font-mono outline-none focus:border-green-500 w-full sm:w-44">
+          <button onclick="loadSdDirectory(currentSdDir)" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
+            Laden
+          </button>
+        </div>
+      </div>
+
+      <!-- Path Header -->
+      <div class="flex justify-between items-center bg-gray-900 px-3 py-2 rounded border border-gray-700 mb-3 text-xs font-mono">
+        <div>
+          <span class="text-gray-500">Pfad:</span>
+          <span id="sd-current-path" class="text-green-400 font-bold ml-1">/</span>
+        </div>
+        <button onclick="navigateSdUp()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded text-xs transition">
+          Ordner hoch ⬆
+        </button>
+      </div>
+
+      <!-- File List -->
+      <div id="sd-file-list" class="space-y-1.5 mb-4 min-h-[120px]">
+        <div class="text-xs text-gray-500 py-4 text-center">Klicke auf "Laden" um das Dateisystem abzufragen.</div>
+      </div>
+
+      <!-- Upload Form -->
+      <div class="bg-gray-900/60 p-3.5 rounded border border-gray-800">
+        <p class="text-xs font-bold text-gray-300 mb-2">Datei in aktuellen Ordner hochladen</p>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input type="file" id="sd-upload-file" class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 cursor-pointer">
+          <button onclick="uploadFileToSd()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
+            Hochladen
+          </button>
+        </div>
+        <p id="sd-upload-status" class="text-xs font-mono mt-2 text-gray-400"></p>
+      </div>
+    </div>
+  </main>
+
+  <!-- TAB 3: PARAMETER & SLEEP -->
   <main id="tab-settings" class="hidden">
     <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
-      
-      <!-- Linke Spalte: Schwellenwerte & Sleep -->
       <section class="card p-5 rounded-lg">
         <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Schwellenwerte & Sleep-Verhalten</h2>
-        
         <div class="mb-4">
           <div class="flex justify-between text-xs mb-1">
             <span class="text-gray-300 font-semibold">Inaktivität bis Deep Sleep</span>
@@ -155,11 +202,9 @@
         </div>
       </section>
 
-      <!-- Rechte Spalte: Abtastraten, LTE, SIM & Modus -->
       <section class="card p-5 rounded-lg flex flex-col justify-between">
         <div>
           <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Abtastraten & Konnektivität</h2>
-          
           <div class="mb-4">
             <div class="flex justify-between text-xs mb-1">
               <span class="text-gray-300 font-semibold">Sensor Abtastrate (Hz)</span>
@@ -180,7 +225,6 @@
                    class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
           </div>
 
-          <!-- SIM-Karte & APN Konfiguration -->
           <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
             <p class="text-xs font-bold text-gray-200 mb-2">Mobilfunk Konfiguration (SIM & LTE)</p>
             <div class="grid grid-cols-2 gap-3 mb-2">
@@ -198,7 +242,6 @@
             <p class="text-[11px] text-gray-500">Wird beim nächsten Sync auf das Board übertragen.</p>
           </div>
 
-          <!-- Dauer-Live Modus Toggle -->
           <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
             <div class="flex items-center justify-between">
               <div>
@@ -224,7 +267,7 @@
     </div>
   </main>
 
-  <!-- TAB 3: CLOUD-OTA & FIRMWARE -->
+  <!-- TAB 4: CLOUD-OTA -->
   <main id="tab-ota" class="hidden">
     <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-5">
       <section class="card p-5 rounded-lg md:col-span-1">
@@ -368,12 +411,10 @@
         if (modelMesh) {
           const norm = Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
           if (norm > 0.0001) {
-            // Bewährte Orientierungsmatrix mit 90° CCW Z-Rotation
             modelMesh.quaternion.set(-qy / norm, qx / norm, qz / norm, qw / norm);
             modelMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
           }
 
-          // Dämpfung des Beschleunigungsvektors mit 0.20 m/s² Deadband
           const aLen = Math.hypot(curAx, curAy, curAz);
           const axF = (aLen > 0.20) ? curAx : 0;
           const ayF = (aLen > 0.20) ? curAy : 0;
@@ -421,7 +462,7 @@
           `ROT: W:${qw.toFixed(2)} X:${qx.toFixed(2)} Y:${qy.toFixed(2)} Z:${qz.toFixed(2)}<br>ACC: X:${curAx.toFixed(2)} Y:${curAy.toFixed(2)} Z:${curAz.toFixed(2)} m/s²`;
       });
 
-      channel.subscribe((status, err) => {
+      channel.subscribe((status) => {
         const ind = document.getElementById('realtime-indicator');
         if (status === 'SUBSCRIBED') {
           ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Realtime LIVE';
@@ -432,8 +473,114 @@
       });
     }
 
+    // --- SD-DATEIMANAGER ROUTINEN ---
+    let currentSdDir = '/';
+
+    function getBoardBase() {
+      let b = document.getElementById('board-endpoint').value.trim();
+      while (b.endsWith('/')) b = b.substring(0, b.length - 1);
+      return b || 'http://10.10.10.1';
+    }
+
+    async function loadSdDirectory(dir) {
+      currentSdDir = dir || '/';
+      document.getElementById('sd-current-path').innerText = currentSdDir;
+      const listEl = document.getElementById('sd-file-list');
+      listEl.innerHTML = '<div class="text-xs text-gray-400 py-3 text-center">Lade Ordnerinhalt...</div>';
+
+      try {
+        const base = getBoardBase();
+        const res = await fetch(`${base}/browse?dir=${encodeURIComponent(currentSdDir)}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        if (!data.items || data.items.length === 0) {
+          listEl.innerHTML = '<div class="text-xs text-gray-500 py-3 text-center">Dieser Ordner ist leer.</div>';
+          return;
+        }
+
+        listEl.innerHTML = data.items.map(item => {
+          const fullPath = (currentSdDir === '/' ? '' : currentSdDir) + '/' + item.name;
+          if (item.is_dir) {
+            return `
+              <div class="flex justify-between items-center p-2 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
+                   onclick="loadSdDirectory('${fullPath}')">
+                <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
+                <span class="text-xs text-gray-400">Öffnen ➔</span>
+              </div>
+            `;
+          } else {
+            const kb = (item.size / 1024).toFixed(1);
+            return `
+              <div class="flex justify-between items-center p-2 rounded bg-gray-900 border border-gray-800 text-xs font-mono">
+                <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
+                <div class="flex items-center gap-2">
+                  <a href="${base}/download?file=${encodeURIComponent(fullPath)}" download class="text-green-400 hover:underline">Download</a>
+                  <button onclick="deleteSdFile('${fullPath}')" class="text-red-400 hover:text-red-300">✕</button>
+                </div>
+              </div>
+            `;
+          }
+        }).join('');
+      } catch (err) {
+        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Verbindung fehlgeschlagen (${err.message}).<br>Stelle sicher, dass du mit dem Board verbunden bist.</div>`;
+      }
+    }
+
+    function navigateSdUp() {
+      if (currentSdDir === '/' || currentSdDir === '') return;
+      const lastSlash = currentSdDir.lastIndexOf('/');
+      const parent = lastSlash <= 0 ? '/' : currentSdDir.substring(0, lastSlash);
+      loadSdDirectory(parent);
+    }
+
+    async function deleteSdFile(path) {
+      if (!confirm('Datei wirklich löschen?\n' + path)) return;
+      try {
+        const base = getBoardBase();
+        await fetch(`${base}/delete?file=${encodeURIComponent(path)}`);
+        loadSdDirectory(currentSdDir);
+      } catch (e) {
+        alert('Fehler beim Löschen.');
+      }
+    }
+
+    async function uploadFileToSd() {
+      const fileInput = document.getElementById('sd-upload-file');
+      const stat = document.getElementById('sd-upload-status');
+      if (!fileInput.files.length) {
+        stat.innerText = 'Bitte eine Datei auswählen.';
+        return;
+      }
+
+      const file = fileInput.files[0];
+      const formData = new FormData();
+      formData.append('file', file, file.name);
+
+      stat.innerText = `Lade ${file.name} nach ${currentSdDir}...`;
+      try {
+        const base = getBoardBase();
+        const res = await fetch(`${base}/upload?dir=${encodeURIComponent(currentSdDir)}`, {
+          method: 'POST',
+          body: formData
+        });
+        if (res.ok) {
+          stat.innerText = `✓ ${file.name} erfolgreich hochgeladen!`;
+          stat.className = 'text-xs font-mono mt-2 text-green-400 font-bold';
+          fileInput.value = '';
+          setTimeout(() => loadSdDirectory(currentSdDir), 800);
+        } else {
+          throw new Error('HTTP ' + res.status);
+        }
+      } catch (e) {
+        stat.innerText = 'Upload-Fehler: ' + e.message;
+        stat.className = 'text-xs font-mono mt-2 text-red-400 font-bold';
+      }
+    }
+
+    // --- TAB NAVIGATION ---
     function switchTab(tab) {
-      ['3d', 'telemetry', 'settings', 'ota'].forEach(t => {
+      ['3d', 'telemetry', 'files', 'settings', 'ota'].forEach(t => {
         document.getElementById(`tab-${t}`).classList.add('hidden');
         document.getElementById(`btn-tab-${t}`).className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition";
       });
@@ -441,6 +588,7 @@
       document.getElementById(`btn-tab-${tab}`).className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
 
       if (tab === 'telemetry') fetchLatestData();
+      if (tab === 'files') loadSdDirectory(currentSdDir);
       if (tab === 'settings') fetchConfig();
       if (tab === 'ota') fetchReleases();
     }
@@ -469,12 +617,8 @@
       document.getElementById('cfg-lte').value = data.lte_interval || 5;
       document.getElementById('cfg-lte-val').innerText = (data.lte_interval || 5) + ' min';
 
-      if (data.sim_pin !== undefined && data.sim_pin !== null) {
-        document.getElementById('cfg-sim-pin').value = data.sim_pin;
-      }
-      if (data.sim_apn !== undefined && data.sim_apn !== null) {
-        document.getElementById('cfg-sim-apn').value = data.sim_apn;
-      }
+      if (data.sim_pin) document.getElementById('cfg-sim-pin').value = data.sim_pin;
+      if (data.sim_apn) document.getElementById('cfg-sim-apn').value = data.sim_apn;
 
       liveModeActive = data.continuous_mode || false;
       const btn = document.getElementById('btn-toggle-live');
@@ -543,7 +687,6 @@
     }
 
     async function fetchLatestData() {
-      console.log("[TELEMETRIE] Lade Datensätze aus battery_logs...");
       const { data, error } = await sbClient
         .from('battery_logs')
         .select('*')
@@ -551,17 +694,7 @@
         .order('recorded_at', { ascending: false })
         .limit(100);
 
-      if (error) {
-        console.error("[TELEMETRIE FEHLER]", error);
-        document.getElementById('log-table-body').innerHTML = `<tr><td colspan="5" class="py-4 text-center text-red-500 font-bold">Fehler: ${error.message}</td></tr>`;
-        return;
-      }
-
-      if (!data || data.length === 0) {
-        console.log("[TELEMETRIE] Noch keine Einträge vorhanden.");
-        document.getElementById('log-table-body').innerHTML = '<tr><td colspan="5" class="py-4 text-center text-gray-500">Noch keine Telemetrie-Einträge empfangen.</td></tr>';
-        return;
-      }
+      if (error || !data || data.length === 0) return;
 
       const latest = data[0];
       const recTime = new Date(latest.recorded_at);
