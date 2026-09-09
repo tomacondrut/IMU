@@ -118,8 +118,11 @@
   <!-- TAB 2: GERÄTE-PARAMETER & SLEEP -->
   <main id="tab-settings" class="hidden">
     <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+      
+      <!-- Linke Spalte: Schwellenwerte & Sleep -->
       <section class="card p-5 rounded-lg">
         <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Schwellenwerte & Sleep-Verhalten</h2>
+        
         <div class="mb-4">
           <div class="flex justify-between text-xs mb-1">
             <span class="text-gray-300 font-semibold">Inaktivität bis Deep Sleep</span>
@@ -128,6 +131,7 @@
           <input type="range" id="cfg-idle" min="5" max="60" step="1" value="10"
                  oninput="document.getElementById('cfg-idle-val').innerText = this.value + ' s'"
                  class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+          <p class="text-[11px] text-gray-500 mt-1">Dauer der Bewegungslosigkeit vor dem Abschalten (5 bis 60 s).</p>
         </div>
 
         <div class="mb-4">
@@ -151,9 +155,11 @@
         </div>
       </section>
 
+      <!-- Rechte Spalte: Abtastraten, LTE, SIM & Modus -->
       <section class="card p-5 rounded-lg flex flex-col justify-between">
         <div>
-          <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Abtastraten & Log-Modus</h2>
+          <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Abtastraten & Konnektivität</h2>
+          
           <div class="mb-4">
             <div class="flex justify-between text-xs mb-1">
               <span class="text-gray-300 font-semibold">Sensor Abtastrate (Hz)</span>
@@ -164,7 +170,7 @@
                    class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
           </div>
 
-          <div class="mb-5">
+          <div class="mb-4">
             <div class="flex justify-between text-xs mb-1">
               <span class="text-gray-300 font-semibold">LTE Sendeintervall</span>
               <span id="cfg-lte-val" class="font-mono text-green-400 font-bold">5 min</span>
@@ -174,6 +180,25 @@
                    class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
           </div>
 
+          <!-- SIM-Karte & APN Konfiguration -->
+          <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
+            <p class="text-xs font-bold text-gray-200 mb-2">Mobilfunk Konfiguration (SIM & LTE)</p>
+            <div class="grid grid-cols-2 gap-3 mb-2">
+              <div>
+                <label class="block text-[11px] text-gray-400 mb-1">SIM PIN</label>
+                <input type="password" id="cfg-sim-pin" placeholder="1234" maxlength="8"
+                       class="w-full bg-gray-800 border border-gray-600 rounded p-1.5 text-xs text-white font-mono outline-none focus:border-green-500">
+              </div>
+              <div>
+                <label class="block text-[11px] text-gray-400 mb-1">APN</label>
+                <input type="text" id="cfg-sim-apn" placeholder="gprs.swisscom.ch"
+                       class="w-full bg-gray-800 border border-gray-600 rounded p-1.5 text-xs text-white outline-none focus:border-green-500">
+              </div>
+            </div>
+            <p class="text-[11px] text-gray-500">Wird beim nächsten Sync auf das Board übertragen.</p>
+          </div>
+
+          <!-- Dauer-Live Modus Toggle -->
           <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
             <div class="flex items-center justify-between">
               <div>
@@ -444,6 +469,13 @@
       document.getElementById('cfg-lte').value = data.lte_interval || 5;
       document.getElementById('cfg-lte-val').innerText = (data.lte_interval || 5) + ' min';
 
+      if (data.sim_pin !== undefined && data.sim_pin !== null) {
+        document.getElementById('cfg-sim-pin').value = data.sim_pin;
+      }
+      if (data.sim_apn !== undefined && data.sim_apn !== null) {
+        document.getElementById('cfg-sim-apn').value = data.sim_apn;
+      }
+
       liveModeActive = data.continuous_mode || false;
       const btn = document.getElementById('btn-toggle-live');
       btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
@@ -467,6 +499,8 @@
         rate: parseInt(document.getElementById('cfg-rate').value),
         lte_interval: parseInt(document.getElementById('cfg-lte').value),
         continuous_mode: liveModeActive,
+        sim_pin: document.getElementById('cfg-sim-pin').value.trim(),
+        sim_apn: document.getElementById('cfg-sim-apn').value.trim(),
         updated_at: new Date().toISOString()
       };
 
