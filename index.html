@@ -8,6 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <style>
     body { background-color: #0b0f17; color: #ecf0f1; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
     .card { background-color: #151d2a; border: 1px solid #233145; }
@@ -53,7 +54,7 @@
   <!-- TAB 0: 3D LIVE-STREAM -->
   <main id="tab-3d">
     <div class="card rounded-lg p-3 mb-5">
-      <div id="canvas-container" class="w-full h-[52vh] bg-[#070a0f] rounded-lg relative overflow-hidden border border-[#233145]">
+      <div id="canvas-container" class="w-full h-[54vh] bg-[#070a0f] rounded-lg relative overflow-hidden border border-[#233145]">
         <div id="overlay-status" class="absolute bottom-2 left-2 bg-black/80 px-3 py-1.5 rounded text-[11px] font-mono text-green-400 pointer-events-none z-10 leading-tight">
           Warte auf IMU Stream...
         </div>
@@ -255,24 +256,59 @@
   <script>
     const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhand1c253Znl3ZmVieWZmeHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NzYxMjcsImV4cCI6MjEwNDU1MjEyN30.Yt-COlgIh5TySB01EGrdddrZguxW30cwhCeXdMjQ0aM";
-    
-    // [CRITICAL FIX] sbClient statt 'supabase' verhindert Namenskonflikt mit dem globalen Bundle-Objekt!
     const sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     let chartInstance = null;
     let liveModeActive = false;
 
-    // --- 3D ENGINE & SUPABASE REALTIME BROADCAST ---
+    // --- 3D ENGINE MIT IMU.glb LOADER & ORIENTIERUNG ---
     let scene, camera, renderer, modelMesh;
     let qw = 1, qx = 0, qy = 0, qz = 0;
     let lastQw = 1, lastQx = 0, lastQy = 0, lastQz = 0;
     let curAx = 0, curAy = 0, curAz = 0;
     let posX = 0, posY = 0, posZ = 0;
 
+    function createFallbackCube() {
+      if (modelMesh && scene) scene.remove(modelMesh);
+      const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
+      modelMesh = new THREE.Mesh(geo, mat);
+      scene.add(modelMesh);
+    }
+
+    function setupModelMesh(gltfScene) {
+      if (modelMesh && scene) scene.remove(modelMesh);
+      modelMesh = gltfScene;
+
+      const box = new THREE.Box3().setFromObject(modelMesh);
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim > 0) {
+        const s = 1.8 / maxDim;
+        modelMesh.scale.set(s, s, s);
+      }
+      scene.add(modelMesh);
+    }
+
+    function loadGLBModel() {
+      if (typeof THREE.GLTFLoader === 'undefined') {
+        createFallbackCube();
+        return;
+      }
+      const loader = new THREE.GLTFLoader();
+      loader.load('./IMU.glb', (gltf) => {
+        setupModelMesh(gltf.scene);
+        console.log("[3D] IMU.glb erfolgreich geladen!");
+      }, undefined, (err) => {
+        console.warn("[3D] IMU.glb im Root nicht gefunden, verwende Standard-Box:", err);
+        createFallbackCube();
+      });
+    }
+
     function init3D() {
       const container = document.getElementById('canvas-container');
       const w = container.clientWidth || (window.innerWidth - 30);
-      const h = container.clientHeight || (window.innerHeight * 0.52);
+      const h = container.clientHeight || (window.innerHeight * 0.54);
 
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
@@ -291,10 +327,8 @@
       scene.add(l2);
       scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-      const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
-      const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
-      modelMesh = new THREE.Mesh(geo, mat);
-      scene.add(modelMesh);
+      createFallbackCube();
+      loadGLBModel();
 
       window.addEventListener('resize', () => {
         const nw = container.clientWidth;
@@ -309,10 +343,12 @@
         if (modelMesh) {
           const norm = Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
           if (norm > 0.0001) {
+            // Bewährte Orientierungsmatrix mit 90° CCW Z-Rotation
             modelMesh.quaternion.set(-qy / norm, qx / norm, qz / norm, qw / norm);
             modelMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
           }
 
+          // Dämpfung des Beschleunigungsvektors mit 0.20 m/s² Deadband
           const aLen = Math.hypot(curAx, curAy, curAz);
           const axF = (aLen > 0.20) ? curAx : 0;
           const ayF = (aLen > 0.20) ? curAy : 0;
@@ -336,7 +372,6 @@
     }
 
     function initRealtimeChannel() {
-      console.log("[REALTIME] Initialisiere Channel 'imu_live'...");
       const channel = sbClient.channel('imu_live', {
         config: { broadcast: { ack: false } }
       });
@@ -362,7 +397,6 @@
       });
 
       channel.subscribe((status, err) => {
-        console.log("[REALTIME STATUS]", status, err || '');
         const ind = document.getElementById('realtime-indicator');
         if (status === 'SUBSCRIBED') {
           ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Realtime LIVE';
@@ -381,6 +415,7 @@
       document.getElementById(`tab-${tab}`).classList.remove('hidden');
       document.getElementById(`btn-tab-${tab}`).className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
 
+      if (tab === 'telemetry') fetchLatestData();
       if (tab === 'settings') fetchConfig();
       if (tab === 'ota') fetchReleases();
     }
@@ -474,8 +509,25 @@
     }
 
     async function fetchLatestData() {
-      const { data, error } = await sbClient.from('battery_logs').select('*').eq('device_id', 'STAG-IMU-01').order('recorded_at', { ascending: false }).limit(100);
-      if (error || !data || data.length === 0) return;
+      console.log("[TELEMETRIE] Lade Datensätze aus battery_logs...");
+      const { data, error } = await sbClient
+        .from('battery_logs')
+        .select('*')
+        .eq('device_id', 'STAG-IMU-01')
+        .order('recorded_at', { ascending: false })
+        .limit(100);
+
+      if (error) {
+        console.error("[TELEMETRIE FEHLER]", error);
+        document.getElementById('log-table-body').innerHTML = `<tr><td colspan="5" class="py-4 text-center text-red-500 font-bold">Fehler: ${error.message}</td></tr>`;
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        console.log("[TELEMETRIE] Noch keine Einträge vorhanden.");
+        document.getElementById('log-table-body').innerHTML = '<tr><td colspan="5" class="py-4 text-center text-gray-500">Noch keine Telemetrie-Einträge empfangen.</td></tr>';
+        return;
+      }
 
       const latest = data[0];
       const recTime = new Date(latest.recorded_at);
