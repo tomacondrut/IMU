@@ -50,12 +50,12 @@
     </button>
   </div>
 
-  <!-- TAB 0: 3D LIVE-STREAM (SUPABASE REALTIME BROADCAST) -->
+  <!-- TAB 0: 3D LIVE-STREAM -->
   <main id="tab-3d">
     <div class="card rounded-lg p-3 mb-5">
       <div id="canvas-container" class="w-full h-[52vh] bg-[#070a0f] rounded-lg relative overflow-hidden border border-[#233145]">
         <div id="overlay-status" class="absolute bottom-2 left-2 bg-black/80 px-3 py-1.5 rounded text-[11px] font-mono text-green-400 pointer-events-none z-10 leading-tight">
-          ROT: W:+1.00 X:+0.00 Y:+0.00 Z:+0.00<br>ACC: X:0.00 Y:0.00 Z:0.00 m/s²
+          Warte auf IMU Stream...
         </div>
       </div>
     </div>
@@ -127,7 +127,6 @@
           <input type="range" id="cfg-idle" min="5" max="60" step="1" value="10"
                  oninput="document.getElementById('cfg-idle-val').innerText = this.value + ' s'"
                  class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
-          <p class="text-[11px] text-gray-500 mt-1">Dauer der Bewegungslosigkeit vor dem Abschalten (5 bis 60 s).</p>
         </div>
 
         <div class="mb-4">
@@ -256,7 +255,9 @@
   <script>
     const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhand1c253Znl3ZmVieWZmeHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NzYxMjcsImV4cCI6MjEwNDU1MjEyN30.Yt-COlgIh5TySB01EGrdddrZguxW30cwhCeXdMjQ0aM";
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    
+    // [CRITICAL FIX] sbClient statt 'supabase' verhindert Namenskonflikt mit dem globalen Bundle-Objekt!
+    const sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     let chartInstance = null;
     let liveModeActive = false;
@@ -270,12 +271,15 @@
 
     function init3D() {
       const container = document.getElementById('canvas-container');
+      const w = container.clientWidth || (window.innerWidth - 30);
+      const h = container.clientHeight || (window.innerHeight * 0.52);
+
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+      camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
       camera.position.set(0, 0, 3.8);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setSize(w, h);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       container.appendChild(renderer.domElement);
 
@@ -287,16 +291,17 @@
       scene.add(l2);
       scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-      // Standard STAG Box-Geometrie
       const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
       const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
       modelMesh = new THREE.Mesh(geo, mat);
       scene.add(modelMesh);
 
       window.addEventListener('resize', () => {
-        camera.aspect = container.clientWidth / container.clientHeight;
+        const nw = container.clientWidth;
+        const nh = container.clientHeight;
+        camera.aspect = nw / nh;
         camera.updateProjectionMatrix();
-        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setSize(nw, nh);
       });
 
       function animate() {
@@ -331,7 +336,8 @@
     }
 
     function initRealtimeChannel() {
-      const channel = supabase.channel('imu_live', {
+      console.log("[REALTIME] Initialisiere Channel 'imu_live'...");
+      const channel = sbClient.channel('imu_live', {
         config: { broadcast: { ack: false } }
       });
 
@@ -355,18 +361,18 @@
           `ROT: W:${qw.toFixed(2)} X:${qx.toFixed(2)} Y:${qy.toFixed(2)} Z:${qz.toFixed(2)}<br>ACC: X:${curAx.toFixed(2)} Y:${curAy.toFixed(2)} Z:${curAz.toFixed(2)} m/s²`;
       });
 
-      channel.subscribe((status) => {
+      channel.subscribe((status, err) => {
+        console.log("[REALTIME STATUS]", status, err || '');
         const ind = document.getElementById('realtime-indicator');
         if (status === 'SUBSCRIBED') {
           ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Realtime LIVE';
           ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-950/40 text-green-400 border border-green-800';
         } else {
-          ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-500"></span> Realtime Verbinden...';
+          ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-500"></span> ' + status;
         }
       });
     }
 
-    // --- TAB STEUERUNG ---
     function switchTab(tab) {
       ['3d', 'telemetry', 'settings', 'ota'].forEach(t => {
         document.getElementById(`tab-${t}`).classList.add('hidden');
@@ -389,7 +395,7 @@
     }
 
     async function fetchConfig() {
-      const { data, error } = await supabase.from('device_config').select('*').eq('device_id', 'STAG-IMU-01').single();
+      const { data, error } = await sbClient.from('device_config').select('*').eq('device_id', 'STAG-IMU-01').single();
       if (error || !data) return;
 
       document.getElementById('cfg-idle').value = data.idle_timeout_sec || 10;
@@ -429,7 +435,7 @@
         updated_at: new Date().toISOString()
       };
 
-      const { error } = await supabase.from('device_config').upsert(payload);
+      const { error } = await sbClient.from('device_config').upsert(payload);
       btn.disabled = false;
       btn.classList.remove('opacity-50');
 
@@ -468,7 +474,7 @@
     }
 
     async function fetchLatestData() {
-      const { data, error } = await supabase.from('battery_logs').select('*').eq('device_id', 'STAG-IMU-01').order('recorded_at', { ascending: false }).limit(100);
+      const { data, error } = await sbClient.from('battery_logs').select('*').eq('device_id', 'STAG-IMU-01').order('recorded_at', { ascending: false }).limit(100);
       if (error || !data || data.length === 0) return;
 
       const latest = data[0];
@@ -500,7 +506,7 @@
     }
 
     async function fetchReleases() {
-      const { data, error } = await supabase.from('firmware_releases').select('*').order('id', { ascending: false });
+      const { data, error } = await sbClient.from('firmware_releases').select('*').order('id', { ascending: false });
       const tbody = document.getElementById('releases-table-body');
       if (error || !data || data.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="py-4 text-center text-gray-500">Keine Releases vorhanden.</td></tr>';
@@ -538,14 +544,14 @@
 
       try {
         const storagePath = `releases/${version}_${Date.now()}.bin`;
-        const { error: upErr } = await supabase.storage.from('firmware').upload(storagePath, file, { upsert: true });
+        const { error: upErr } = await sbClient.storage.from('firmware').upload(storagePath, file, { upsert: true });
         if (upErr) throw upErr;
 
         pBar.style.width = '70%';
         pMsg.innerText = 'Erstelle Datenbank-Eintrag...';
 
-        const { data: urlData } = supabase.storage.from('firmware').getPublicUrl(storagePath);
-        const { error: dbErr } = await supabase.from('firmware_releases').insert([{
+        const { data: urlData } = sbClient.storage.from('firmware').getPublicUrl(storagePath);
+        const { error: dbErr } = await sbClient.from('firmware_releases').insert([{
           version: version,
           bin_url: urlData.publicUrl,
           release_notes: notes
