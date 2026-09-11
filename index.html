@@ -1,810 +1,354 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>STAG Telemetrie Hub</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <style>
-    body { background-color: #0b0f17; color: #ecf0f1; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-    .card { background-color: #151d2a; border: 1px solid #233145; }
-    .stag-green { color: #009B4C; }
-    .bg-stag-green { background-color: #009B4C; }
-    input[type=range] { accent-color: #009B4C; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>STAG Telemetrie Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body class="p-3 md:p-8 max-w-6xl mx-auto">
 
-  <!-- Header -->
-  <header class="card rounded-lg p-4 mb-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-    <div>
-      <h1 class="text-xl font-bold stag-green tracking-wide">STAG AG &bull; CLOUD PORTAL</h1>
-      <p class="text-xs text-gray-400" id="device-id-display">Gerät: STAG-IMU-01</p>
-    </div>
-    <div class="flex items-center gap-3">
-      <span id="realtime-indicator" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
-        <span class="w-2 h-2 rounded-full bg-gray-500"></span> Realtime Verbinden...
-      </span>
-      <button onclick="fetchAllData()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-semibold hover:opacity-90 transition">
-        Aktualisieren
-      </button>
-    </div>
-  </header>
-
-  <!-- Navigation Tabs -->
-  <div class="flex gap-2 mb-5 overflow-x-auto pb-1">
-    <button id="btn-tab-3d" onclick="switchTab('3d')" class="bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition">
-      3D Live-Stream
-    </button>
-    <button id="btn-tab-telemetry" onclick="switchTab('telemetry')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      Telemetrie & Akku
-    </button>
-    <button id="btn-tab-files" onclick="switchTab('files')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      SD-Dateimanager
-    </button>
-    <button id="btn-tab-settings" onclick="switchTab('settings')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      Parameter & Sleep
-    </button>
-    <button id="btn-tab-ota" onclick="switchTab('ota')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-      Cloud-OTA
-    </button>
-  </div>
-
-  <!-- TAB 0: 3D LIVE-STREAM -->
-  <main id="tab-3d">
-    <div class="card rounded-lg p-3 mb-5">
-      <div id="canvas-container" class="w-full h-[54vh] bg-[#070a0f] rounded-lg relative overflow-hidden border border-[#233145]">
-        <div id="overlay-status" class="absolute bottom-2 left-2 bg-black/80 px-3 py-1.5 rounded text-[11px] font-mono text-green-400 pointer-events-none z-10 leading-tight">
-          Warte auf IMU Stream...
-        </div>
-      </div>
-    </div>
-  </main>
-
-  <!-- TAB 1: TELEMETRIE -->
-  <main id="tab-telemetry" class="hidden">
-    <section class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-5">
-      <div class="card p-4 rounded-lg">
-        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Akkustand</p>
-        <div class="text-2xl font-bold" id="metric-pct">--%</div>
-        <p class="text-xs text-gray-400" id="metric-volt">-- V</p>
-      </div>
-      <div class="card p-4 rounded-lg">
-        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Status</p>
-        <div class="text-base font-bold text-gray-200 truncate" id="metric-status">--</div>
-        <p class="text-xs text-gray-400">Stromversorgung</p>
-      </div>
-      <div class="card p-4 rounded-lg">
-        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Boot-Zyklus</p>
-        <div class="text-2xl font-bold" id="metric-boot">#--</div>
-        <p class="text-xs text-gray-400">Deep Sleep Weckungen</p>
-      </div>
-      <div class="card p-4 rounded-lg">
-        <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Letzte Messung</p>
-        <div class="text-xs font-semibold mt-1" id="metric-time">--</div>
-        <p class="text-xs text-gray-400" id="metric-ago">Vor --</p>
-      </div>
-    </section>
-
-    <section class="card p-4 rounded-lg mb-5">
-      <h2 class="text-sm font-semibold uppercase text-gray-300 mb-4">Spannungsverlauf & Entladekurve</h2>
-      <div class="relative h-64 w-full">
-        <canvas id="batChart"></canvas>
-      </div>
-    </section>
-
-    <section class="card p-4 rounded-lg overflow-hidden">
-      <h2 class="text-sm font-semibold uppercase text-gray-300 mb-3">Historische Telemetriedaten</h2>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs font-mono">
-          <thead class="text-gray-400 border-b border-gray-700">
-            <tr>
-              <th class="py-2 px-3">Zeitstempel</th>
-              <th class="py-2 px-3">Spannung</th>
-              <th class="py-2 px-3">Ladung</th>
-              <th class="py-2 px-3">Modus</th>
-              <th class="py-2 px-3">Boot</th>
-            </tr>
-          </thead>
-          <tbody id="log-table-body" class="divide-y divide-gray-800">
-            <tr><td colspan="5" class="py-4 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </main>
-
-  <!-- TAB 2: SD-DATEIMANAGER -->
-  <main id="tab-files" class="hidden">
-    <div class="card p-5 rounded-lg mb-5">
-      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-gray-700">
+    <!-- Header -->
+    <header class="card rounded-lg p-4 mb-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 class="text-sm font-bold uppercase text-gray-200">SD-Explorer & Dateimanager</h2>
-          <p class="text-xs text-gray-400">Verbinde direkt mit dem Board (Hotspot oder Heim-WLAN).</p>
+            <h1 class="text-xl font-bold stag-green tracking-wide">STAG AG &bull; CLOUD PORTAL</h1>
+            <p class="text-xs text-gray-400" id="device-id-display">Gerät: STAG-IMU-01</p>
         </div>
-        <div class="flex items-center gap-2 w-full sm:w-auto">
-          <input type="text" id="board-endpoint" value="http://10.10.10.1" placeholder="http://10.10.10.1"
-                 class="bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white font-mono outline-none focus:border-green-500 w-full sm:w-44">
-          <button onclick="loadSdDirectory(currentSdDir)" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
-            Laden
-          </button>
+        <div class="flex items-center gap-3">
+            <span id="realtime-indicator" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
+                <span class="w-2 h-2 rounded-full bg-gray-500"></span> Realtime Verbinden...
+            </span>
+            <button onclick="fetchAllData()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-semibold hover:opacity-90 transition">
+                Aktualisieren
+            </button>
         </div>
-      </div>
+    </header>
 
-      <!-- Path Header -->
-      <div class="flex justify-between items-center bg-gray-900 px-3 py-2 rounded border border-gray-700 mb-3 text-xs font-mono">
-        <div>
-          <span class="text-gray-500">Pfad:</span>
-          <span id="sd-current-path" class="text-green-400 font-bold ml-1">/</span>
-        </div>
-        <button onclick="navigateSdUp()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded text-xs transition">
-          Ordner hoch ⬆
+    <!-- Navigation Tabs -->
+    <div class="flex gap-2 mb-5 overflow-x-auto pb-1">
+        <button id="btn-tab-3d" onclick="switchTab('3d')" class="bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition">
+            3D Live-Stream
         </button>
-      </div>
-
-      <!-- File List -->
-      <div id="sd-file-list" class="space-y-1.5 mb-4 min-h-[120px]">
-        <div class="text-xs text-gray-500 py-4 text-center">Klicke auf "Laden" um das Dateisystem abzufragen.</div>
-      </div>
-
-      <!-- Upload Form -->
-      <div class="bg-gray-900/60 p-3.5 rounded border border-gray-800">
-        <p class="text-xs font-bold text-gray-300 mb-2">Datei in aktuellen Ordner hochladen</p>
-        <div class="flex flex-col sm:flex-row gap-2">
-          <input type="file" id="sd-upload-file" class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 cursor-pointer">
-          <button onclick="uploadFileToSd()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
-            Hochladen
-          </button>
-        </div>
-        <p id="sd-upload-status" class="text-xs font-mono mt-2 text-gray-400"></p>
-      </div>
+        <button id="btn-tab-telemetry" onclick="switchTab('telemetry')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
+            Telemetrie & Akku
+        </button>
+        <button id="btn-tab-files" onclick="switchTab('files')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
+            SD-Dateimanager
+        </button>
+        <button id="btn-tab-settings" onclick="switchTab('settings')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
+            Parameter & Sleep
+        </button>
+        <button id="btn-tab-ota" onclick="switchTab('ota')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
+            Cloud-OTA
+        </button>
     </div>
-  </main>
 
-  <!-- TAB 3: PARAMETER & SLEEP -->
-  <main id="tab-settings" class="hidden">
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
-      <section class="card p-5 rounded-lg">
-        <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Schwellenwerte & Sleep-Verhalten</h2>
-        <div class="mb-4">
-          <div class="flex justify-between text-xs mb-1">
-            <span class="text-gray-300 font-semibold">Inaktivität bis Deep Sleep</span>
-            <span id="cfg-idle-val" class="font-mono text-green-400 font-bold">10 s</span>
-          </div>
-          <input type="range" id="cfg-idle" min="5" max="60" step="1" value="10"
-                 oninput="document.getElementById('cfg-idle-val').innerText = this.value + ' s'"
-                 class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
-          <p class="text-[11px] text-gray-500 mt-1">Dauer der Bewegungslosigkeit vor dem Abschalten (5 bis 60 s).</p>
-        </div>
-
-        <div class="mb-4">
-          <div class="flex justify-between text-xs mb-1">
-            <span class="text-gray-300 font-semibold">Aufwach-Empfindlichkeit (Schwelle)</span>
-            <span id="cfg-sens-val" class="font-mono text-green-400 font-bold">0.20 m/s²</span>
-          </div>
-          <input type="range" id="cfg-sens" min="0.05" max="1.50" step="0.05" value="0.20"
-                 oninput="document.getElementById('cfg-sens-val').innerText = Number(this.value).toFixed(2) + ' m/s²'"
-                 class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
-        </div>
-
-        <div class="mb-4">
-          <div class="flex justify-between text-xs mb-1">
-            <span class="text-gray-300 font-semibold">Ruhe-Schwellenwert (Quaternion Delta)</span>
-            <span id="cfg-delta-val" class="font-mono text-green-400 font-bold">0.10</span>
-          </div>
-          <input type="range" id="cfg-delta" min="0.02" max="0.30" step="0.01" value="0.10"
-                 oninput="document.getElementById('cfg-delta-val').innerText = Number(this.value).toFixed(2)"
-                 class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
-        </div>
-      </section>
-
-      <section class="card p-5 rounded-lg flex flex-col justify-between">
-        <div>
-          <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Abtastraten & Konnektivität</h2>
-          <div class="mb-4">
-            <div class="flex justify-between text-xs mb-1">
-              <span class="text-gray-300 font-semibold">Sensor Abtastrate (Hz)</span>
-              <span id="cfg-rate-val" class="font-mono text-green-400 font-bold">10 Hz</span>
-            </div>
-            <input type="range" id="cfg-rate" min="5" max="30" step="1" value="10"
-                   oninput="document.getElementById('cfg-rate-val').innerText = this.value + ' Hz'"
-                   class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
-          </div>
-
-          <div class="mb-4">
-            <div class="flex justify-between text-xs mb-1">
-              <span class="text-gray-300 font-semibold">LTE Sendeintervall</span>
-              <span id="cfg-lte-val" class="font-mono text-green-400 font-bold">5 min</span>
-            </div>
-            <input type="range" id="cfg-lte" min="5" max="60" step="1" value="5"
-                   oninput="document.getElementById('cfg-lte-val').innerText = this.value + ' min'"
-                   class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
-          </div>
-
-          <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
-            <p class="text-xs font-bold text-gray-200 mb-2">Mobilfunk Konfiguration (SIM & LTE)</p>
-            <div class="grid grid-cols-2 gap-3 mb-2">
-              <div>
-                <label class="block text-[11px] text-gray-400 mb-1">SIM PIN</label>
-                <input type="password" id="cfg-sim-pin" placeholder="1234" maxlength="8"
-                       class="w-full bg-gray-800 border border-gray-600 rounded p-1.5 text-xs text-white font-mono outline-none focus:border-green-500">
-              </div>
-              <div>
-                <label class="block text-[11px] text-gray-400 mb-1">APN</label>
-                <input type="text" id="cfg-sim-apn" placeholder="gprs.swisscom.ch"
-                       class="w-full bg-gray-800 border border-gray-600 rounded p-1.5 text-xs text-white outline-none focus:border-green-500">
-              </div>
-            </div>
-            <p class="text-[11px] text-gray-500">Wird beim nächsten Sync auf das Board übertragen.</p>
-          </div>
-
-          <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-xs font-bold text-gray-200">Kontinuierlicher Logmodus</p>
-                <p class="text-[11px] text-gray-400">Verhindert Deep Sleep dauerhaft.</p>
-              </div>
-              <button id="btn-toggle-live" onclick="toggleLiveModeUI()" type="button"
-                      class="px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition">
-                AUS
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <button onclick="saveConfigToCloud()" id="btn-save-cfg"
-                  class="w-full bg-stag-green text-white font-bold py-2.5 rounded text-xs hover:opacity-90 transition">
-            Parameter in Cloud sichern
-          </button>
-          <p id="cfg-status-msg" class="text-xs text-center mt-2 text-gray-400 font-mono"></p>
-        </div>
-      </section>
-    </div>
-  </main>
-
-  <!-- TAB 4: CLOUD-OTA -->
-  <main id="tab-ota" class="hidden">
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-5">
-      <section class="card p-5 rounded-lg md:col-span-1">
-        <h2 class="text-sm font-bold uppercase text-gray-200 mb-2">Firmware Release hochladen</h2>
-        <form onsubmit="handleFirmwareUpload(event)" class="space-y-3">
-          <div>
-            <label class="block text-xs font-semibold text-gray-300 mb-1">Firmware Binary (.bin)</label>
-            <input type="file" id="ota-file" accept=".bin" required
-                   class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 cursor-pointer">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-gray-300 mb-1">Versions-Tag (z.B. 1.0.1)</label>
-            <input type="text" id="ota-version" placeholder="1.0.1" required
-                   class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white font-mono outline-none">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-gray-300 mb-1">Änderungen</label>
-            <textarea id="ota-notes" rows="2" placeholder="Release-Notes..."
-                      class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white outline-none"></textarea>
-          </div>
-          <button type="submit" id="btn-upload-ota" class="w-full bg-stag-green text-white font-bold py-2 rounded text-xs hover:opacity-90 transition">
-            ⚡ Release Veröffentlichen
-          </button>
-        </form>
-        <div id="upload-progress-box" class="hidden mt-3">
-          <div class="w-full bg-gray-800 rounded-full h-2">
-            <div id="upload-progress-bar" class="bg-stag-green h-2 rounded-full w-0 transition-all duration-200"></div>
-          </div>
-          <p id="upload-status-msg" class="text-xs text-gray-400 mt-2 text-center"></p>
-        </div>
-      </section>
-
-      <section class="card p-5 rounded-lg md:col-span-2 overflow-hidden">
-        <h2 class="text-sm font-bold uppercase text-gray-200 mb-2">Verfügbare Cloud-Releases</h2>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs font-mono">
-            <thead class="text-gray-400 border-b border-gray-700">
-              <tr>
-                <th class="py-2 px-3">Version</th>
-                <th class="py-2 px-3">Erstellt am</th>
-                <th class="py-2 px-3">Notizen</th>
-                <th class="py-2 px-3 text-right">Aktion</th>
-              </tr>
-            </thead>
-            <tbody id="releases-table-body" class="divide-y divide-gray-800">
-              <tr><td colspan="4" class="py-4 text-center text-gray-500">Lade Releases...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-  </main>
-
-  <script>
-    const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
-    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhand1c253Znl3ZmVieWZmeHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NzYxMjcsImV4cCI6MjEwNDU1MjEyN30.Yt-COlgIh5TySB01EGrdddrZguxW30cwhCeXdMjQ0aM";
-    const sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
-    let chartInstance = null;
-    let liveModeActive = false;
-
-    // --- 3D ENGINE MIT IMU.glb LOADER & ORIENTIERUNG ---
-    let scene, camera, renderer, modelMesh;
-    let qw = 1, qx = 0, qy = 0, qz = 0;
-    let lastQw = 1, lastQx = 0, lastQy = 0, lastQz = 0;
-    let curAx = 0, curAy = 0, curAz = 0;
-    let posX = 0, posY = 0, posZ = 0;
-
-    function createFallbackCube() {
-      if (modelMesh && scene) scene.remove(modelMesh);
-      const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
-      const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
-      modelMesh = new THREE.Mesh(geo, mat);
-      scene.add(modelMesh);
-    }
-
-    function setupModelMesh(gltfScene) {
-      if (modelMesh && scene) scene.remove(modelMesh);
-      modelMesh = gltfScene;
-
-      const box = new THREE.Box3().setFromObject(modelMesh);
-      const size = box.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z);
-      if (maxDim > 0) {
-        const s = 1.8 / maxDim;
-        modelMesh.scale.set(s, s, s);
-      }
-      scene.add(modelMesh);
-    }
-
-    function loadGLBModel() {
-      if (typeof THREE.GLTFLoader === 'undefined') {
-        createFallbackCube();
-        return;
-      }
-      const loader = new THREE.GLTFLoader();
-      loader.load('./IMU.glb', (gltf) => {
-        setupModelMesh(gltf.scene);
-        console.log("[3D] IMU.glb erfolgreich geladen!");
-      }, undefined, (err) => {
-        console.warn("[3D] IMU.glb im Root nicht gefunden, verwende Standard-Box:", err);
-        createFallbackCube();
-      });
-    }
-
-    function init3D() {
-      const container = document.getElementById('canvas-container');
-      const w = container.clientWidth || (window.innerWidth - 30);
-      const h = container.clientHeight || (window.innerHeight * 0.54);
-
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
-      camera.position.set(0, 0, 3.8);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setSize(w, h);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      container.appendChild(renderer.domElement);
-
-      const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
-      l1.position.set(5, 10, 7);
-      scene.add(l1);
-      const l2 = new THREE.DirectionalLight(0xffffff, 0.6);
-      l2.position.set(-5, -10, -7);
-      scene.add(l2);
-      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-
-      createFallbackCube();
-      loadGLBModel();
-
-      window.addEventListener('resize', () => {
-        const nw = container.clientWidth;
-        const nh = container.clientHeight;
-        camera.aspect = nw / nh;
-        camera.updateProjectionMatrix();
-        renderer.setSize(nw, nh);
-      });
-
-      function animate() {
-        requestAnimationFrame(animate);
-        if (modelMesh) {
-          const norm = Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
-          if (norm > 0.0001) {
-            modelMesh.quaternion.set(-qy / norm, qx / norm, qz / norm, qw / norm);
-            modelMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-          }
-
-          const aLen = Math.hypot(curAx, curAy, curAz);
-          const axF = (aLen > 0.20) ? curAx : 0;
-          const ayF = (aLen > 0.20) ? curAy : 0;
-          const azF = (aLen > 0.20) ? curAz : 0;
-
-          const aVec = new THREE.Vector3(ayF, -axF, azF);
-          aVec.applyQuaternion(modelMesh.quaternion);
-
-          const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
-          const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
-          const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
-
-          posX += (tx - posX) * 0.15;
-          posY += (ty - posY) * 0.15;
-          posZ += (tz - posZ) * 0.15;
-          modelMesh.position.set(posX, posY, posZ);
-        }
-        renderer.render(scene, camera);
-      }
-      animate();
-    }
-
-    function initRealtimeChannel() {
-      const channel = sbClient.channel('imu_live', {
-        config: { broadcast: { ack: false } }
-      });
-
-      channel.on('broadcast', { event: 'pos' }, (event) => {
-        const d = event.payload;
-        if (!d) return;
-
-        let inW = d.w, inX = d.x, inY = d.y, inZ = d.z;
-        if ((inW * lastQw + inX * lastQx + inY * lastQy + inZ * lastQz) < 0) {
-          inW = -inW; inX = -inX; inY = -inY; inZ = -inZ;
-        }
-
-        qw = inW; qx = inX; qy = inY; qz = inZ;
-        lastQw = qw; lastQx = qx; lastQy = qy; lastQz = qz;
-
-        if (d.ax !== undefined) {
-          curAx = d.ax; curAy = d.ay; curAz = d.az;
-        }
-
-        document.getElementById('overlay-status').innerHTML =
-          `ROT: W:${qw.toFixed(2)} X:${qx.toFixed(2)} Y:${qy.toFixed(2)} Z:${qz.toFixed(2)}<br>ACC: X:${curAx.toFixed(2)} Y:${curAy.toFixed(2)} Z:${curAz.toFixed(2)} m/s²`;
-      });
-
-      channel.subscribe((status) => {
-        const ind = document.getElementById('realtime-indicator');
-        if (status === 'SUBSCRIBED') {
-          ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Realtime LIVE';
-          ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-950/40 text-green-400 border border-green-800';
-        } else {
-          ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-500"></span> ' + status;
-        }
-      });
-    }
-
-    // --- SD-DATEIMANAGER ROUTINEN ---
-    let currentSdDir = '/';
-
-    function getBoardBase() {
-      let b = document.getElementById('board-endpoint').value.trim();
-      while (b.endsWith('/')) b = b.substring(0, b.length - 1);
-      return b || 'http://10.10.10.1';
-    }
-
-    async function loadSdDirectory(dir) {
-      currentSdDir = dir || '/';
-      document.getElementById('sd-current-path').innerText = currentSdDir;
-      const listEl = document.getElementById('sd-file-list');
-      listEl.innerHTML = '<div class="text-xs text-gray-400 py-3 text-center">Lade Ordnerinhalt...</div>';
-
-      try {
-        const base = getBoardBase();
-        const res = await fetch(`${base}/browse?dir=${encodeURIComponent(currentSdDir)}`);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-
-        if (!data.items || data.items.length === 0) {
-          listEl.innerHTML = '<div class="text-xs text-gray-500 py-3 text-center">Dieser Ordner ist leer.</div>';
-          return;
-        }
-
-        listEl.innerHTML = data.items.map(item => {
-          const fullPath = (currentSdDir === '/' ? '' : currentSdDir) + '/' + item.name;
-          if (item.is_dir) {
-            return `
-              <div class="flex justify-between items-center p-2 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
-                   onclick="loadSdDirectory('${fullPath}')">
-                <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
-                <span class="text-xs text-gray-400">Öffnen ➔</span>
-              </div>
-            `;
-          } else {
-            const kb = (item.size / 1024).toFixed(1);
-            return `
-              <div class="flex justify-between items-center p-2 rounded bg-gray-900 border border-gray-800 text-xs font-mono">
-                <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
-                <div class="flex items-center gap-2">
-                  <a href="${base}/download?file=${encodeURIComponent(fullPath)}" download class="text-green-400 hover:underline">Download</a>
-                  <button onclick="deleteSdFile('${fullPath}')" class="text-red-400 hover:text-red-300">✕</button>
+    <!-- TAB 0: 3D LIVE-STREAM & ACCELERATION WAVEFORMS -->
+    <main id="tab-3d">
+        <div class="card rounded-lg p-3 mb-4">
+            <div id="canvas-container" class="w-full h-[40vh] bg-[#070a0f] rounded-lg relative overflow-hidden border border-[#233145]">
+                <div id="overlay-status" class="absolute bottom-2 left-2 bg-black/80 px-3 py-1.5 rounded text-[11px] font-mono text-green-400 pointer-events-none z-10 leading-tight">
+                    Warte auf IMU Stream...
                 </div>
-              </div>
-            `;
-          }
-        }).join('');
-      } catch (err) {
-        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Verbindung fehlgeschlagen (${err.message}).<br>Stelle sicher, dass du mit dem Board verbunden bist.</div>`;
-      }
-    }
+            </div>
+        </div>
 
-    function navigateSdUp() {
-      if (currentSdDir === '/' || currentSdDir === '') return;
-      const lastSlash = currentSdDir.lastIndexOf('/');
-      const parent = lastSlash <= 0 ? '/' : currentSdDir.substring(0, lastSlash);
-      loadSdDirectory(parent);
-    }
+        <!-- 3-Achsen Linearbeschleunigung Oszilloskop -->
+        <section class="card rounded-lg p-3 md:p-4 mb-5">
+            <div class="flex justify-between items-center mb-3">
+                <div>
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-gray-300">Beschleunigungsdynamik (Linear)</h2>
+                    <p class="text-[11px] text-gray-500 font-mono">Globale Y-Skalierung gekoppelt an Spitzenamplitude</p>
+                </div>
+                <button id="btn-acc-live" onclick="jumpAccLive()" class="bg-stag-green text-white px-2.5 py-1 rounded text-xs font-bold transition">
+                    🔴 Live
+                </button>
+            </div>
 
-    async function deleteSdFile(path) {
-      if (!confirm('Datei wirklich löschen?\n' + path)) return;
-      try {
-        const base = getBoardBase();
-        await fetch(`${base}/delete?file=${encodeURIComponent(path)}`);
-        loadSdDirectory(currentSdDir);
-      } catch (e) {
-        alert('Fehler beim Löschen.');
-      }
-    }
+            <!-- X-Achse (Rot) -->
+            <canvas id="cv-acc-x" class="acc-canvas mb-2"></canvas>
+            <!-- Y-Achse (STAG Grün) -->
+            <canvas id="cv-acc-y" class="acc-canvas mb-2"></canvas>
+            <!-- Z-Achse (Blau) -->
+            <canvas id="cv-acc-z" class="acc-canvas mb-3"></canvas>
 
-    async function uploadFileToSd() {
-      const fileInput = document.getElementById('sd-upload-file');
-      const stat = document.getElementById('sd-upload-status');
-      if (!fileInput.files.length) {
-        stat.innerText = 'Bitte eine Datei auswählen.';
-        return;
-      }
+            <!-- Synchrone Zeit- & Positionssteuerung -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-[#0b0f17] p-3 rounded-lg border border-[#233145]">
+                <div>
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-gray-400 font-semibold">Zeitfenster (Zoom X)</span>
+                        <span id="acc-zoom-val" class="font-mono text-green-400 font-bold">10s</span>
+                    </div>
+                    <input type="range" id="acc-zoom" min="20" max="600" value="100" oninput="onAccZoom(this.value)" class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                </div>
+                <div>
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-gray-400 font-semibold">Zeitachse (Scroll X)</span>
+                        <span id="acc-pan-val" class="font-mono text-green-400 font-bold">LIVE</span>
+                    </div>
+                    <input type="range" id="acc-pan" min="0" max="100" value="100" oninput="onAccPan(this.value)" class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                </div>
+            </div>
+        </section>
+    </main>
 
-      const file = fileInput.files[0];
-      const formData = new FormData();
-      formData.append('file', file, file.name);
+    <!-- TAB 1: TELEMETRIE -->
+    <main id="tab-telemetry" class="hidden">
+        <section class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-5">
+            <div class="card p-4 rounded-lg">
+                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Akkustand</p>
+                <div class="text-2xl font-bold" id="metric-pct">--%</div>
+                <p class="text-xs text-gray-400" id="metric-volt">-- V</p>
+            </div>
+            <div class="card p-4 rounded-lg">
+                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Status</p>
+                <div class="text-base font-bold text-gray-200 truncate" id="metric-status">--</div>
+                <p class="text-xs text-gray-400">Stromversorgung</p>
+            </div>
+            <div class="card p-4 rounded-lg">
+                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Boot-Zyklus</p>
+                <div class="text-2xl font-bold" id="metric-boot">#--</div>
+                <p class="text-xs text-gray-400">Deep Sleep Weckungen</p>
+            </div>
+            <div class="card p-4 rounded-lg">
+                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Letzte Messung</p>
+                <div class="text-xs font-semibold mt-1" id="metric-time">--</div>
+                <p class="text-xs text-gray-400" id="metric-ago">Vor --</p>
+            </div>
+        </section>
 
-      stat.innerText = `Lade ${file.name} nach ${currentSdDir}...`;
-      try {
-        const base = getBoardBase();
-        const res = await fetch(`${base}/upload?dir=${encodeURIComponent(currentSdDir)}`, {
-          method: 'POST',
-          body: formData
-        });
-        if (res.ok) {
-          stat.innerText = `✓ ${file.name} erfolgreich hochgeladen!`;
-          stat.className = 'text-xs font-mono mt-2 text-green-400 font-bold';
-          fileInput.value = '';
-          setTimeout(() => loadSdDirectory(currentSdDir), 800);
-        } else {
-          throw new Error('HTTP ' + res.status);
-        }
-      } catch (e) {
-        stat.innerText = 'Upload-Fehler: ' + e.message;
-        stat.className = 'text-xs font-mono mt-2 text-red-400 font-bold';
-      }
-    }
+        <section class="card p-4 rounded-lg mb-5">
+            <h2 class="text-sm font-semibold uppercase text-gray-300 mb-4">Spannungsverlauf & Entladekurve</h2>
+            <div class="relative h-64 w-full">
+                <canvas id="batChart"></canvas>
+            </div>
+        </section>
 
-    // --- TAB NAVIGATION ---
-    function switchTab(tab) {
-      ['3d', 'telemetry', 'files', 'settings', 'ota'].forEach(t => {
-        document.getElementById(`tab-${t}`).classList.add('hidden');
-        document.getElementById(`btn-tab-${t}`).className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition";
-      });
-      document.getElementById(`tab-${tab}`).classList.remove('hidden');
-      document.getElementById(`btn-tab-${tab}`).className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
+        <section class="card p-4 rounded-lg overflow-hidden">
+            <h2 class="text-sm font-semibold uppercase text-gray-300 mb-3">Historische Telemetriedaten</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-mono">
+                    <thead class="text-gray-400 border-b border-gray-700">
+                        <tr>
+                            <th class="py-2 px-3">Zeitstempel</th>
+                            <th class="py-2 px-3">Spannung</th>
+                            <th class="py-2 px-3">Ladung</th>
+                            <th class="py-2 px-3">Modus</th>
+                            <th class="py-2 px-3">Boot</th>
+                        </tr>
+                    </thead>
+                    <tbody id="log-table-body" class="divide-y divide-gray-800">
+                        <tr><td colspan="5" class="py-4 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
 
-      if (tab === 'telemetry') fetchLatestData();
-      if (tab === 'files') loadSdDirectory(currentSdDir);
-      if (tab === 'settings') fetchConfig();
-      if (tab === 'ota') fetchReleases();
-    }
+    <!-- TAB 2: SD-DATEIMANAGER -->
+    <main id="tab-files" class="hidden">
+        <div class="card p-5 rounded-lg mb-5">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-gray-700">
+                <div>
+                    <h2 class="text-sm font-bold uppercase text-gray-200">SD-Explorer & Dateimanager</h2>
+                    <p class="text-xs text-gray-400">Direktverbindung zum Board (AP 10.10.10.1 oder lokale STA-IP).</p>
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <input type="text" id="board-endpoint" value="http://10.10.10.1" placeholder="http://10.10.10.1"
+                           class="bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white font-mono outline-none focus:border-green-500 w-full sm:w-44">
+                    <button onclick="loadSdDirectory(currentSdDir)" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
+                        Laden
+                    </button>
+                </div>
+            </div>
 
-    function toggleLiveModeUI() {
-      liveModeActive = !liveModeActive;
-      const btn = document.getElementById('btn-toggle-live');
-      btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
-      btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white border border-green-400 transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition";
-    }
+            <div class="flex justify-between items-center bg-gray-900 px-3 py-2 rounded border border-gray-700 mb-3 text-xs font-mono">
+                <div>
+                    <span class="text-gray-500">Pfad:</span>
+                    <span id="sd-current-path" class="text-green-400 font-bold ml-1">/</span>
+                </div>
+                <button onclick="navigateSdUp()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded text-xs transition">
+                    Ordner hoch ⬆
+                </button>
+            </div>
 
-    async function fetchConfig() {
-      const { data, error } = await sbClient.from('device_config').select('*').eq('device_id', 'STAG-IMU-01').single();
-      if (error || !data) return;
+            <div id="sd-file-list" class="space-y-1.5 mb-4 min-h-[120px]">
+                <div class="text-xs text-gray-500 py-4 text-center">Klicke auf "Laden" um das Dateisystem abzufragen.</div>
+            </div>
 
-      document.getElementById('cfg-idle').value = data.idle_timeout_sec || 10;
-      document.getElementById('cfg-idle-val').innerText = (data.idle_timeout_sec || 10) + ' s';
-      document.getElementById('cfg-sens').value = data.sens || 0.20;
-      document.getElementById('cfg-sens-val').innerText = Number(data.sens || 0.20).toFixed(2) + ' m/s²';
-      document.getElementById('cfg-delta').value = data.delta || 0.10;
-      document.getElementById('cfg-delta-val').innerText = Number(data.delta || 0.10).toFixed(2);
-      document.getElementById('cfg-rate').value = data.rate || 10;
-      document.getElementById('cfg-rate-val').innerText = (data.rate || 10) + ' Hz';
-      document.getElementById('cfg-lte').value = data.lte_interval || 5;
-      document.getElementById('cfg-lte-val').innerText = (data.lte_interval || 5) + ' min';
+            <div class="bg-gray-900/60 p-3.5 rounded border border-gray-800">
+                <p class="text-xs font-bold text-gray-300 mb-2">Datei in aktuellen Ordner hochladen</p>
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <input type="file" id="sd-upload-file" class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 cursor-pointer">
+                    <button onclick="uploadFileToSd()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
+                        Hochladen
+                    </button>
+                </div>
+                <p id="sd-upload-status" class="text-xs font-mono mt-2 text-gray-400"></p>
+            </div>
+        </div>
+    </main>
 
-      if (data.sim_pin) document.getElementById('cfg-sim-pin').value = data.sim_pin;
-      if (data.sim_apn) document.getElementById('cfg-sim-apn').value = data.sim_apn;
+    <!-- TAB 3: PARAMETER & SLEEP -->
+    <main id="tab-settings" class="hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+            <section class="card p-5 rounded-lg">
+                <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Schwellenwerte & Sleep-Verhalten</h2>
+                <div class="mb-4">
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-gray-300 font-semibold">Inaktivität bis Deep Sleep</span>
+                        <span id="cfg-idle-val" class="font-mono text-green-400 font-bold">10 s</span>
+                    </div>
+                    <input type="range" id="cfg-idle" min="5" max="60" step="1" value="10"
+                           oninput="document.getElementById('cfg-idle-val').innerText = this.value + ' s'"
+                           class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                    <p class="text-[11px] text-gray-500 mt-1">Dauer der Bewegungslosigkeit vor dem Abschalten (5 bis 60 s).</p>
+                </div>
 
-      liveModeActive = data.continuous_mode || false;
-      const btn = document.getElementById('btn-toggle-live');
-      btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
-      btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white border border-green-400 transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition";
-    }
+                <div class="mb-4">
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-gray-300 font-semibold">Aufwach-Empfindlichkeit (Schwelle)</span>
+                        <span id="cfg-sens-val" class="font-mono text-green-400 font-bold">0.20 m/s²</span>
+                    </div>
+                    <input type="range" id="cfg-sens" min="0.05" max="1.50" step="0.05" value="0.20"
+                           oninput="document.getElementById('cfg-sens-val').innerText = Number(this.value).toFixed(2) + ' m/s²'"
+                           class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                </div>
 
-    async function saveConfigToCloud() {
-      const btn = document.getElementById('btn-save-cfg');
-      const status = document.getElementById('cfg-status-msg');
-      btn.disabled = true;
-      btn.classList.add('opacity-50');
-      status.innerText = 'Speichere Parameter in Supabase...';
+                <div class="mb-4">
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-gray-300 font-semibold">Ruhe-Schwellenwert (Quaternion Delta)</span>
+                        <span id="cfg-delta-val" class="font-mono text-green-400 font-bold">0.10</span>
+                    </div>
+                    <input type="range" id="cfg-delta" min="0.02" max="0.30" step="0.01" value="0.10"
+                           oninput="document.getElementById('cfg-delta-val').innerText = Number(this.value).toFixed(2)"
+                           class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                </div>
+            </section>
 
-      const payload = {
-        device_id: 'STAG-IMU-01',
-        idle_timeout_sec: parseInt(document.getElementById('cfg-idle').value),
-        sens: parseFloat(document.getElementById('cfg-sens').value),
-        delta: parseFloat(document.getElementById('cfg-delta').value),
-        rate: parseInt(document.getElementById('cfg-rate').value),
-        lte_interval: parseInt(document.getElementById('cfg-lte').value),
-        continuous_mode: liveModeActive,
-        sim_pin: document.getElementById('cfg-sim-pin').value.trim(),
-        sim_apn: document.getElementById('cfg-sim-apn').value.trim(),
-        updated_at: new Date().toISOString()
-      };
+            <section class="card p-5 rounded-lg flex flex-col justify-between">
+                <div>
+                    <h2 class="text-sm font-bold uppercase text-gray-200 mb-4 pb-2 border-b border-gray-700">Abtastraten & Konnektivität</h2>
+                    <div class="mb-4">
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-gray-300 font-semibold">Sensor Abtastrate (Hz)</span>
+                            <span id="cfg-rate-val" class="font-mono text-green-400 font-bold">10 Hz</span>
+                        </div>
+                        <input type="range" id="cfg-rate" min="5" max="30" step="1" value="10"
+                               oninput="document.getElementById('cfg-rate-val').innerText = this.value + ' Hz'"
+                               class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                    </div>
 
-      const { error } = await sbClient.from('device_config').upsert(payload);
-      btn.disabled = false;
-      btn.classList.remove('opacity-50');
+                    <div class="mb-4">
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-gray-300 font-semibold">LTE Sendeintervall</span>
+                            <span id="cfg-lte-val" class="font-mono text-green-400 font-bold">5 min</span>
+                        </div>
+                        <input type="range" id="cfg-lte" min="5" max="60" step="1" value="5"
+                               oninput="document.getElementById('cfg-lte-val').innerText = this.value + ' min'"
+                               class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
+                    </div>
 
-      if (error) {
-        status.innerText = 'Fehler beim Speichern: ' + error.message;
-        status.className = 'text-xs text-center mt-2 text-red-400 font-mono font-bold';
-      } else {
-        status.innerText = '✓ Gespeichert! Board übernimmt Werte beim nächsten Sync.';
-        status.className = 'text-xs text-center mt-2 text-green-400 font-mono font-bold';
-      }
-    }
+                    <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
+                        <p class="text-xs font-bold text-gray-200 mb-2">Mobilfunk Konfiguration (SIM & LTE)</p>
+                        <div class="grid grid-cols-2 gap-3 mb-2">
+                            <div>
+                                <label class="block text-[11px] text-gray-400 mb-1">SIM PIN</label>
+                                <input type="password" id="cfg-sim-pin" placeholder="1234" maxlength="8"
+                                       class="w-full bg-gray-800 border border-gray-600 rounded p-1.5 text-xs text-white font-mono outline-none focus:border-green-500">
+                            </div>
+                            <div>
+                                <label class="block text-[11px] text-gray-400 mb-1">APN</label>
+                                <input type="text" id="cfg-sim-apn" placeholder="gprs.swisscom.ch"
+                                       class="w-full bg-gray-800 border border-gray-600 rounded p-1.5 text-xs text-white outline-none focus:border-green-500">
+                            </div>
+                        </div>
+                    </div>
 
-    function initChart(labels, voltages, percents) {
-      const ctx = document.getElementById('batChart').getContext('2d');
-      if (chartInstance) chartInstance.destroy();
+                    <div class="p-3.5 bg-gray-900 rounded-lg border border-gray-700 mb-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-bold text-gray-200">Kontinuierlicher Logmodus</p>
+                                <p class="text-[11px] text-gray-400">Verhindert Deep Sleep dauerhaft.</p>
+                            </div>
+                            <button id="btn-toggle-live" onclick="toggleLiveModeUI()" type="button"
+                                    class="px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition">
+                                AUS
+                            </button>
+                        </div>
+                    </div>
+                </div>
 
-      chartInstance = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: labels,
-          datasets: [
-            { label: 'Spannung (V)', data: voltages, borderColor: '#009B4C', backgroundColor: 'rgba(0, 155, 76, 0.1)', yAxisID: 'yVolt', tension: 0.25, fill: true },
-            { label: 'Kapazität (%)', data: percents, borderColor: '#3498db', yAxisID: 'yPct', borderDash: [5, 5], tension: 0.2 }
-          ]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          scales: {
-            x: { ticks: { color: '#7f8c8d', maxTicksLimit: 8 }, grid: { color: '#1a2332' } },
-            yVolt: { type: 'linear', position: 'left', min: 3.2, max: 4.3, ticks: { color: '#009B4C' }, grid: { color: '#1a2332' } },
-            yPct: { type: 'linear', position: 'right', min: 0, max: 100, ticks: { color: '#3498db' }, grid: { display: false } }
-          },
-          plugins: { legend: { labels: { color: '#ecf0f1' } } }
-        }
-      });
-    }
+                <div>
+                    <button onclick="saveConfigToCloud()" id="btn-save-cfg"
+                            class="w-full bg-stag-green text-white font-bold py-2.5 rounded text-xs hover:opacity-90 transition">
+                        Parameter in Cloud sichern
+                    </button>
+                    <p id="cfg-status-msg" class="text-xs text-center mt-2 text-gray-400 font-mono"></p>
+                </div>
+            </section>
+        </div>
+    </main>
 
-    async function fetchLatestData() {
-      const { data, error } = await sbClient
-        .from('battery_logs')
-        .select('*')
-        .eq('device_id', 'STAG-IMU-01')
-        .order('recorded_at', { ascending: false })
-        .limit(100);
+    <!-- TAB 4: CLOUD-OTA -->
+    <main id="tab-ota" class="hidden">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-5">
+            <section class="card p-5 rounded-lg md:col-span-1">
+                <h2 class="text-sm font-bold uppercase text-gray-200 mb-2">Firmware Release hochladen</h2>
+                <form onsubmit="handleFirmwareUpload(event)" class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-300 mb-1">Firmware Binary (.bin)</label>
+                        <input type="file" id="ota-file" accept=".bin" required
+                               class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 cursor-pointer">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-300 mb-1">Versions-Tag (z.B. 1.0.1)</label>
+                        <input type="text" id="ota-version" placeholder="1.0.1" required
+                               class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white font-mono outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-300 mb-1">Änderungen</label>
+                        <textarea id="ota-notes" rows="2" placeholder="Release-Notes..."
+                                  class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white outline-none"></textarea>
+                    </div>
+                    <button type="submit" id="btn-upload-ota" class="w-full bg-stag-green text-white font-bold py-2 rounded text-xs hover:opacity-90 transition">
+                        ⚡ Release Veröffentlichen
+                    </button>
+                </form>
+                <div id="upload-progress-box" class="hidden mt-3">
+                    <div class="w-full bg-gray-800 rounded-full h-2">
+                        <div id="upload-progress-bar" class="bg-stag-green h-2 rounded-full w-0 transition-all duration-200"></div>
+                    </div>
+                    <p id="upload-status-msg" class="text-xs text-gray-400 mt-2 text-center"></p>
+                </div>
+            </section>
 
-      if (error || !data || data.length === 0) return;
+            <section class="card p-5 rounded-lg md:col-span-2 overflow-hidden">
+                <h2 class="text-sm font-bold uppercase text-gray-200 mb-2">Verfügbare Cloud-Releases</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs font-mono">
+                        <thead class="text-gray-400 border-b border-gray-700">
+                            <tr>
+                                <th class="py-2 px-3">Version</th>
+                                <th class="py-2 px-3">Erstellt am</th>
+                                <th class="py-2 px-3">Notizen</th>
+                                <th class="py-2 px-3 text-right">Aktion</th>
+                            </tr>
+                        </thead>
+                        <tbody id="releases-table-body" class="divide-y divide-gray-800">
+                            <tr><td colspan="4" class="py-4 text-center text-gray-500">Lade Releases...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </main>
 
-      const latest = data[0];
-      const recTime = new Date(latest.recorded_at);
-
-      document.getElementById('metric-pct').innerText = `${latest.battery_percent}%`;
-      document.getElementById('metric-volt').innerText = `${Number(latest.battery_voltage).toFixed(3)} V`;
-      document.getElementById('metric-status').innerText = latest.charging_status;
-      document.getElementById('metric-boot').innerText = `#${latest.boot_cycle}`;
-      document.getElementById('metric-time').innerText = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      document.getElementById('metric-ago').innerText = recTime.toLocaleDateString();
-
-      const reversed = [...data].reverse();
-      const labels = reversed.map(r => new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-      const volts = reversed.map(r => r.battery_voltage);
-      const pcts = reversed.map(r => r.battery_percent);
-
-      initChart(labels, volts, pcts);
-
-      document.getElementById('log-table-body').innerHTML = data.slice(0, 20).map(r => `
-        <tr class="hover:bg-gray-800/40">
-          <td class="py-2 px-3 text-gray-300">${new Date(r.recorded_at).toLocaleString()}</td>
-          <td class="py-2 px-3 text-green-400 font-semibold">${Number(r.battery_voltage).toFixed(3)} V</td>
-          <td class="py-2 px-3">${r.battery_percent}%</td>
-          <td class="py-2 px-3 text-gray-400">${r.charging_status}</td>
-          <td class="py-2 px-3">#${r.boot_cycle}</td>
-        </tr>
-      `).join('');
-    }
-
-    async function fetchReleases() {
-      const { data, error } = await sbClient.from('firmware_releases').select('*').order('id', { ascending: false });
-      const tbody = document.getElementById('releases-table-body');
-      if (error || !data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="py-4 text-center text-gray-500">Keine Releases vorhanden.</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = data.map((rel, idx) => `
-        <tr class="hover:bg-gray-800/40 ${idx === 0 ? 'bg-green-950/20' : ''}">
-          <td class="py-2 px-3 font-bold text-green-400">
-            ${rel.version} ${idx === 0 ? '<span class="ml-1 text-[10px] bg-stag-green text-white px-1.5 py-0.5 rounded">LATEST</span>' : ''}
-          </td>
-          <td class="py-2 px-3 text-gray-400">${new Date(rel.created_at).toLocaleString()}</td>
-          <td class="py-2 px-3 text-gray-300 max-w-xs truncate">${rel.release_notes || '-'}</td>
-          <td class="py-2 px-3 text-right"><a href="${rel.bin_url}" download class="text-green-500 hover:underline">Download</a></td>
-        </tr>
-      `).join('');
-    }
-
-    async function handleFirmwareUpload(e) {
-      e.preventDefault();
-      const file = document.getElementById('ota-file').files[0];
-      const version = document.getElementById('ota-version').value.trim();
-      const notes = document.getElementById('ota-notes').value.trim();
-      const btn = document.getElementById('btn-upload-ota');
-      const pBox = document.getElementById('upload-progress-box');
-      const pBar = document.getElementById('upload-progress-bar');
-      const pMsg = document.getElementById('upload-status-msg');
-
-      if (!file || !version) return;
-
-      btn.disabled = true;
-      pBox.classList.remove('hidden');
-      pBar.style.width = '25%';
-      pMsg.innerText = 'Lade Binary in Storage hoch...';
-
-      try {
-        const storagePath = `releases/${version}_${Date.now()}.bin`;
-        const { error: upErr } = await sbClient.storage.from('firmware').upload(storagePath, file, { upsert: true });
-        if (upErr) throw upErr;
-
-        pBar.style.width = '70%';
-        pMsg.innerText = 'Erstelle Datenbank-Eintrag...';
-
-        const { data: urlData } = sbClient.storage.from('firmware').getPublicUrl(storagePath);
-        const { error: dbErr } = await sbClient.from('firmware_releases').insert([{
-          version: version,
-          bin_url: urlData.publicUrl,
-          release_notes: notes
-        }]);
-        if (dbErr) throw dbErr;
-
-        pBar.style.width = '100%';
-        pMsg.innerText = 'Firmware Release ' + version + ' aktiv!';
-        pMsg.className = 'text-xs text-green-400 mt-2 text-center font-bold';
-
-        document.getElementById('ota-file').value = '';
-        document.getElementById('ota-version').value = '';
-        document.getElementById('ota-notes').value = '';
-        fetchReleases();
-      } catch (err) {
-        pMsg.innerText = 'Upload-Fehler: ' + (err.message || JSON.stringify(err));
-        pMsg.className = 'text-xs text-red-400 mt-2 text-center font-bold';
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    function fetchAllData() {
-      fetchLatestData();
-      fetchConfig();
-      fetchReleases();
-    }
-
-    window.onload = () => {
-      init3D();
-      initRealtimeChannel();
-      fetchAllData();
-      setInterval(fetchLatestData, 30000);
-    };
-  </script>
+    <script src="app.js"></script>
 </body>
 </html>
