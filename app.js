@@ -290,8 +290,24 @@ async function loadSdDirectory(dir) {
     const listEl = document.getElementById('sd-file-list');
     listEl.innerHTML = '<div class="text-xs text-gray-400 py-3 text-center">Lade Ordnerinhalt...</div>';
 
+    const base = getBoardBase();
+
+    // Mixed-Content-Prüfung: HTTPS-Webseiten blockieren HTTP-Anfragen an lokale IPs
+    if (window.location.protocol === 'https:' && base.startsWith('http://')) {
+        listEl.innerHTML = `
+      <div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300 leading-relaxed">
+        <b>⚠️ Browser-Sicherheitsblockade (Mixed Content):</b><br>
+        GitHub Pages läuft über <b>HTTPS</b>. Dein Browser verbietet direkte Abfragen an unverschlüsselte lokale Board-Adressen (<code>${base}</code>).<br><br>
+        <b>Lösungsmöglichkeiten:</b><br>
+        1. Öffne die <code>index.html</code> lokal von deiner Festplatte per Doppelklick (<code>file:///...</code>) oder über <code>http://localhost</code>.<br>
+        2. Klicke im Browser links neben der URL auf das Icon für Website-Einstellungen und setze <i>"Unsichere Inhalte" (Insecure Content)</i> auf <b>Zulassen</b>.<br>
+        3. Verbinde dich direkt mit dem Board-WLAN unter <a href="http://10.10.10.1" class="text-green-400 underline font-bold" target="_blank">http://10.10.10.1</a>.
+      </div>
+    `;
+        return;
+    }
+
     try {
-        const base = getBoardBase();
         const res = await fetch(`${base}/browse?dir=${encodeURIComponent(currentSdDir)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
@@ -325,7 +341,7 @@ async function loadSdDirectory(dir) {
             }
         }).join('');
     } catch (err) {
-        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Verbindung fehlgeschlagen (${err.message}).<br>Stelle sicher, dass du mit dem Board verbunden bist.</div>`;
+        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Verbindung fehlgeschlagen (${err.message}).<br>Stelle sicher, dass du im selben WLAN wie das Board bist.</div>`;
     }
 }
 
@@ -431,6 +447,14 @@ async function fetchConfig() {
         : "px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition";
 }
 
+/*
+ * Breadcrumb: 2026-09-11 07:05 - Fault-Tolerant Config Upsert & Mixed-Content Guard
+ * [CRITICAL BUGFIX FLAG - SCHEMA & MIXED CONTENT]:
+ * 1. Falls sim_pin/sim_apn in Supabase fehlen, fällt saveConfigToCloud automatisch auf 
+ *    die Basiskonfiguration zurück, damit Abtastrate und Schwellenwerte nie blockiert werden.
+ * 2. loadSdDirectory fängt Mixed-Content-Blockaden auf GitHub Pages (HTTPS -> HTTP) ab
+ *    und zeigt eine klare Handlungsanweisung im UI.
+ */
 async function saveConfigToCloud() {
     const btn = document.getElementById('btn-save-cfg');
     const status = document.getElementById('cfg-status-msg');
@@ -438,7 +462,7 @@ async function saveConfigToCloud() {
     btn.classList.add('opacity-50');
     status.innerText = 'Speichere Parameter in Supabase...';
 
-    const payload = {
+    const basePayload = {
         device_id: 'STAG-IMU-01',
         idle_timeout_sec: parseInt(document.getElementById('cfg-idle').value, 10),
         sens: parseFloat(document.getElementById('cfg-sens').value),
@@ -446,12 +470,25 @@ async function saveConfigToCloud() {
         rate: parseInt(document.getElementById('cfg-rate').value, 10),
         lte_interval: parseInt(document.getElementById('cfg-lte').value, 10),
         continuous_mode: liveModeActive,
-        sim_pin: document.getElementById('cfg-sim-pin').value.trim(),
-        sim_apn: document.getElementById('cfg-sim-apn').value.trim(),
         updated_at: new Date().toISOString()
     };
 
-    const { error } = await sbClient.from('device_config').upsert(payload);
+    // Versuche zuerst mit SIM-Daten zu speichern
+    let payload = {
+        ...basePayload,
+        sim_pin: document.getElementById('cfg-sim-pin').value.trim(),
+        sim_apn: document.getElementById('cfg-sim-apn').value.trim()
+    };
+
+    let { error } = await sbClient.from('device_config').upsert(payload);
+
+    // Fallback: Falls Spalten in Supabase noch nicht existieren, ohne SIM-Felder speichern
+    if (error && error.message.includes('column')) {
+        console.warn('[CONFIG] SIM-Spalten nicht im Schema, speichere Basiskonfiguration:', error.message);
+        const retry = await sbClient.from('device_config').upsert(basePayload);
+        error = retry.error;
+    }
+
     btn.disabled = false;
     btn.classList.remove('opacity-50');
 
