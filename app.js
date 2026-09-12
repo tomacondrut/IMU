@@ -1,11 +1,10 @@
 /*
- * Breadcrumb: 2026-09-12 13:20 - Fully Unified Dashboard & 60FPS Slerp Replayer Engine
- * [CRITICAL BUGFIX FLAG - CLEAN CONSOLIDATION]:
- * 1. Eliminated duplicate declarations of replay state variables, Three.js scenes, and fetchImuCloudLogs.
- * 2. 60 FPS continuous THREE.Quaternion.slerp & vector lerp interpolation (eliminates 10Hz stepping stutter).
- * 3. Dual-mode Replay Oscilloscope: Acceleration (m/s²) vs. Tait-Bryan Euler Angles (Roll/Pitch/Yaw in °).
- * 4. Added deleteImuCloudFile(): deletes chunks from Supabase Storage & Database index (SD card untouched).
- * 5. Full GLB 3D model support in Replay Deck with dynamic translation displacement.
+ * Breadcrumb: 2026-09-12 17:45 - Fully Consolidated app.js Engine
+ * [CRITICAL BUGFIX FLAG - DEDUPLICATION & STREAM INTEGRITY]:
+ * 1. Removed duplicate function declarations of loadCloudSdDirectory and renderCloudFileList.
+ * 2. Guaranteed single-instance Supabase channel subscriptions for both IMU broadcast and SD commands.
+ * 3. Restored clean state management for activeCommandId and activeCommandPollTimer.
+ * 4. Added safe tab switching that pauses SD polling when navigating to 3D Live.
  */
 
 const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
@@ -329,7 +328,7 @@ function drawAccGraphs() {
 }
 
 // ==========================================
-// 3. REALTIME CHANNEL & SD MANAGEMENT
+// 3. REALTIME CHANNEL & CLOUD SD MANAGEMENT
 // ==========================================
 function initRealtimeChannel() {
     const channel = sbClient.channel('imu_live', {
@@ -355,12 +354,15 @@ function initRealtimeChannel() {
             drawAccGraphs();
         }
 
-        document.getElementById('overlay-status').innerHTML =
-            `ROT: W:${qw.toFixed(2)} X:${qx.toFixed(2)} Y:${qy.toFixed(2)} Z:${qz.toFixed(2)}<br>ACC: X:${curAx.toFixed(2)} Y:${curAy.toFixed(2)} Z:${curAz.toFixed(2)} m/s²`;
+        const el = document.getElementById('overlay-status');
+        if (el) {
+            el.innerHTML = `ROT: W:${qw.toFixed(2)} X:${qx.toFixed(2)} Y:${qy.toFixed(2)} Z:${qz.toFixed(2)}<br>ACC: X:${curAx.toFixed(2)} Y:${curAy.toFixed(2)} Z:${curAz.toFixed(2)} m/s²`;
+        }
     });
 
     channel.subscribe((status) => {
         const ind = document.getElementById('realtime-indicator');
+        if (!ind) return;
         if (status === 'SUBSCRIBED') {
             ind.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Realtime LIVE';
             ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-950/40 text-green-400 border border-green-800';
@@ -369,40 +371,6 @@ function initRealtimeChannel() {
         }
     });
 }
-
-let currentSdDir = '/';
-
-function getBoardBase() {
-    let b = document.getElementById('board-endpoint').value.trim();
-    while (b.endsWith('/')) b = b.substring(0, b.length - 1);
-    return b || 'http://10.10.10.1';
-}
-
-
-
-/*
- * Breadcrumb: 2026-09-12 14:40 - Full Cloud SD File Manager Engine via Supabase Command Queue
- * [CRITICAL BUGFIX FLAG - REMOTE SD QUEUE]:
- * 1. Completely removes Mixed-Content block by operating strictly over Supabase HTTPS.
- * 2. Issues asynchronous commands (LIST, DOWNLOAD, DELETE) into public.sd_cloud_commands.
- * 3. Subscribes via Supabase Realtime to update file listing and trigger downloads instantly.
- */
-
-/*
- * Breadcrumb: 2026-09-12 15:15 - Polling Fallback & Safe Timeout for Cloud SD Explorer
- * [CRITICAL BUGFIX FLAG - SD HANG RESOLVED]:
- * 1. Solves infinite "Lade Ordnerinhalt..." by adding a 15-second timeout with retry button.
- * 2. Dual-channel listener: Uses Realtime AND a 2-second polling loop to fetch result even if WebSocket drops.
- * 3. Informs user immediately if board is in deep sleep and needs to be woken up via button/motion.
- */
-
-/*
- * Breadcrumb: 2026-09-12 16:30 - Robust Single-Subscription & Navigational Stack for Cloud SD
- * [CRITICAL BUGFIX FLAG - REALTIME MULTI-LISTENER ELIMINATION]:
- * 1. Guarantees sbClient.channel is created exactly ONCE to prevent listener stacking and race conditions.
- * 2. Filters responses strictly by activeCommandId: prevents stale parent-folder payloads from overwriting subfolders.
- * 3. Sanitizes directory paths (removes double slashes and ensures clean root handling).
- */
 
 let currentCloudSdDir = '/';
 let cloudCmdChannel = null;
@@ -416,7 +384,6 @@ function initCloudCommandChannel() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'sd_cloud_commands' }, (payload) => {
             const row = payload.new;
             if (!row || row.device_id !== 'STAG-IMU-01') return;
-            // Nur auswerten, wenn es zum aktuell offenen Befehl gehört
             if (activeCommandId && row.id === activeCommandId) {
                 handleCommandResult(row);
             }
@@ -466,14 +433,15 @@ function handleCommandResult(row) {
 }
 
 async function loadCloudSdDirectory(dir) {
-    // Pfad normalisieren
     let cleanDir = dir || '/';
     while (cleanDir.includes('//')) cleanDir = cleanDir.replace('//', '/');
     if (!cleanDir.startsWith('/')) cleanDir = '/' + cleanDir;
     if (cleanDir.length > 1 && cleanDir.endsWith('/')) cleanDir = cleanDir.substring(0, cleanDir.length - 1);
 
     currentCloudSdDir = cleanDir;
-    document.getElementById('sd-current-path').innerText = currentCloudSdDir;
+    const pathEl = document.getElementById('sd-current-path');
+    if (pathEl) pathEl.innerText = currentCloudSdDir;
+
     const listEl = document.getElementById('sd-file-list');
     const stat = document.getElementById('sd-cloud-status-badge');
 
@@ -489,7 +457,6 @@ async function loadCloudSdDirectory(dir) {
 
     initCloudCommandChannel();
 
-    // Befehl in Supabase-Tabelle einreihen
     const { data, error } = await sbClient.from('sd_cloud_commands').insert([{
         device_id: 'STAG-IMU-01',
         command: 'LIST',
@@ -505,7 +472,6 @@ async function loadCloudSdDirectory(dir) {
     activeCommandId = data.id;
     const startTime = Date.now();
 
-    // Fallback-Poller (alle 1,5s) falls WebSocket-Realtime hängt
     activeCommandPollTimer = setInterval(async () => {
         if (!activeCommandId) {
             clearInterval(activeCommandPollTimer);
@@ -522,7 +488,6 @@ async function loadCloudSdDirectory(dir) {
             handleCommandResult(checkData);
         }
 
-        // Timeout nach 12 Sekunden
         if (Date.now() - startTime > 12000) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
@@ -611,148 +576,9 @@ async function requestCloudDelete(path, fileName) {
     }]);
 }
 
-async function loadCloudSdDirectory(dir) {
-    currentCloudSdDir = dir || '/';
-    document.getElementById('sd-current-path').innerText = currentCloudSdDir;
-    const listEl = document.getElementById('sd-file-list');
-    const stat = document.getElementById('sd-cloud-status-badge');
-
-    listEl.innerHTML = '<div class="text-xs text-green-400 py-4 text-center animate-pulse">Sende Anfrage an Board via Cloud...</div>';
-    if (stat) stat.innerHTML = 'Warte auf Rückmeldung vom Board...';
-
-    initCloudCommandChannel();
-
-    // Befehl in Supabase-Tabelle einreihen
-    const { error } = await sbClient.from('sd_cloud_commands').insert([{
-        device_id: 'STAG-IMU-01',
-        command: 'LIST',
-        path: currentCloudSdDir,
-        status: 'PENDING'
-    }]);
-
-    if (error) {
-        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Fehler beim Senden des Cloud-Befehls: ${error.message}</div>`;
-    }
-}
-
-function renderCloudFileList(items) {
-    const listEl = document.getElementById('sd-file-list');
-    if (!items || items.length === 0) {
-        listEl.innerHTML = '<div class="text-xs text-gray-500 py-4 text-center">Dieser Ordner ist leer.</div>';
-        return;
-    }
-
-    listEl.innerHTML = items.map(item => {
-        const fullPath = (currentCloudSdDir === '/' ? '' : currentCloudSdDir) + '/' + item.name;
-        if (item.is_dir) {
-            return `
-              <div class="flex justify-between items-center p-2.5 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
-                   onclick="loadCloudSdDirectory('${fullPath}')">
-                <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
-                <span class="text-xs text-gray-400">Öffnen ➔</span>
-              </div>
-            `;
-        } else {
-            const kb = (item.size / 1024).toFixed(1);
-            return `
-              <div class="flex justify-between items-center p-2.5 rounded bg-gray-900 border border-gray-800 text-xs font-mono hover:border-gray-700 transition">
-                <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
-                <div class="flex items-center gap-2 shrink-0">
-                  <button onclick="requestCloudDownload('${fullPath}', '${item.name}')" 
-                          class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-900/60 px-2.5 py-1 rounded text-xs font-bold transition">
-                    ⬇ Bereitstellen & Laden
-                  </button>
-                  <button onclick="requestCloudDelete('${fullPath}', '${item.name}')" 
-                          class="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1 rounded transition text-xs" title="Löschen">
-                    ✕
-                  </button>
-                </div>
-              </div>
-            `;
-        }
-    }).join('');
-}
-
-function navigateCloudSdUp() {
-    if (currentCloudSdDir === '/' || currentCloudSdDir === '') return;
-    const lastSlash = currentCloudSdDir.lastIndexOf('/');
-    const parent = lastSlash <= 0 ? '/' : currentCloudSdDir.substring(0, lastSlash);
-    loadCloudSdDirectory(parent);
-}
-
-async function requestCloudDownload(path, fileName) {
-    const stat = document.getElementById('sd-cloud-status-badge');
-    if (stat) stat.innerHTML = `Board streamt "${fileName}" in Storage...`;
-
-    const { error } = await sbClient.from('sd_cloud_commands').insert([{
-        device_id: 'STAG-IMU-01',
-        command: 'DOWNLOAD',
-        path: path,
-        status: 'PENDING'
-    }]);
-
-    if (error) alert('Fehler: ' + error.message);
-}
-
-async function requestCloudDelete(path, fileName) {
-    if (!confirm(`Möchtest du "${fileName}" wirklich von der physischen SD-Karte des Boards löschen?\n\nPfad: ${path}`)) return;
-
-    const stat = document.getElementById('sd-cloud-status-badge');
-    if (stat) stat.innerHTML = `Löschbefehl an Board übermittelt...`;
-
-    const { error } = await sbClient.from('sd_cloud_commands').insert([{
-        device_id: 'STAG-IMU-01',
-        command: 'DELETE',
-        path: path,
-        status: 'PENDING'
-    }]);
-
-    if (error) alert('Fehler: ' + error.message);
-}
-
-async function uploadFileToSd() {
-    const fileInput = document.getElementById('sd-upload-file');
-    const stat = document.getElementById('sd-upload-status');
-    if (!fileInput.files.length) {
-        stat.innerText = 'Bitte eine Datei auswählen.';
-        return;
-    }
-
-    const file = fileInput.files[0];
-    const formData = new FormData();
-    formData.append('file', file, file.name);
-
-    stat.innerText = `Lade ${file.name} nach ${currentSdDir}...`;
-    try {
-        const base = getBoardBase();
-        const res = await fetch(`${base}/upload?dir=${encodeURIComponent(currentSdDir)}`, {
-            method: 'POST',
-            body: formData
-        });
-        if (res.ok) {
-            stat.innerText = `✓ ${file.name} erfolgreich hochgeladen!`;
-            stat.className = 'text-xs font-mono mt-2 text-green-400 font-bold';
-            fileInput.value = '';
-            setTimeout(() => loadSdDirectory(currentSdDir), 800);
-        } else {
-            throw new Error('HTTP ' + res.status);
-        }
-    } catch (e) {
-        stat.innerText = 'Upload-Fehler: ' + e.message;
-        stat.className = 'text-xs font-mono mt-2 text-red-400 font-bold';
-    }
-}
-
 // ==========================================
 // 4. TAB NAVIGATION & SETTINGS
 // ==========================================
-/*
- * Breadcrumb: 2026-09-12 17:25 - Tab-Aware Resource Throttling & Reconnect Engine
- * [CRITICAL BUGFIX FLAG - STREAM RESTORATION]:
- * 1. Stops polling timers immediately when navigating away from the SD tab.
- * 2. Restores 3D Canvas aspect ratio and WebGL viewport rendering on return to 3d tab.
- * 3. Prevents background DOM/fetch accumulation.
- */
 function switchTab(tab) {
     ['3d', 'telemetry', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
         const tabEl = document.getElementById(`tab-${t}`);
@@ -766,9 +592,9 @@ function switchTab(tab) {
     if (activeTab) activeTab.classList.remove('hidden');
     if (activeBtn) activeBtn.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
 
-    // Dateimanager-Timer stoppen, wenn man den Tab verlässt
+    // Dateimanager-Timer sofort stoppen, wenn man den Tab verlässt
     if (tab !== 'files') {
-        if (typeof activeCommandPollTimer !== 'undefined' && activeCommandPollTimer) {
+        if (activeCommandPollTimer) {
             clearInterval(activeCommandPollTimer);
             activeCommandPollTimer = null;
         }
@@ -1165,7 +991,6 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    // 1. Orientierung via Slerp interpolieren
     if (repMesh && repScene && repCamera) {
         const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
         const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
@@ -1178,7 +1003,6 @@ function renderInterpolatedFrame(tSec) {
         qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
         repMesh.quaternion.copy(qA);
 
-        // 2. Translation via Lerp
         const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
         const ay = ptA.ay + (ptB.ay - ptA.ay) * alpha;
         const az = ptA.az + (ptB.az - ptA.az) * alpha;
@@ -1199,7 +1023,6 @@ function renderInterpolatedFrame(tSec) {
         repRenderer.render(repScene, repCamera);
     }
 
-    // 3. HUD-Werte interpolieren
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
