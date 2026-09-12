@@ -462,6 +462,12 @@ function handleCommandResult(row) {
     }
 }
 
+/*
+ * Breadcrumb: 2026-09-12 15:20 - Clean Stale Queue & 30s Timeout in loadCloudSdDirectory
+ * [CRITICAL BUGFIX FLAG - SD BROWSER RESPONSIVENESS]:
+ * 1. Purges stale PENDING commands before inserting a new request to eliminate queue bottlenecks.
+ * 2. Extended timeout from 15s to 30s to comfortably accommodate cloud handshake latency.
+ */
 async function loadCloudSdDirectory(dir) {
     let cleanDir = dir || '/';
     while (cleanDir.includes('//')) cleanDir = cleanDir.replace('//', '/');
@@ -487,6 +493,13 @@ async function loadCloudSdDirectory(dir) {
 
     initCloudCommandChannel();
 
+    // 1. Alte hängende PENDING-Befehle bereinigen, damit das Board nicht im Rückstand festhängt
+    await sbClient.from('sd_cloud_commands')
+        .delete()
+        .eq('device_id', 'STAG-IMU-01')
+        .eq('status', 'PENDING');
+
+    // 2. Neuen Befehl absetzen
     const { data, error } = await sbClient.from('sd_cloud_commands').insert([{
         device_id: 'STAG-IMU-01',
         command: 'LIST',
@@ -508,7 +521,7 @@ async function loadCloudSdDirectory(dir) {
             return;
         }
 
-        const { data: checkData, error: pollErr } = await sbClient
+        const { data: checkData } = await sbClient
             .from('sd_cloud_commands')
             .select('*')
             .eq('id', activeCommandId)
@@ -522,7 +535,8 @@ async function loadCloudSdDirectory(dir) {
             }
         }
 
-        if (Date.now() - startTime > 15000) {
+        // Auf 30 Sekunden erhöht
+        if (Date.now() - startTime > 30000) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
             listEl.innerHTML = `
@@ -536,7 +550,7 @@ async function loadCloudSdDirectory(dir) {
             `;
             if (stat) stat.innerHTML = '<span class="text-yellow-400">Timeout</span>';
         }
-    }, 1200);
+    }, 1000);
 }
 
 function renderCloudFileList(items) {
