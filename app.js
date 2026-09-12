@@ -765,6 +765,26 @@ function loadReplayGLBModel() {
     });
 }
 
+/*
+ * Breadcrumb: 2026-09-12 13:10 - 60FPS Quaternion Slerp Interpolator & Cloud Deletion Engine
+ * [CRITICAL BUGFIX FLAG - SMOOTH SLERP & CLOUD PURGE]:
+ * 1. Replaced discrete 10Hz stepping with continuous 60FPS THREE.Quaternion.slerp interpolation.
+ * 2. Playhead, translation and Euler angles lerp smoothly between keyframes without jitter.
+ * 3. Added deleteImuCloudFile(): deletes from Storage Bucket & public.imu_log_files (SD untouched).
+ */
+
+// --- REPLAY STATE ---
+let replayDataRaw = [];
+let replayFilteredData = [];
+let replayCurrentTimeSec = 0.0;
+let replayIsPlaying = false;
+let replaySpeed = 1.0;
+let replayAnimId = null;
+let replayLastFrameTime = 0;
+let replayGraphMode = 'accel';
+
+let repScene, repCamera, repRenderer, repMesh;
+
 function initReplay3D() {
     const container = document.getElementById('replay-canvas-container');
     if (!container || repRenderer) return;
@@ -781,7 +801,6 @@ function initReplay3D() {
     repRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(repRenderer.domElement);
 
-    // Identische 2-Punkt-Beleuchtung wie im Live-Stream
     const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
     l1.position.set(5, 10, 7);
     repScene.add(l1);
@@ -792,7 +811,6 @@ function initReplay3D() {
 
     repScene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-    // Sofortige Quader-Darstellung, asynchrones Laden des GLB-Modells
     createReplayFallbackCube();
     loadReplayGLBModel();
 
@@ -801,62 +819,39 @@ function initReplay3D() {
         repCamera.aspect = container.clientWidth / container.clientHeight;
         repCamera.updateProjectionMatrix();
         repRenderer.setSize(container.clientWidth, container.clientHeight);
-        if (repRenderer && repScene && repCamera) {
-            repRenderer.render(repScene, repCamera);
-        }
     });
 }
 
-function renderReplayFrame(idx) {
-    if (!replayFilteredData || idx >= replayFilteredData.length) return;
-    replayCurrentIndex = idx;
-    const pt = replayFilteredData[idx];
+function createReplayFallbackCube() {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
+    repMesh = new THREE.Mesh(geo, mat);
+    repScene.add(repMesh);
+}
 
-    // 3D GLB-Modell synchron drehen und bei Beschleunigungsspitzen translativ versetzen
-    if (repMesh) {
-        const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz);
-        if (norm > 0.0001) {
-            repMesh.quaternion.set(-pt.qy / norm, pt.qx / norm, pt.qz / norm, pt.qw / norm);
-            repMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-        }
+function setupReplayModelMesh(gltfScene) {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    repMesh = gltfScene;
+    const box = new THREE.Box3().setFromObject(repMesh);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) repMesh.scale.set(1.8 / maxDim, 1.8 / maxDim, 1.8 / maxDim);
+    repScene.add(repMesh);
+    if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
+}
 
-        // Dynamische Translation basierend auf Linearbeschleunigung
-        const aLen = Math.hypot(pt.ax, pt.ay, pt.az);
-        const axF = (aLen > 0.20) ? pt.ax : 0;
-        const ayF = (aLen > 0.20) ? pt.ay : 0;
-        const azF = (aLen > 0.20) ? pt.az : 0;
-
-        const aVec = new THREE.Vector3(ayF, -axF, azF);
-        aVec.applyQuaternion(repMesh.quaternion);
-
-        const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
-        const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
-        const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
-        repMesh.position.set(tx, ty, tz);
-
-        repRenderer.render(repScene, repCamera);
+function loadReplayGLBModel() {
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createReplayFallbackCube();
+        return;
     }
-
-    // HUD-Overlay mit Live-Winkeln & Beschleunigung
-    const hud = document.getElementById('replay-overlay-hud');
-    if (hud) {
-        hud.innerHTML =
-            `ANG: R:${pt.roll.toFixed(1)}° P:${pt.pitch.toFixed(1)}° Y:${pt.yaw.toFixed(1)}°<br>` +
-            `ACC: X:${pt.ax.toFixed(2)} Y:${pt.ay.toFixed(2)} Z:${pt.az.toFixed(2)} m/s² | Zyklus #${pt.cycle}`;
-    }
-
-    // Zeitstempel- und Cursor-Aktualisierung
-    const sec = (idx * 0.1).toFixed(3);
-    const curTimeEl = document.getElementById('replay-cursor-time');
-    if (curTimeEl) curTimeEl.innerText = `+${sec}s (${pt.ts})`;
-
-    const curTimeLbl = document.getElementById('replay-current-time-label');
-    if (curTimeLbl) curTimeLbl.innerText = (idx * 0.1).toFixed(1) + 's';
-
-    const scrubber = document.getElementById('replay-scrubber');
-    if (scrubber) scrubber.value = idx;
-
-    drawReplayGraph();
+    const loader = new THREE.GLTFLoader();
+    loader.load('./IMU.glb', (gltf) => {
+        setupReplayModelMesh(gltf.scene);
+    }, undefined, () => {
+        createReplayFallbackCube();
+    });
 }
 
 function closeImuReplayDeck() {
@@ -868,21 +863,13 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
     const w = qw / norm, x = qx / norm, y = qy / norm, z = qz / norm;
 
-    // Roll (Drehung um X-Achse)
     const sinr_cosp = 2 * (w * x + y * z);
     const cosr_cosp = 1 - 2 * (x * x + y * y);
     const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
 
-    // Pitch (Drehung um Y-Achse)
     const sinp = 2 * (w * y - z * x);
-    let pitch;
-    if (Math.abs(sinp) >= 1) {
-        pitch = Math.sign(sinp) * 90; // Gimbal-Lock Absicherung
-    } else {
-        pitch = Math.asin(sinp) * (180 / Math.PI);
-    }
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(sinp) * (180 / Math.PI);
 
-    // Yaw (Drehung um Z-Achse)
     const siny_cosp = 2 * (w * z + x * y);
     const cosy_cosp = 1 - 2 * (y * y + z * z);
     const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
@@ -920,7 +907,6 @@ async function inspectImuFile(downloadUrl, fileName) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const text = await res.text();
 
-        // CSV parsen (Timestamp,qw,qx,qy,qz,ax,ay,az,BootCycle)
         const lines = text.split('\n');
         replayDataRaw = [];
         const cyclesMap = new Set();
@@ -934,12 +920,11 @@ async function inspectImuFile(downloadUrl, fileName) {
                 const qx = parseFloat(parts[2]) || 0.0;
                 const qy = parseFloat(parts[3]) || 0.0;
                 const qz = parseFloat(parts[4]) || 0.0;
-
                 const euler = quatToEulerDeg(qw, qx, qy, qz);
 
                 const item = {
                     ts: parts[0],
-                    qw: qw, qx: qx, qy: qy, qz: qz,
+                    qw, qx, qy, qz,
                     ax: parseFloat(parts[5]) || 0.0,
                     ay: parseFloat(parts[6]) || 0.0,
                     az: parseFloat(parts[7]) || 0.0,
@@ -961,8 +946,7 @@ async function inspectImuFile(downloadUrl, fileName) {
         const select = document.getElementById('replay-cycle-select');
         select.innerHTML = '<option value="ALL">Alle Zyklen der Datei (' + replayDataRaw.length + ' Pkt)</option>';
 
-        const sortedCycles = Array.from(cyclesMap).sort((a, b) => a - b);
-        sortedCycles.forEach(c => {
+        Array.from(cyclesMap).sort((a, b) => a - b).forEach(c => {
             const count = replayDataRaw.filter(d => d.cycle === c).length;
             select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${count} Samples)</option>`;
         });
@@ -985,10 +969,10 @@ function onReplayCycleSelect(cycleVal) {
     }
 
     const total = replayFilteredData.length;
-    const durSec = (total / 10).toFixed(1); // ca. 10 Hz Basis
+    const durSec = ((total - 1) * 0.1).toFixed(1);
 
     document.getElementById('replay-meta-info').innerText =
-        `${total} Messpunkte geladen | Dauer: ca. ${durSec} s | Intervall: 100 ms`;
+        `${total} Messpunkte geladen | Dauer: ${durSec} s | 100 ms Raster`;
 
     const durLabel = document.getElementById('replay-duration-label');
     if (durLabel) durLabel.innerText = durSec + ' s';
@@ -1004,7 +988,82 @@ function onReplayCycleSelect(cycleVal) {
     resetReplayPlayback();
 }
 
-function drawReplayGraph() {
+// 60-FPS-Interpolation zwischen den Messpunkten (Slerp & Lerp)
+function renderInterpolatedFrame(tSec) {
+    const total = replayFilteredData.length;
+    if (total === 0) return;
+
+    const sampleInterval = 0.1; // 10 Hz = 100ms
+    const exactIndex = tSec / sampleInterval;
+    const iA = Math.min(Math.floor(exactIndex), total - 1);
+    const iB = Math.min(iA + 1, total - 1);
+    const alpha = (iA === iB) ? 0 : (exactIndex - iA);
+
+    const ptA = replayFilteredData[iA];
+    const ptB = replayFilteredData[iB];
+
+    // 1. Orientierung via Slerp interpolieren
+    if (repMesh && repScene && repCamera) {
+        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
+        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
+
+        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
+        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
+
+        if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
+        qA.slerp(qB, alpha);
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+        repMesh.quaternion.copy(qA);
+
+        // 2. Translation via Lerp
+        const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
+        const ay = ptA.ay + (ptB.ay - ptA.ay) * alpha;
+        const az = ptA.az + (ptB.az - ptA.az) * alpha;
+
+        const aLen = Math.hypot(ax, ay, az);
+        const axF = (aLen > 0.20) ? ax : 0;
+        const ayF = (aLen > 0.20) ? ay : 0;
+        const azF = (aLen > 0.20) ? az : 0;
+
+        const aVec = new THREE.Vector3(ayF, -axF, azF);
+        aVec.applyQuaternion(repMesh.quaternion);
+
+        const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
+        const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
+        const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
+        repMesh.position.set(tx, ty, tz);
+
+        repRenderer.render(repScene, repCamera);
+    }
+
+    // 3. HUD-Werte interpolieren
+    const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
+    const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
+    const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
+    const axD = ptA.ax + (ptB.ax - ptA.ax) * alpha;
+    const ayD = ptA.ay + (ptB.ay - ptA.ay) * alpha;
+    const azD = ptA.az + (ptB.az - ptA.az) * alpha;
+
+    const hud = document.getElementById('replay-overlay-hud');
+    if (hud) {
+        hud.innerHTML =
+            `ANG: R:${roll.toFixed(1)}° P:${pitch.toFixed(1)}° Y:${yaw.toFixed(1)}°<br>` +
+            `ACC: X:${axD.toFixed(2)} Y:${ayD.toFixed(2)} Z:${azD.toFixed(2)} m/s² | Zyklus #${ptA.cycle}`;
+    }
+
+    const curTimeEl = document.getElementById('replay-cursor-time');
+    if (curTimeEl) curTimeEl.innerText = `+${tSec.toFixed(2)}s (${ptA.ts})`;
+
+    const curTimeLbl = document.getElementById('replay-current-time-label');
+    if (curTimeLbl) curTimeLbl.innerText = tSec.toFixed(1) + 's';
+
+    const scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) scrubber.value = Math.round(exactIndex);
+
+    drawReplayGraph(tSec);
+}
+
+function drawReplayGraph(curTimeSec) {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || replayFilteredData.length === 0) return;
 
@@ -1019,14 +1078,8 @@ function drawReplayGraph() {
     const midY = h / 2;
     const leftMargin = 38;
 
-    if (count < 2) {
-        ctx.fillStyle = '#64748b';
-        ctx.font = '11px monospace';
-        ctx.fillText('Nicht genügend Messpunkte im gewählten Zyklus.', leftMargin, midY + 4);
-        return;
-    }
+    if (count < 2) return;
 
-    // 1. Skalenmaximum ermitteln
     let maxScale = 2.0;
     const isEuler = (replayGraphMode === 'euler');
 
@@ -1039,7 +1092,7 @@ function drawReplayGraph() {
         }
         maxScale = Math.ceil(maxScale * 1.15 * 10) / 10;
     } else {
-        maxScale = 45.0; // Mindestens ±45° als Basis
+        maxScale = 45.0;
         for (let i = 0; i < count; i++) {
             const d = replayFilteredData[i];
             if (Math.abs(d.roll) > maxScale) maxScale = Math.abs(d.roll);
@@ -1049,64 +1102,53 @@ function drawReplayGraph() {
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // 2. Horizontales Raster & Achsenbeschriftung
-    const unitStr = isEuler ? '°' : ' m/s²';
+    // Raster & Skala
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
-
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
         const y = midY - ratio * (midY - 8);
         ctx.strokeStyle = ratio === 0 ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.05)';
-        ctx.lineWidth = ratio === 0 ? 1 : 0.8;
-        if (ratio === 0) ctx.setLineDash([3, 3]);
-        else ctx.setLineDash([]);
-
+        ctx.lineWidth = 1;
+        if (ratio === 0) ctx.setLineDash([3, 3]); else ctx.setLineDash([]);
         ctx.beginPath();
-        ctx.moveTo(leftMargin, y);
-        ctx.lineTo(w, y);
-        ctx.stroke();
-
+        ctx.moveTo(leftMargin, y); ctx.lineTo(w, y); ctx.stroke();
         ctx.fillStyle = '#64748b';
-        const val = (ratio * maxScale).toFixed(isEuler ? 0 : 1);
-        ctx.fillText((ratio > 0 ? '+' : '') + val + unitStr, 2, y + 3);
+        ctx.fillText((ratio > 0 ? '+' : '') + (ratio * maxScale).toFixed(isEuler ? 0 : 1), 2, y + 3);
     });
     ctx.setLineDash([]);
 
-    // 3. Kurven zeichnen
+    // Kurven
     const drawCurve = (key, colorHex) => {
         ctx.save();
         ctx.beginPath();
         ctx.rect(leftMargin, 0, w - leftMargin, h);
         ctx.clip();
-
         ctx.strokeStyle = colorHex;
         ctx.lineWidth = 1.6;
         ctx.beginPath();
         for (let i = 0; i < count; i++) {
             const px = leftMargin + (i / (count - 1)) * (w - leftMargin);
             const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
         }
         ctx.stroke();
         ctx.restore();
     };
 
     if (!isEuler) {
-        drawCurve('ax', '#ef4444'); // X
-        drawCurve('ay', '#009B4C'); // Y
-        drawCurve('az', '#3b82f6'); // Z
+        drawCurve('ax', '#ef4444');
+        drawCurve('ay', '#009B4C');
+        drawCurve('az', '#3b82f6');
     } else {
-        drawCurve('roll', '#ef4444');  // Roll
-        drawCurve('pitch', '#009B4C'); // Pitch
-        drawCurve('yaw', '#8b5cf6');   // Yaw
+        drawCurve('roll', '#ef4444');
+        drawCurve('pitch', '#009B4C');
+        drawCurve('yaw', '#8b5cf6');
     }
 
-    // 4. Farblegende oben rechts
+    // Legende
     ctx.font = 'bold 9px monospace';
     const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
     const legendWidth = ctx.measureText(legendText).width;
-
     ctx.fillStyle = 'rgba(7, 10, 15, 0.85)';
     ctx.fillRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
     ctx.strokeStyle = '#233145';
@@ -1122,44 +1164,38 @@ function drawReplayGraph() {
         ctx.fillStyle = '#8b5cf6'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
     }
 
-    // 5. Playhead Cursor (Zeitzeiger)
-    if (count > 1) {
-        const curX = leftMargin + (replayCurrentIndex / (count - 1)) * (w - leftMargin);
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(curX, 0);
-        ctx.lineTo(curX, h);
-        ctx.stroke();
+    // Fließender Playhead-Cursor
+    const maxDur = Math.max((count - 1) * 0.1, 0.001);
+    const progress = Math.min(Math.max((curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec) / maxDur, 0), 1);
+    const curX = leftMargin + progress * (w - leftMargin);
 
-        ctx.fillStyle = '#f59e0b';
-        ctx.beginPath();
-        ctx.arc(curX, 6, 4, 0, Math.PI * 2);
-        ctx.fill();
-    }
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(curX, 0); ctx.lineTo(curX, h); ctx.stroke();
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath(); ctx.arc(curX, 6, 4, 0, Math.PI * 2); ctx.fill();
 }
-
-
 
 function onReplayScrub(val) {
     if (replayIsPlaying) toggleReplayPlay();
-    renderReplayFrame(parseInt(val, 10));
+    replayCurrentTimeSec = parseInt(val, 10) * 0.1;
+    renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
 function toggleReplayPlay() {
     replayIsPlaying = !replayIsPlaying;
     const btn = document.getElementById('btn-replay-play');
+    const maxDur = (replayFilteredData.length - 1) * 0.1;
 
     if (replayIsPlaying) {
-        // Am Dateiende automatisch wieder von Beginn starten
-        if (replayCurrentIndex >= replayFilteredData.length - 1) {
-            replayCurrentIndex = 0;
-            renderReplayFrame(0);
+        if (replayCurrentTimeSec >= maxDur) {
+            replayCurrentTimeSec = 0.0;
         }
         btn.innerText = '⏸ Pause';
         btn.className = 'bg-yellow-600 text-white px-4 py-1.5 rounded text-xs font-bold transition';
         replayLastFrameTime = performance.now();
-        playLoop();
+        replayAnimId = requestAnimationFrame(playLoop);
     } else {
         btn.innerText = '▶ Abspielen';
         btn.className = 'bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition';
@@ -1167,30 +1203,141 @@ function toggleReplayPlay() {
     }
 }
 
-function playLoop() {
+function playLoop(timestamp) {
     if (!replayIsPlaying) return;
-    const now = performance.now();
-    const frameInterval = (100 / replaySpeed); // 10 Hz Basis = 100ms pro Frame
+    const dt = (timestamp - replayLastFrameTime) / 1000.0;
+    replayLastFrameTime = timestamp;
 
-    if (now - replayLastFrameTime >= frameInterval) {
-        replayLastFrameTime = now;
-        if (replayCurrentIndex < replayFilteredData.length - 1) {
-            renderReplayFrame(replayCurrentIndex + 1);
-        } else {
-            toggleReplayPlay();
-            return;
-        }
+    const maxDur = (replayFilteredData.length - 1) * 0.1;
+    replayCurrentTimeSec += dt * replaySpeed;
+
+    if (replayCurrentTimeSec >= maxDur) {
+        replayCurrentTimeSec = maxDur;
+        renderInterpolatedFrame(replayCurrentTimeSec);
+        toggleReplayPlay();
+        return;
     }
+
+    renderInterpolatedFrame(replayCurrentTimeSec);
     replayAnimId = requestAnimationFrame(playLoop);
 }
 
 function resetReplayPlayback() {
     if (replayIsPlaying) toggleReplayPlay();
-    renderReplayFrame(0);
+    replayCurrentTimeSec = 0.0;
+    renderInterpolatedFrame(0.0);
 }
 
 function onReplaySpeedChange(spd) {
     replaySpeed = parseFloat(spd);
+}
+
+// Löschfunktion für Cloud-Dateien (Storage & DB-Index)
+async function deleteImuCloudFile(filePath, fileName) {
+    if (!confirm(`Möchtest du "${fileName}" wirklich aus Supabase löschen?\n\nHinweis: Die Originaldatei bleibt auf der SD-Karte des Boards erhalten.`)) {
+        return;
+    }
+
+    try {
+        // 1. Aus Supabase Storage Bucket entfernen
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([filePath]);
+        if (sErr) throw sErr;
+
+        // 2. Aus der Index-Tabelle entfernen
+        const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
+        if (dbErr) throw dbErr;
+
+        // Falls die gelöschte Datei gerade im Player geöffnet ist: Player schließen
+        if (document.getElementById('replay-file-title').innerText === fileName) {
+            closeImuReplayDeck();
+        }
+
+        fetchImuCloudLogs();
+    } catch (err) {
+        alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
+    }
+}
+
+async function fetchImuCloudLogs() {
+    const container = document.getElementById('imu-logs-container');
+    if (!container) return;
+
+    container.innerHTML = '<div class="text-xs text-gray-500 py-6 text-center">Lade IMU-Archive aus Supabase...</div>';
+
+    const { data, error } = await sbClient
+        .from('imu_log_files')
+        .select('*')
+        .eq('device_id', 'STAG-IMU-01')
+        .order('uploaded_at', { ascending: false });
+
+    if (error) {
+        container.innerHTML = `<div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300">Fehler beim Laden: ${error.message}</div>`;
+        return;
+    }
+
+    if (!data || data.length === 0) {
+        container.innerHTML = '<div class="text-xs text-gray-500 py-6 text-center">Keine IMU-Dateiblöcke in Supabase vorhanden.</div>';
+        return;
+    }
+
+    const groupedByDay = {};
+    data.forEach(item => {
+        const folder = item.day_folder || 'Unbekanntes Datum';
+        if (!groupedByDay[folder]) groupedByDay[folder] = [];
+        groupedByDay[folder].push(item);
+    });
+
+    let html = '';
+    Object.keys(groupedByDay).forEach(day => {
+        const files = groupedByDay[day];
+        const totalBytes = files.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+        const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
+
+        html += `
+        <div class="bg-gray-900/80 border border-gray-800 rounded-lg p-3.5">
+            <div class="flex justify-between items-center mb-2.5 pb-2 border-b border-gray-800">
+                <div class="flex items-center gap-2">
+                    <span class="text-green-400 font-bold text-xs">📅 ${day}</span>
+                    <span class="text-[11px] text-gray-400 font-mono">(${files.length} ${files.length === 1 ? 'Block' : 'Blöcke'} &bull; ${totalMb} MB gesamt)</span>
+                </div>
+            </div>
+            <div class="space-y-1.5">
+        `;
+
+        files.forEach(f => {
+            const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
+            const uploadTime = new Date(f.uploaded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
+
+            html += `
+                <div class="flex justify-between items-center p-2 rounded bg-gray-950/60 border border-gray-800/80 text-xs font-mono hover:border-gray-700 transition">
+                    <div class="flex items-center gap-2 truncate mr-3">
+                        <span class="text-gray-300 font-semibold truncate">📄 ${f.file_name}</span>
+                        <span class="text-[10px] text-gray-500">(${kb} KB)</span>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <span class="text-[10px] text-gray-500 hidden sm:inline mr-1">${uploadTime}</span>
+                        <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
+                                class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-800/60 px-2.5 py-1 rounded text-xs font-bold transition">
+                            📊 Visualisieren & Abspielen
+                        </button>
+                        <a href="${downloadUrl}" download="${f.file_name}" target="_blank"
+                           class="text-gray-400 hover:text-white px-2 py-1 text-xs transition">
+                            ⬇
+                        </a>
+                        <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" title="Aus Cloud löschen"
+                                class="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1 rounded transition text-xs">
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `</div></div>`;
+    });
+
+    container.innerHTML = html;
 }
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
