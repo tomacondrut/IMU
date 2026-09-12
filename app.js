@@ -66,6 +66,16 @@ function loadGLBModel() {
     });
 }
 
+/*
+ * Breadcrumb: 2026-09-12 20:25 - 60 FPS SLERP Interpolation & Decoupled Graph Engine
+ * [CRITICAL BUGFIX FLAG - SMOOTH STREAMING]:
+ * 1. Implemented continuous spherical linear interpolation (slerp) in 3D animate loop.
+ * 2. Decoupled drawAccGraphs via requestAnimationFrame flag to eliminate UI event-loop stutter.
+ */
+let targetQuaternion = new THREE.Quaternion(0, 0, 0, 1);
+let graphNeedsRedraw = false;
+let lastGraphDrawTime = 0;
+
 function init3D() {
     const container = document.getElementById('canvas-container');
     const w = container.clientWidth || (window.innerWidth - 30);
@@ -100,14 +110,11 @@ function init3D() {
         drawAccGraphs();
     });
 
-    function animate() {
+    function animate(now) {
         requestAnimationFrame(animate);
         if (modelMesh) {
-            const norm = Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
-            if (norm > 0.0001) {
-                modelMesh.quaternion.set(-qy / norm, qx / norm, qz / norm, qw / norm);
-                modelMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-            }
+            // Butterweiche 60 FPS Interpolation zum Zielquaternion
+            modelMesh.quaternion.slerp(targetQuaternion, 0.22);
 
             const aLen = Math.hypot(curAx, curAy, curAz);
             const axF = (aLen > 0.20) ? curAx : 0;
@@ -127,8 +134,15 @@ function init3D() {
             modelMesh.position.set(posX, posY, posZ);
         }
         renderer.render(scene, camera);
+
+        // Oszilloskop entkoppelt mit max. 25 FPS nachführen
+        if (graphNeedsRedraw && (now - lastGraphDrawTime >= 40)) {
+            lastGraphDrawTime = now;
+            graphNeedsRedraw = false;
+            drawAccGraphs();
+        }
     }
-    animate();
+    requestAnimationFrame(animate);
 }
 
 // ==========================================
@@ -347,11 +361,16 @@ function initRealtimeChannel() {
         qw = inW; qx = inX; qy = inY; qz = inZ;
         lastQw = qw; lastQx = qx; lastQy = qy; lastQz = qz;
 
+        const norm = Math.hypot(qx, qy, qz, qw) || 1.0;
+        const qTarget = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
+        qTarget.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+        targetQuaternion.copy(qTarget);
+
         if (d.ax !== undefined) {
             curAx = d.ax; curAy = d.ay; curAz = d.az;
             accHistory.push({ x: curAx, y: curAy, z: curAz });
             if (accHistory.length > maxAccPoints) accHistory.shift();
-            drawAccGraphs();
+            graphNeedsRedraw = true; // Signalisiert dem Render-Loop das Neuzeichnen
         }
 
         const el = document.getElementById('overlay-status');
@@ -478,17 +497,21 @@ async function loadCloudSdDirectory(dir) {
             return;
         }
 
-        const { data: checkData } = await sbClient
+        const { data: checkData, error: pollErr } = await sbClient
             .from('sd_cloud_commands')
             .select('*')
             .eq('id', activeCommandId)
             .single();
 
-        if (checkData && checkData.status !== 'PENDING') {
-            handleCommandResult(checkData);
+        if (checkData) {
+            if (checkData.status === 'DONE' || checkData.status === 'ERROR') {
+                handleCommandResult(checkData);
+            } else if (checkData.status === 'PROCESSING') {
+                if (stat) stat.innerHTML = '<span class="text-yellow-400 font-mono animate-pulse">Liest SD...</span>';
+            }
         }
 
-        if (Date.now() - startTime > 12000) {
+        if (Date.now() - startTime > 15000) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
             listEl.innerHTML = `
@@ -502,7 +525,7 @@ async function loadCloudSdDirectory(dir) {
             `;
             if (stat) stat.innerHTML = '<span class="text-yellow-400">Timeout</span>';
         }
-    }, 1500);
+    }, 1200);
 }
 
 function renderCloudFileList(items) {
