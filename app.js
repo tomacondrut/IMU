@@ -716,6 +716,55 @@ let replayGraphMode = 'accel'; // 'accel' oder 'euler'
 // Replay Three.js Szene
 let repScene, repCamera, repRenderer, repMesh;
 
+/*
+ * Breadcrumb: 2026-09-12 11:30 - Embedded GLTF IMU.glb Loader for Replay Deck
+ * [CRITICAL BUGFIX FLAG - REPLAY 3D MODEL & DISPLACEMENT]:
+ * 1. Loads ./IMU.glb into the replay viewport via GLTFLoader with auto-centering & bounding scale.
+ * 2. Instant green BoxGeometry fallback so viewport is never blank while loading.
+ * 3. Matched dual directional lighting (1.2 / 0.6) and ambient light to live 3D viewport.
+ * 4. Applies quaternion-projected linear acceleration displacement directly to repMesh.position.
+ */
+
+function createReplayFallbackCube() {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
+    repMesh = new THREE.Mesh(geo, mat);
+    repScene.add(repMesh);
+}
+
+function setupReplayModelMesh(gltfScene) {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    repMesh = gltfScene;
+
+    const box = new THREE.Box3().setFromObject(repMesh);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) {
+        const s = 1.8 / maxDim;
+        repMesh.scale.set(s, s, s);
+    }
+    repScene.add(repMesh);
+    if (repRenderer && repScene && repCamera) {
+        repRenderer.render(repScene, repCamera);
+    }
+}
+
+function loadReplayGLBModel() {
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createReplayFallbackCube();
+        return;
+    }
+    const loader = new THREE.GLTFLoader();
+    loader.load('./IMU.glb', (gltf) => {
+        setupReplayModelMesh(gltf.scene);
+        console.log("[REPLAY 3D] IMU.glb erfolgreich für Replay geladen!");
+    }, undefined, (err) => {
+        console.warn("[REPLAY 3D] IMU.glb nicht gefunden, Fallback aktiv:", err);
+        createReplayFallbackCube();
+    });
+}
+
 function initReplay3D() {
     const container = document.getElementById('replay-canvas-container');
     if (!container || repRenderer) return;
@@ -732,22 +781,82 @@ function initReplay3D() {
     repRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(repRenderer.domElement);
 
+    // Identische 2-Punkt-Beleuchtung wie im Live-Stream
     const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
     l1.position.set(5, 10, 7);
     repScene.add(l1);
+
+    const l2 = new THREE.DirectionalLight(0xffffff, 0.6);
+    l2.position.set(-5, -10, -7);
+    repScene.add(l2);
+
     repScene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
-    repMesh = new THREE.Mesh(geo, mat);
-    repScene.add(repMesh);
+    // Sofortige Quader-Darstellung, asynchrones Laden des GLB-Modells
+    createReplayFallbackCube();
+    loadReplayGLBModel();
 
     window.addEventListener('resize', () => {
         if (!container || container.clientWidth === 0) return;
         repCamera.aspect = container.clientWidth / container.clientHeight;
         repCamera.updateProjectionMatrix();
         repRenderer.setSize(container.clientWidth, container.clientHeight);
+        if (repRenderer && repScene && repCamera) {
+            repRenderer.render(repScene, repCamera);
+        }
     });
+}
+
+function renderReplayFrame(idx) {
+    if (!replayFilteredData || idx >= replayFilteredData.length) return;
+    replayCurrentIndex = idx;
+    const pt = replayFilteredData[idx];
+
+    // 3D GLB-Modell synchron drehen und bei Beschleunigungsspitzen translativ versetzen
+    if (repMesh) {
+        const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz);
+        if (norm > 0.0001) {
+            repMesh.quaternion.set(-pt.qy / norm, pt.qx / norm, pt.qz / norm, pt.qw / norm);
+            repMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+        }
+
+        // Dynamische Translation basierend auf Linearbeschleunigung
+        const aLen = Math.hypot(pt.ax, pt.ay, pt.az);
+        const axF = (aLen > 0.20) ? pt.ax : 0;
+        const ayF = (aLen > 0.20) ? pt.ay : 0;
+        const azF = (aLen > 0.20) ? pt.az : 0;
+
+        const aVec = new THREE.Vector3(ayF, -axF, azF);
+        aVec.applyQuaternion(repMesh.quaternion);
+
+        const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
+        const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
+        const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
+        repMesh.position.set(tx, ty, tz);
+
+        repRenderer.render(repScene, repCamera);
+    }
+
+    // HUD-Overlay mit Live-Winkeln & Beschleunigung
+    const hud = document.getElementById('replay-overlay-hud');
+    if (hud) {
+        hud.innerHTML =
+            `ANG: R:${pt.roll.toFixed(1)}° P:${pt.pitch.toFixed(1)}° Y:${pt.yaw.toFixed(1)}°<br>` +
+            `ACC: X:${pt.ax.toFixed(2)} Y:${pt.ay.toFixed(2)} Z:${pt.az.toFixed(2)} m/s² | Zyklus #${pt.cycle}`;
+    }
+
+    // Zeitstempel- und Cursor-Aktualisierung
+    const sec = (idx * 0.1).toFixed(3);
+    const curTimeEl = document.getElementById('replay-cursor-time');
+    if (curTimeEl) curTimeEl.innerText = `+${sec}s (${pt.ts})`;
+
+    const curTimeLbl = document.getElementById('replay-current-time-label');
+    if (curTimeLbl) curTimeLbl.innerText = (idx * 0.1).toFixed(1) + 's';
+
+    const scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) scrubber.value = idx;
+
+    drawReplayGraph();
 }
 
 function closeImuReplayDeck() {
@@ -1030,34 +1139,7 @@ function drawReplayGraph() {
     }
 }
 
-function renderReplayFrame(idx) {
-    if (!replayFilteredData || idx >= replayFilteredData.length) return;
-    replayCurrentIndex = idx;
-    const pt = replayFilteredData[idx];
 
-    // 3D Modell orientieren
-    if (repMesh) {
-        const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz);
-        if (norm > 0.0001) {
-            repMesh.quaternion.set(-pt.qy / norm, pt.qx / norm, pt.qz / norm, pt.qw / norm);
-            repMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-        }
-        repRenderer.render(repScene, repCamera);
-    }
-
-    // HUD-Anzeige mit Live-Winkeln & Beschleunigung
-    document.getElementById('replay-overlay-hud').innerHTML =
-        `ANG: R:${pt.roll.toFixed(1)}° P:${pt.pitch.toFixed(1)}° Y:${pt.yaw.toFixed(1)}°<br>` +
-        `ACC: X:${pt.ax.toFixed(2)} Y:${pt.ay.toFixed(2)} Z:${pt.az.toFixed(2)} m/s² | Zyklus #${pt.cycle}`;
-
-    // Zeitstempelanzeige
-    const sec = (idx * 0.1).toFixed(3);
-    document.getElementById('replay-cursor-time').innerText = `+${sec}s (${pt.ts})`;
-    document.getElementById('replay-current-time-label').innerText = (idx * 0.1).toFixed(1) + 's';
-
-    document.getElementById('replay-scrubber').value = idx;
-    drawReplayGraph();
-}
 
 function onReplayScrub(val) {
     if (replayIsPlaying) toggleReplayPlay();
