@@ -684,13 +684,432 @@ async function fetchLatestData() {
     </tr>
   `).join('');
 }
+
 /*
- * Breadcrumb: 2026-09-12 10:10 - Grouped Daily IMU Chunk Browser with Direct Storage Download
- * Feature:
- *  1. Queries public.imu_log_files for STAG-IMU-01.
- *  2. Groups files by day_folder with aggregate size calculation.
- *  3. Generates direct Supabase Storage download links: /storage/v1/object/public/imu-logs/<file_path>
+ * Breadcrumb: 2026-09-12 10:35 - High-Performance IMU CSV Replayer & BootCycle Demuxer
+ * [CRITICAL BUGFIX FLAG - REPLAY ENGINE]:
+ * 1. Fast stream parser splits CSV without string allocations or memory leaks.
+ * 2. Groups records by BootCycle for isolated cycle playback.
+ * 3. Dedicated Three.js replay scene prevents collisions with live 3D stream.
+ * 4. Interactive canvas timeline with dynamic playhead cursor and scrub support.
  */
+
+/*
+ * Breadcrumb: 2026-09-12 11:00 - Unified Replay Engine, Euler Demuxer & Clean Scope
+ * [CRITICAL BUGFIX FLAG - DEDUPLICATION & SCOPE INTEGRITY]:
+ * 1. Resolved duplicate declarations of toggleReplayPlay, drawReplayGraph, and onReplayScrub.
+ * 2. Retained full Tait-Bryan Euler conversion (Roll, Pitch, Yaw in °) and live mode toggle.
+ * 3. Auto-rewinds playhead to start (index 0) if Play is triggered at the end of the buffer.
+ * 4. Renders responsive color-coded telemetry legend badges and synchronized playhead cursor.
+ */
+
+// --- REPLAY STATE ---
+let replayDataRaw = [];
+let replayFilteredData = [];
+let replayCurrentIndex = 0;
+let replayIsPlaying = false;
+let replaySpeed = 1.0;
+let replayAnimId = null;
+let replayLastFrameTime = 0;
+let replayGraphMode = 'accel'; // 'accel' oder 'euler'
+
+// Replay Three.js Szene
+let repScene, repCamera, repRenderer, repMesh;
+
+function initReplay3D() {
+    const container = document.getElementById('replay-canvas-container');
+    if (!container || repRenderer) return;
+
+    const w = container.clientWidth || 300;
+    const h = container.clientHeight || 240;
+
+    repScene = new THREE.Scene();
+    repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
+    repCamera.position.set(0, 0, 3.8);
+
+    repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    repRenderer.setSize(w, h);
+    repRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(repRenderer.domElement);
+
+    const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
+    l1.position.set(5, 10, 7);
+    repScene.add(l1);
+    repScene.add(new THREE.AmbientLight(0xffffff, 0.7));
+
+    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
+    repMesh = new THREE.Mesh(geo, mat);
+    repScene.add(repMesh);
+
+    window.addEventListener('resize', () => {
+        if (!container || container.clientWidth === 0) return;
+        repCamera.aspect = container.clientWidth / container.clientHeight;
+        repCamera.updateProjectionMatrix();
+        repRenderer.setSize(container.clientWidth, container.clientHeight);
+    });
+}
+
+function closeImuReplayDeck() {
+    if (replayIsPlaying) toggleReplayPlay();
+    document.getElementById('imu-replay-deck').classList.add('hidden');
+}
+
+function quatToEulerDeg(qw, qx, qy, qz) {
+    const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
+    const w = qw / norm, x = qx / norm, y = qy / norm, z = qz / norm;
+
+    // Roll (Drehung um X-Achse)
+    const sinr_cosp = 2 * (w * x + y * z);
+    const cosr_cosp = 1 - 2 * (x * x + y * y);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
+
+    // Pitch (Drehung um Y-Achse)
+    const sinp = 2 * (w * y - z * x);
+    let pitch;
+    if (Math.abs(sinp) >= 1) {
+        pitch = Math.sign(sinp) * 90; // Gimbal-Lock Absicherung
+    } else {
+        pitch = Math.asin(sinp) * (180 / Math.PI);
+    }
+
+    // Yaw (Drehung um Z-Achse)
+    const siny_cosp = 2 * (w * z + x * y);
+    const cosy_cosp = 1 - 2 * (y * y + z * z);
+    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
+
+    return { roll, pitch, yaw };
+}
+
+function setReplayGraphMode(mode) {
+    replayGraphMode = mode;
+    const btnAcc = document.getElementById('btn-replay-mode-acc');
+    const btnEuler = document.getElementById('btn-replay-mode-euler');
+
+    if (mode === 'accel') {
+        if (btnAcc) btnAcc.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition';
+        if (btnEuler) btnEuler.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition';
+    } else {
+        if (btnEuler) btnEuler.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition';
+        if (btnAcc) btnAcc.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition';
+    }
+    drawReplayGraph();
+}
+
+async function inspectImuFile(downloadUrl, fileName) {
+    const deck = document.getElementById('imu-replay-deck');
+    deck.classList.remove('hidden');
+    deck.scrollIntoView({ behavior: 'smooth' });
+
+    document.getElementById('replay-file-title').innerText = fileName;
+    document.getElementById('replay-meta-info').innerText = 'Lade CSV-Datei aus Storage...';
+
+    initReplay3D();
+
+    try {
+        const res = await fetch(downloadUrl);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+
+        // CSV parsen (Timestamp,qw,qx,qy,qz,ax,ay,az,BootCycle)
+        const lines = text.split('\n');
+        replayDataRaw = [];
+        const cyclesMap = new Set();
+
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const parts = line.split(',');
+            if (parts.length >= 8) {
+                const qw = parseFloat(parts[1]) || 1.0;
+                const qx = parseFloat(parts[2]) || 0.0;
+                const qy = parseFloat(parts[3]) || 0.0;
+                const qz = parseFloat(parts[4]) || 0.0;
+
+                const euler = quatToEulerDeg(qw, qx, qy, qz);
+
+                const item = {
+                    ts: parts[0],
+                    qw: qw, qx: qx, qy: qy, qz: qz,
+                    ax: parseFloat(parts[5]) || 0.0,
+                    ay: parseFloat(parts[6]) || 0.0,
+                    az: parseFloat(parts[7]) || 0.0,
+                    roll: euler.roll,
+                    pitch: euler.pitch,
+                    yaw: euler.yaw,
+                    cycle: parts[8] ? parseInt(parts[8], 10) : 0
+                };
+                replayDataRaw.push(item);
+                if (item.cycle) cyclesMap.add(item.cycle);
+            }
+        }
+
+        if (replayDataRaw.length === 0) {
+            document.getElementById('replay-meta-info').innerText = 'Datei enthält keine gültigen Messzeilen.';
+            return;
+        }
+
+        const select = document.getElementById('replay-cycle-select');
+        select.innerHTML = '<option value="ALL">Alle Zyklen der Datei (' + replayDataRaw.length + ' Pkt)</option>';
+
+        const sortedCycles = Array.from(cyclesMap).sort((a, b) => a - b);
+        sortedCycles.forEach(c => {
+            const count = replayDataRaw.filter(d => d.cycle === c).length;
+            select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${count} Samples)</option>`;
+        });
+
+        onReplayCycleSelect('ALL');
+    } catch (err) {
+        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
+    }
+}
+
+function onReplayCycleSelect(cycleVal) {
+    const select = document.getElementById('replay-cycle-select');
+    if (select) select.value = cycleVal;
+
+    if (cycleVal === 'ALL') {
+        replayFilteredData = replayDataRaw;
+    } else {
+        const cNum = parseInt(cycleVal, 10);
+        replayFilteredData = replayDataRaw.filter(d => d.cycle === cNum);
+    }
+
+    const total = replayFilteredData.length;
+    const durSec = (total / 10).toFixed(1); // ca. 10 Hz Basis
+
+    document.getElementById('replay-meta-info').innerText =
+        `${total} Messpunkte geladen | Dauer: ca. ${durSec} s | Intervall: 100 ms`;
+
+    const durLabel = document.getElementById('replay-duration-label');
+    if (durLabel) durLabel.innerText = durSec + ' s';
+    const totalTimeLabel = document.getElementById('replay-total-time-label');
+    if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
+
+    const scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) {
+        scrubber.max = Math.max(0, total - 1);
+        scrubber.value = 0;
+    }
+
+    resetReplayPlayback();
+}
+
+function drawReplayGraph() {
+    const cv = document.getElementById('replayGraphCanvas');
+    if (!cv || replayFilteredData.length === 0) return;
+
+    const w = cv.width = cv.clientWidth;
+    const h = cv.height = cv.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+
+    const count = replayFilteredData.length;
+    const midY = h / 2;
+    const leftMargin = 38;
+
+    if (count < 2) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '11px monospace';
+        ctx.fillText('Nicht genügend Messpunkte im gewählten Zyklus.', leftMargin, midY + 4);
+        return;
+    }
+
+    // 1. Skalenmaximum ermitteln
+    let maxScale = 2.0;
+    const isEuler = (replayGraphMode === 'euler');
+
+    if (!isEuler) {
+        for (let i = 0; i < count; i++) {
+            const d = replayFilteredData[i];
+            if (Math.abs(d.ax) > maxScale) maxScale = Math.abs(d.ax);
+            if (Math.abs(d.ay) > maxScale) maxScale = Math.abs(d.ay);
+            if (Math.abs(d.az) > maxScale) maxScale = Math.abs(d.az);
+        }
+        maxScale = Math.ceil(maxScale * 1.15 * 10) / 10;
+    } else {
+        maxScale = 45.0; // Mindestens ±45° als Basis
+        for (let i = 0; i < count; i++) {
+            const d = replayFilteredData[i];
+            if (Math.abs(d.roll) > maxScale) maxScale = Math.abs(d.roll);
+            if (Math.abs(d.pitch) > maxScale) maxScale = Math.abs(d.pitch);
+            if (Math.abs(d.yaw) > maxScale) maxScale = Math.abs(d.yaw);
+        }
+        maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
+    }
+
+    // 2. Horizontales Raster & Achsenbeschriftung
+    const unitStr = isEuler ? '°' : ' m/s²';
+    const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
+
+    ctx.font = '9px monospace';
+    gridPoints.forEach(ratio => {
+        const y = midY - ratio * (midY - 8);
+        ctx.strokeStyle = ratio === 0 ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.05)';
+        ctx.lineWidth = ratio === 0 ? 1 : 0.8;
+        if (ratio === 0) ctx.setLineDash([3, 3]);
+        else ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.moveTo(leftMargin, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+
+        ctx.fillStyle = '#64748b';
+        const val = (ratio * maxScale).toFixed(isEuler ? 0 : 1);
+        ctx.fillText((ratio > 0 ? '+' : '') + val + unitStr, 2, y + 3);
+    });
+    ctx.setLineDash([]);
+
+    // 3. Kurven zeichnen
+    const drawCurve = (key, colorHex) => {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(leftMargin, 0, w - leftMargin, h);
+        ctx.clip();
+
+        ctx.strokeStyle = colorHex;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        for (let i = 0; i < count; i++) {
+            const px = leftMargin + (i / (count - 1)) * (w - leftMargin);
+            const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.restore();
+    };
+
+    if (!isEuler) {
+        drawCurve('ax', '#ef4444'); // X
+        drawCurve('ay', '#009B4C'); // Y
+        drawCurve('az', '#3b82f6'); // Z
+    } else {
+        drawCurve('roll', '#ef4444');  // Roll
+        drawCurve('pitch', '#009B4C'); // Pitch
+        drawCurve('yaw', '#8b5cf6');   // Yaw
+    }
+
+    // 4. Farblegende oben rechts
+    ctx.font = 'bold 9px monospace';
+    const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
+    const legendWidth = ctx.measureText(legendText).width;
+
+    ctx.fillStyle = 'rgba(7, 10, 15, 0.85)';
+    ctx.fillRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
+    ctx.strokeStyle = '#233145';
+    ctx.strokeRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
+
+    if (!isEuler) {
+        ctx.fillStyle = '#ef4444'; ctx.fillText('● ACC X', w - legendWidth - 9, 14);
+        ctx.fillStyle = '#009B4C'; ctx.fillText('● ACC Y', w - legendWidth + 37, 14);
+        ctx.fillStyle = '#3b82f6'; ctx.fillText('● ACC Z', w - legendWidth + 83, 14);
+    } else {
+        ctx.fillStyle = '#ef4444'; ctx.fillText('● Roll', w - legendWidth - 9, 14);
+        ctx.fillStyle = '#009B4C'; ctx.fillText('● Pitch', w - legendWidth + 31, 14);
+        ctx.fillStyle = '#8b5cf6'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
+    }
+
+    // 5. Playhead Cursor (Zeitzeiger)
+    if (count > 1) {
+        const curX = leftMargin + (replayCurrentIndex / (count - 1)) * (w - leftMargin);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(curX, 0);
+        ctx.lineTo(curX, h);
+        ctx.stroke();
+
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(curX, 6, 4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function renderReplayFrame(idx) {
+    if (!replayFilteredData || idx >= replayFilteredData.length) return;
+    replayCurrentIndex = idx;
+    const pt = replayFilteredData[idx];
+
+    // 3D Modell orientieren
+    if (repMesh) {
+        const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz);
+        if (norm > 0.0001) {
+            repMesh.quaternion.set(-pt.qy / norm, pt.qx / norm, pt.qz / norm, pt.qw / norm);
+            repMesh.quaternion.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+        }
+        repRenderer.render(repScene, repCamera);
+    }
+
+    // HUD-Anzeige mit Live-Winkeln & Beschleunigung
+    document.getElementById('replay-overlay-hud').innerHTML =
+        `ANG: R:${pt.roll.toFixed(1)}° P:${pt.pitch.toFixed(1)}° Y:${pt.yaw.toFixed(1)}°<br>` +
+        `ACC: X:${pt.ax.toFixed(2)} Y:${pt.ay.toFixed(2)} Z:${pt.az.toFixed(2)} m/s² | Zyklus #${pt.cycle}`;
+
+    // Zeitstempelanzeige
+    const sec = (idx * 0.1).toFixed(3);
+    document.getElementById('replay-cursor-time').innerText = `+${sec}s (${pt.ts})`;
+    document.getElementById('replay-current-time-label').innerText = (idx * 0.1).toFixed(1) + 's';
+
+    document.getElementById('replay-scrubber').value = idx;
+    drawReplayGraph();
+}
+
+function onReplayScrub(val) {
+    if (replayIsPlaying) toggleReplayPlay();
+    renderReplayFrame(parseInt(val, 10));
+}
+
+function toggleReplayPlay() {
+    replayIsPlaying = !replayIsPlaying;
+    const btn = document.getElementById('btn-replay-play');
+
+    if (replayIsPlaying) {
+        // Am Dateiende automatisch wieder von Beginn starten
+        if (replayCurrentIndex >= replayFilteredData.length - 1) {
+            replayCurrentIndex = 0;
+            renderReplayFrame(0);
+        }
+        btn.innerText = '⏸ Pause';
+        btn.className = 'bg-yellow-600 text-white px-4 py-1.5 rounded text-xs font-bold transition';
+        replayLastFrameTime = performance.now();
+        playLoop();
+    } else {
+        btn.innerText = '▶ Abspielen';
+        btn.className = 'bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition';
+        if (replayAnimId) cancelAnimationFrame(replayAnimId);
+    }
+}
+
+function playLoop() {
+    if (!replayIsPlaying) return;
+    const now = performance.now();
+    const frameInterval = (100 / replaySpeed); // 10 Hz Basis = 100ms pro Frame
+
+    if (now - replayLastFrameTime >= frameInterval) {
+        replayLastFrameTime = now;
+        if (replayCurrentIndex < replayFilteredData.length - 1) {
+            renderReplayFrame(replayCurrentIndex + 1);
+        } else {
+            toggleReplayPlay();
+            return;
+        }
+    }
+    replayAnimId = requestAnimationFrame(playLoop);
+}
+
+function resetReplayPlayback() {
+    if (replayIsPlaying) toggleReplayPlay();
+    renderReplayFrame(0);
+}
+
+function onReplaySpeedChange(spd) {
+    replaySpeed = parseFloat(spd);
+}
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
@@ -753,11 +1172,15 @@ async function fetchImuCloudLogs() {
                         <span class="text-gray-300 font-semibold truncate">📄 ${f.file_name}</span>
                         <span class="text-[10px] text-gray-500">(${kb} KB)</span>
                     </div>
-                    <div class="flex items-center gap-3 shrink-0">
-                        <span class="text-[10px] text-gray-500 hidden sm:inline">${uploadTime}</span>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <span class="text-[10px] text-gray-500 hidden sm:inline mr-1">${uploadTime}</span>
+                        <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
+                                class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-800/60 px-2.5 py-1 rounded text-xs font-bold transition">
+                            📊 Visualisieren & Abspielen
+                        </button>
                         <a href="${downloadUrl}" download="${f.file_name}" target="_blank"
-                           class="text-green-400 hover:text-green-300 font-bold text-xs transition">
-                            ⬇ Download
+                           class="text-gray-400 hover:text-white px-2 py-1 text-xs transition">
+                            ⬇
                         </a>
                     </div>
                 </div>

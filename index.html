@@ -167,7 +167,117 @@
         </section>
     </main>
     <!-- TAB: IMU CLOUD-LOGS (1-MB-CHUNKS) -->
+    <!--
+      Breadcrumb: 2026-09-12 10:30 - IMU Cloud-Logs Explorer with Embedded Replay & Cycle Inspector
+      Feature:
+        1. Added interactive Replay Deck (Three.js Canvas + Synchronized Scrubbable Telemetry Graph).
+        2. Added Wake-Cycle selector (BootCycle demuxer) with Play, Pause, Speed and Timeline scrub.
+        3. File browser items include direct 'Visualisieren & Abspielen' trigger.
+    -->
+    <!-- TAB: IMU CLOUD-LOGS (1-MB-CHUNKS) -->
+    <!--
+      Breadcrumb: 2026-09-12 11:10 - Fixed Replay Canvas Missing Tag & Grid Scope
+      [CRITICAL BUGFIX FLAG - DOM REPLAY INTEGRITY]:
+      1. Restored missing <canvas id="replayGraphCanvas"> and duration labels.
+      2. Fixed unclosed grid container so controls deck spans 100% full width.
+      3. Preserved Euler vs Accel mode toggle buttons and cycle selector.
+    -->
     <main id="tab-imulogs" class="hidden">
+        <!-- 1. Interaktives Replay- & Analyse-Deck (erscheint nach Dateiauswahl) -->
+        <section id="imu-replay-deck" class="card p-4 md:p-5 rounded-lg mb-5 hidden">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 pb-3 border-b border-gray-700">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs font-bold text-stag-green uppercase tracking-wider">Replay-Analyse:</span>
+                        <span id="replay-file-title" class="text-xs font-mono text-white font-bold truncate max-w-xs">--</span>
+                    </div>
+                    <p id="replay-meta-info" class="text-[11px] text-gray-400 font-mono mt-0.5">Lade Datensätze...</p>
+                </div>
+                <button onclick="closeImuReplayDeck()" class="text-gray-400 hover:text-white px-2.5 py-1 rounded bg-gray-800 text-xs font-bold transition">
+                    ✕ Schließen
+                </button>
+            </div>
+
+            <!-- 3D Replay & Oszilloskop Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+                <!-- 3D Orientierungs-Replay -->
+                <div class="lg:col-span-1 bg-[#070a0f] rounded-lg border border-[#233145] relative overflow-hidden h-60">
+                    <div id="replay-canvas-container" class="w-full h-full"></div>
+                    <div id="replay-overlay-hud" class="absolute bottom-2 left-2 bg-black/80 px-2.5 py-1 rounded text-[10px] font-mono text-green-400 pointer-events-none">
+                        ROT: W:1.00 X:0.00 Y:0.00 Z:0.00
+                    </div>
+                </div>
+
+                <!-- Synchronisiertes Oszilloskop mit vertikalem Zeit-Cursor -->
+                <div class="lg:col-span-2 flex flex-col justify-between bg-[#070a0f] p-3 rounded-lg border border-[#1c2636]">
+                    <!-- Signal-Umschalter (Beschleunigung vs. Euler-Winkel) -->
+                    <div class="flex flex-wrap justify-between items-center gap-2 mb-2 pb-1 border-b border-gray-800">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[11px] font-bold text-gray-400 font-mono uppercase mr-1">Signal:</span>
+                            <button id="btn-replay-mode-acc" onclick="setReplayGraphMode('accel')"
+                                    class="px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition">
+                                Beschleunigung (m/s²)
+                            </button>
+                            <button id="btn-replay-mode-euler" onclick="setReplayGraphMode('euler')"
+                                    class="px-2.5 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition">
+                                Neigungswinkel (° Euler)
+                            </button>
+                        </div>
+                        <span id="replay-cursor-time" class="text-[11px] font-mono text-green-400 font-bold">00:00.000</span>
+                    </div>
+
+                    <!-- Wiederhergestelltes Canvas für die Kurven -->
+                    <div class="relative w-full h-40">
+                        <canvas id="replayGraphCanvas" class="w-full h-full block"></canvas>
+                    </div>
+
+                    <!-- Wiederhergestellte Zeitbegrenzung -->
+                    <div class="flex justify-between text-[10px] font-mono text-gray-500 mt-1">
+                        <span>Start (0.0s)</span>
+                        <span id="replay-duration-label">0.0 s</span>
+                    </div>
+                </div>
+            </div> <!-- Schließt das 3-Spalten-Grid sauber ab -->
+            <!-- Replay-Steuerleiste & Aufweckzyklus-Auswahl (volle Breite) -->
+            <div class="bg-[#0b0f17] p-3.5 rounded-lg border border-[#233145] flex flex-col gap-3">
+                <!-- Timeline Scrubber -->
+                <div class="flex items-center gap-3">
+                    <span id="replay-current-time-label" class="text-xs font-mono text-gray-300 w-14">00:00</span>
+                    <input type="range" id="replay-scrubber" min="0" max="100" value="0" step="1"
+                           oninput="onReplayScrub(this.value)"
+                           class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-green-500">
+                    <span id="replay-total-time-label" class="text-xs font-mono text-gray-400 w-14 text-right">00:00</span>
+                </div>
+
+                <!-- Kontrollknöpfe & Filter -->
+                <div class="flex flex-wrap justify-between items-center gap-3 pt-2 border-t border-gray-800">
+                    <div class="flex items-center gap-2">
+                        <button id="btn-replay-play" onclick="toggleReplayPlay()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition">
+                            ▶ Abspielen
+                        </button>
+                        <button onclick="resetReplayPlayback()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded text-xs font-bold transition">
+                            ⏮ Reset
+                        </button>
+                        <select id="replay-speed" onchange="onReplaySpeedChange(this.value)" class="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-white font-mono outline-none">
+                            <option value="0.5">0.5x Speed</option>
+                            <option value="1.0" selected>1.0x Normal</option>
+                            <option value="2.0">2.0x Schnell</option>
+                            <option value="4.0">4.0x Zeitraffer</option>
+                        </select>
+                    </div>
+
+                    <!-- Aufweckzyklus-Filter (BootCycle) -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-400 font-semibold whitespace-nowrap">Aufweckzyklus:</label>
+                        <select id="replay-cycle-select" onchange="onReplayCycleSelect(this.value)" class="bg-gray-900 border border-green-700/60 rounded px-3 py-1.5 text-xs text-green-400 font-mono outline-none">
+                            <option value="ALL">Alle Zyklen der Datei</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. Dateiübersicht (Cloud-Storage) -->
         <div class="card p-5 rounded-lg mb-5">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-gray-700">
                 <div>
