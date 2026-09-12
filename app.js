@@ -388,44 +388,195 @@ function getBoardBase() {
  * 3. Subscribes via Supabase Realtime to update file listing and trigger downloads instantly.
  */
 
+/*
+ * Breadcrumb: 2026-09-12 15:15 - Polling Fallback & Safe Timeout for Cloud SD Explorer
+ * [CRITICAL BUGFIX FLAG - SD HANG RESOLVED]:
+ * 1. Solves infinite "Lade Ordnerinhalt..." by adding a 15-second timeout with retry button.
+ * 2. Dual-channel listener: Uses Realtime AND a 2-second polling loop to fetch result even if WebSocket drops.
+ * 3. Informs user immediately if board is in deep sleep and needs to be woken up via button/motion.
+ */
+
 let currentCloudSdDir = '/';
 let cloudCmdChannel = null;
+let activeCommandPollTimer = null;
 
 function initCloudCommandChannel() {
     if (cloudCmdChannel) return;
 
     cloudCmdChannel = sbClient.channel('sd_commands_feed')
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sd_cloud_commands' }, (payload) => {
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sd_cloud_commands' }, (payload) => {
             const row = payload.new;
-            if (row.device_id !== 'STAG-IMU-01') return;
-
-            const stat = document.getElementById('sd-cloud-status-badge');
-
-            if (row.command === 'LIST' && row.path === currentCloudSdDir) {
-                if (row.status === 'DONE' && row.payload?.items) {
-                    renderCloudFileList(row.payload.items);
-                    if (stat) stat.innerHTML = '✓ Ordnerinhalt aktuell';
-                } else if (row.status === 'ERROR') {
-                    document.getElementById('sd-file-list').innerHTML =
-                        `<div class="text-xs text-red-400 py-3 text-center">Fehler beim Laden: ${row.error_msg || 'Unbekannt'}</div>`;
-                }
-            } else if (row.command === 'DOWNLOAD') {
-                if (row.status === 'DONE' && row.payload?.download_url) {
-                    if (stat) stat.innerHTML = `✓ Datei bereitgestellt! Download startet...`;
-                    window.open(row.payload.download_url, '_blank');
-                } else if (row.status === 'ERROR') {
-                    alert('Download-Fehler: ' + row.error_msg);
-                }
-            } else if (row.command === 'DELETE') {
-                if (row.status === 'DONE') {
-                    if (stat) stat.innerHTML = '✓ Datei gelöscht!';
-                    loadCloudSdDirectory(currentCloudSdDir);
-                } else if (row.status === 'ERROR') {
-                    alert('Löschfehler: ' + row.error_msg);
-                }
-            }
+            if (!row || row.device_id !== 'STAG-IMU-01') return;
+            handleCommandResult(row);
         })
         .subscribe();
+}
+
+function handleCommandResult(row) {
+    const stat = document.getElementById('sd-cloud-status-badge');
+
+    if (row.command === 'LIST' && row.path === currentCloudSdDir) {
+        if (row.status === 'DONE' && row.payload?.items) {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            renderCloudFileList(row.payload.items);
+            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Ordnerinhalt aktuell</span>';
+        } else if (row.status === 'ERROR') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            document.getElementById('sd-file-list').innerHTML =
+                `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${row.error_msg || 'Konnte Ordner nicht lesen.'}</div>`;
+        }
+    } else if (row.command === 'DOWNLOAD') {
+        if (row.status === 'DONE' && row.payload?.download_url) {
+            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Download bereitgestellt!</span>';
+            window.open(row.payload.download_url, '_blank');
+        } else if (row.status === 'ERROR') {
+            alert('Download-Fehler: ' + row.error_msg);
+        }
+    } else if (row.command === 'DELETE') {
+        if (row.status === 'DONE') {
+            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Gelöscht</span>';
+            loadCloudSdDirectory(currentCloudSdDir);
+        } else if (row.status === 'ERROR') {
+            alert('Löschfehler: ' + row.error_msg);
+        }
+    }
+}
+
+async function loadCloudSdDirectory(dir) {
+    currentCloudSdDir = dir || '/';
+    document.getElementById('sd-current-path').innerText = currentCloudSdDir;
+    const listEl = document.getElementById('sd-file-list');
+    const stat = document.getElementById('sd-cloud-status-badge');
+
+    if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+
+    listEl.innerHTML = `
+      <div class="text-xs text-green-400 py-4 text-center space-y-2">
+        <div class="animate-pulse">⏳ Warte auf Board-Rückmeldung via Cloud...</div>
+        <p class="text-[11px] text-gray-500">Falls das Board schläft: Taster kurz drücken oder schütteln zum Wecken.</p>
+      </div>
+    `;
+    if (stat) stat.innerHTML = 'Befehl gesendet...';
+
+    initCloudCommandChannel();
+
+    // 1. Befehl in Supabase-Tabelle einreihen
+    const { data, error } = await sbClient.from('sd_cloud_commands').insert([{
+        device_id: 'STAG-IMU-01',
+        command: 'LIST',
+        path: currentCloudSdDir,
+        status: 'PENDING'
+    }]).select().single();
+
+    if (error) {
+        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Cloud-Fehler: ${error.message}</div>`;
+        return;
+    }
+
+    const commandId = data.id;
+    const startTime = Date.now();
+
+    // 2. Paralleler Poller (alle 2 Sekunden), falls WebSocket-Realtime nicht feuert
+    activeCommandPollTimer = setInterval(async () => {
+        const { data: checkData } = await sbClient
+            .from('sd_cloud_commands')
+            .select('*')
+            .eq('id', commandId)
+            .single();
+
+        if (checkData && checkData.status !== 'PENDING') {
+            handleCommandResult(checkData);
+        }
+
+        // Timeout nach 15 Sekunden
+        if (Date.now() - startTime > 15000) {
+            clearInterval(activeCommandPollTimer);
+            if (document.getElementById('sd-file-list').innerHTML.includes('Warte auf Board-Rückmeldung')) {
+                listEl.innerHTML = `
+                  <div class="p-3 bg-gray-900 border border-gray-800 rounded text-center text-xs space-y-2">
+                    <p class="text-gray-300">⚠️ Board hat nicht innerhalb von 15s geantwortet.</p>
+                    <p class="text-[11px] text-gray-500">Das Gerät ist möglicherweise im Deep Sleep oder verbindet sich gerade.</p>
+                    <button onclick="loadCloudSdDirectory('${currentCloudSdDir}')" 
+                            class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">
+                      Erneut versuchen 🔄
+                    </button>
+                  </div>
+                `;
+                if (stat) stat.innerHTML = '<span class="text-yellow-400">Timeout</span>';
+            }
+        }
+    }, 2000);
+}
+
+function renderCloudFileList(items) {
+    const listEl = document.getElementById('sd-file-list');
+    if (!items || items.length === 0) {
+        listEl.innerHTML = '<div class="text-xs text-gray-500 py-4 text-center">Dieser Ordner ist leer.</div>';
+        return;
+    }
+
+    listEl.innerHTML = items.map(item => {
+        const fullPath = (currentCloudSdDir === '/' ? '' : currentCloudSdDir) + '/' + item.name;
+        if (item.is_dir) {
+            return `
+              <div class="flex justify-between items-center p-2.5 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
+                   onclick="loadCloudSdDirectory('${fullPath}')">
+                <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
+                <span class="text-xs text-gray-400">Öffnen ➔</span>
+              </div>
+            `;
+        } else {
+            const kb = (item.size / 1024).toFixed(1);
+            return `
+              <div class="flex justify-between items-center p-2.5 rounded bg-gray-900 border border-gray-800 text-xs font-mono hover:border-gray-700 transition">
+                <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
+                <div class="flex items-center gap-2 shrink-0">
+                  <button onclick="requestCloudDownload('${fullPath}', '${item.name}')" 
+                          class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-900/60 px-2.5 py-1 rounded text-xs font-bold transition">
+                    ⬇ Download
+                  </button>
+                  <button onclick="requestCloudDelete('${fullPath}', '${item.name}')" 
+                          class="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1 rounded transition text-xs" title="Löschen">
+                    ✕
+                  </button>
+                </div>
+              </div>
+            `;
+        }
+    }).join('');
+}
+
+function navigateCloudSdUp() {
+    if (currentCloudSdDir === '/' || currentCloudSdDir === '') return;
+    const lastSlash = currentCloudSdDir.lastIndexOf('/');
+    const parent = lastSlash <= 0 ? '/' : currentCloudSdDir.substring(0, lastSlash);
+    loadCloudSdDirectory(parent);
+}
+
+async function requestCloudDownload(path, fileName) {
+    const stat = document.getElementById('sd-cloud-status-badge');
+    if (stat) stat.innerHTML = `Bereite Download vor...`;
+
+    await sbClient.from('sd_cloud_commands').insert([{
+        device_id: 'STAG-IMU-01',
+        command: 'DOWNLOAD',
+        path: path,
+        status: 'PENDING'
+    }]);
+}
+
+async function requestCloudDelete(path, fileName) {
+    if (!confirm(`Datei "${fileName}" wirklich von der physischen SD-Karte des Boards löschen?\n\nPfad: ${path}`)) return;
+
+    const stat = document.getElementById('sd-cloud-status-badge');
+    if (stat) stat.innerHTML = `Lösche...`;
+
+    await sbClient.from('sd_cloud_commands').insert([{
+        device_id: 'STAG-IMU-01',
+        command: 'DELETE',
+        path: path,
+        status: 'PENDING'
+    }]);
 }
 
 async function loadCloudSdDirectory(dir) {
