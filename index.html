@@ -658,5 +658,46 @@
             </div>
         </div>
     </div>
+
+    <!--
+      Breadcrumb: 2026-09-12 21:35 - Collapsible Floating Terminal Drawer
+      [CRITICAL BUGFIX FLAG - MOBILE CONSOLE]:
+      1. Fixed floating button bottom-right with slide-up dark console.
+      2. Includes auto-scroll lock, clear console trigger, and responsive height clamp.
+    -->
+    <div id="terminal-widget" class="fixed bottom-3 right-3 z-40 flex flex-col items-end">
+        <!-- Ausklappbarer Konsolen-Container -->
+        <div id="terminal-drawer" class="hidden mb-2 card bg-[#070a0f] border border-[#233145] rounded-xl shadow-2xl w-[92vw] sm:w-[540px] max-w-2xl overflow-hidden flex flex-col transition-all">
+            <!-- Terminal Header -->
+            <div class="px-3.5 py-2 border-b border-gray-800 bg-[#111827] flex justify-between items-center text-xs">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <span class="font-bold font-mono text-gray-200">Live Serieller Log</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <label class="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer select-none">
+                        <input type="checkbox" id="terminal-autoscroll" checked class="accent-green-500">
+                        <span>Auto-Scroll</span>
+                    </label>
+                    <button onclick="clearTerminalConsole()" class="text-gray-400 hover:text-white px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-[11px] transition">
+                        Löschen
+                    </button>
+                    <button onclick="toggleTerminalDrawer()" class="text-gray-400 hover:text-white text-sm px-1">
+                        ✕
+                    </button>
+                </div>
+            </div>
+
+            <!-- Terminal Textbereich -->
+            <pre id="log-console" class="p-3 font-mono text-[11px] text-green-400 h-64 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed bg-[#070a0f] border-t border-gray-900"></pre>
+        </div>
+
+        <!-- Umschalt-Button (immer sichtbar) -->
+        <button onclick="toggleTerminalDrawer()"
+                class="flex items-center gap-2 bg-[#111827]/95 hover:bg-gray-800 border border-gray-700/80 hover:border-green-500/60 text-gray-200 px-3 py-1.5 rounded-lg shadow-lg text-xs font-mono font-bold transition">
+            <span>📟 Terminal</span>
+            <span id="terminal-toggle-icon" class="text-[10px] text-green-400">▲</span>
+        </button>
+    </div>
 </body>
 </html>

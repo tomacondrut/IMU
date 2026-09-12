@@ -370,6 +370,22 @@ function initRealtimeChannel() {
         }
     });
 
+    channel.on('broadcast', { event: 'log' }, (event) => {
+        const d = event.payload?.payload || event.payload;
+        if (!d || !d.msg) return;
+
+        const cEl = document.getElementById('log-console');
+        if (cEl) {
+            cEl.innerText += d.msg;
+            if (cEl.innerText.length > 40000) {
+                cEl.innerText = cEl.innerText.substring(cEl.innerText.length - 25000);
+            }
+            if (document.getElementById('terminal-autoscroll')?.checked !== false) {
+                cEl.scrollTop = cEl.scrollHeight;
+            }
+        }
+    });
+
     channel.subscribe((status) => {
         const ind = document.getElementById('realtime-indicator');
         if (!ind) return;
@@ -644,21 +660,44 @@ async function requestCloudDelete(path, fileName) {
     await sendCloudCommand('DELETE', path, `Lösche "${fileName}"...`);
 }
 
+/*
+ * Breadcrumb: 2026-09-12 21:45 - Unified Tab, Battery Modal & Top-Bar Indicator Sync
+ * [CRITICAL BUGFIX FLAG - DOM ID ALIGNMENT & MODAL ENGINE]:
+ * 1. Added openBatteryModal() & closeBatteryModal() with Chart.js resize trigger.
+ * 2. Updated fetchLatestData() to feed #header-battery-pct/fill/bolt and #modal-metric-*.
+ * 3. Preserved 'flex items-center gap-1.5' in switchTab() to prevent icon misalignment.
+ * 4. Removed deprecated tab-telemetry routing.
+ */
+
 // ==========================================
-// 4. TAB NAVIGATION & SETTINGS
+// 4. BATTERY MODAL & TAB NAVIGATION
 // ==========================================
+function openBatteryModal() {
+    const modal = document.getElementById('battery-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    if (chartInstance) {
+        setTimeout(() => chartInstance.resize(), 60);
+    }
+}
+
+function closeBatteryModal() {
+    const modal = document.getElementById('battery-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
 function switchTab(tab) {
-    ['3d', 'telemetry', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
+    ['3d', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
         const tabEl = document.getElementById(`tab-${t}`);
         const btnEl = document.getElementById(`btn-tab-${t}`);
         if (tabEl) tabEl.classList.add('hidden');
-        if (btnEl) btnEl.className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition";
+        if (btnEl) btnEl.className = "bg-gray-800 text-gray-400 px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition flex items-center gap-1.5";
     });
 
     const activeTab = document.getElementById(`tab-${tab}`);
     const activeBtn = document.getElementById(`btn-tab-${tab}`);
     if (activeTab) activeTab.classList.remove('hidden');
-    if (activeBtn) activeBtn.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
+    if (activeBtn) activeBtn.className = "bg-stag-green text-white px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition flex items-center gap-1.5";
 
     if (tab !== 'files') {
         if (activeCommandPollTimer) {
@@ -667,11 +706,6 @@ function switchTab(tab) {
         }
     }
 
-    /*
-     * Breadcrumb: 2026-09-12 20:15 - Dimension-Guarded 3D Tab Switcher
-     * [CRITICAL BUGFIX FLAG - ZERO NAN VIEWPORT CRASH]:
-     * Verifies positive clientWidth and clientHeight before recalculating aspect ratio to prevent camera corruption.
-     */
     if (tab === '3d') {
         setTimeout(() => {
             const container = document.getElementById('canvas-container');
@@ -687,7 +721,6 @@ function switchTab(tab) {
             drawAccGraphs();
         }, 80);
     }
-    if (tab === 'telemetry') fetchLatestData();
     if (tab === 'imulogs') fetchImuCloudLogs();
     if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
     if (tab === 'settings') fetchConfig();
@@ -773,7 +806,9 @@ async function saveConfigToCloud() {
 }
 
 function initChart(labels, voltages, percents) {
-    const ctx = document.getElementById('batChart').getContext('2d');
+    const cv = document.getElementById('batChart');
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
     if (chartInstance) chartInstance.destroy();
 
     chartInstance = new Chart(ctx, {
@@ -789,7 +824,7 @@ function initChart(labels, voltages, percents) {
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                x: { ticks: { color: '#7f8c8d', maxTicksLimit: 8 }, grid: { color: '#1a2332' } },
+                x: { ticks: { color: '#7f8c8d', maxTicksLimit: 12 }, grid: { color: '#1a2332' } },
                 yVolt: { type: 'linear', position: 'left', min: 3.2, max: 4.3, ticks: { color: '#009B4C' }, grid: { color: '#1a2332' } },
                 yPct: { type: 'linear', position: 'right', min: 0, max: 100, ticks: { color: '#3498db' }, grid: { display: false } }
             },
@@ -810,14 +845,46 @@ async function fetchLatestData() {
 
     const latest = data[0];
     const recTime = new Date(latest.recorded_at);
+    const pct = parseInt(latest.battery_percent, 10);
+    const isCharging = (latest.charging_status || '').toLowerCase().includes('lad') ||
+        (latest.charging_status || '').toLowerCase().includes('usb');
 
-    document.getElementById('metric-pct').innerText = `${latest.battery_percent}%`;
-    document.getElementById('metric-volt').innerText = `${Number(latest.battery_voltage).toFixed(3)} V`;
-    document.getElementById('metric-status').innerText = latest.charging_status;
-    document.getElementById('metric-boot').innerText = `#${latest.boot_cycle}`;
-    document.getElementById('metric-time').innerText = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('metric-ago').innerText = recTime.toLocaleDateString();
+    // 1. Akkuanzeige im Header aktualisieren
+    const hdrPct = document.getElementById('header-battery-pct');
+    const hdrFill = document.getElementById('header-battery-fill');
+    const hdrBolt = document.getElementById('header-battery-bolt');
 
+    if (hdrPct) hdrPct.innerText = `${pct}%`;
+    if (hdrFill) {
+        hdrFill.style.width = `${Math.min(Math.max(pct, 4), 100)}%`;
+        if (pct >= 50) {
+            hdrFill.className = 'h-full bg-green-500 rounded-[1px] transition-all duration-300';
+        } else if (pct >= 25) {
+            hdrFill.className = 'h-full bg-yellow-500 rounded-[1px] transition-all duration-300';
+        } else {
+            hdrFill.className = 'h-full bg-red-500 rounded-[1px] transition-all duration-300';
+        }
+    }
+    if (hdrBolt) {
+        hdrBolt.classList.toggle('hidden', !isCharging);
+    }
+
+    // 2. Akku-Modal KPIs aktualisieren
+    const mPct = document.getElementById('modal-metric-pct');
+    const mVolt = document.getElementById('modal-metric-volt');
+    const mStatus = document.getElementById('modal-metric-status');
+    const mBoot = document.getElementById('modal-metric-boot');
+    const mTime = document.getElementById('modal-metric-time');
+    const mAgo = document.getElementById('modal-metric-ago');
+
+    if (mPct) mPct.innerText = `${pct}%`;
+    if (mVolt) mVolt.innerText = `${Number(latest.battery_voltage).toFixed(3)} V`;
+    if (mStatus) mStatus.innerText = latest.charging_status;
+    if (mBoot) mBoot.innerText = `#${latest.boot_cycle}`;
+    if (mTime) mTime.innerText = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (mAgo) mAgo.innerText = recTime.toLocaleDateString();
+
+    // 3. Diagramm & Tabelle im Modal befüllen
     const reversed = [...data].reverse();
     const labels = reversed.map(r => new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     const volts = reversed.map(r => r.battery_voltage);
@@ -825,15 +892,18 @@ async function fetchLatestData() {
 
     initChart(labels, volts, pcts);
 
-    document.getElementById('log-table-body').innerHTML = data.slice(0, 20).map(r => `
-    <tr class="hover:bg-gray-800/40">
-      <td class="py-2 px-3 text-gray-300">${new Date(r.recorded_at).toLocaleString()}</td>
-      <td class="py-2 px-3 text-green-400 font-semibold">${Number(r.battery_voltage).toFixed(3)} V</td>
-      <td class="py-2 px-3">${r.battery_percent}%</td>
-      <td class="py-2 px-3 text-gray-400">${r.charging_status}</td>
-      <td class="py-2 px-3">#${r.boot_cycle}</td>
-    </tr>
-  `).join('');
+    const tblBody = document.getElementById('modal-log-table-body');
+    if (tblBody) {
+        tblBody.innerHTML = data.slice(0, 20).map(r => `
+            <tr class="hover:bg-gray-800/40">
+                <td class="py-1.5 px-3 text-gray-300">${new Date(r.recorded_at).toLocaleString()}</td>
+                <td class="py-1.5 px-3 text-green-400 font-semibold">${Number(r.battery_voltage).toFixed(3)} V</td>
+                <td class="py-1.5 px-3">${r.battery_percent}%</td>
+                <td class="py-1.5 px-3 text-gray-400">${r.charging_status}</td>
+                <td class="py-1.5 px-3">#${r.boot_cycle}</td>
+            </tr>
+        `).join('');
+    }
 }
 
 // ==========================================
@@ -1528,8 +1598,10 @@ function closeGpsModal() {
 }
 
 window.addEventListener('click', (e) => {
-    const modal = document.getElementById('gps-modal');
-    if (modal && e.target === modal) closeGpsModal();
+    const gpsModal = document.getElementById('gps-modal');
+    const batModal = document.getElementById('battery-modal');
+    if (gpsModal && e.target === gpsModal) closeGpsModal();
+    if (batModal && e.target === batModal) closeBatteryModal();
 });
 
 function updateGpsUI(data) {
@@ -1593,4 +1665,23 @@ async function triggerGpsLocationFix() {
 
     // 1. Befehl via Cloud SD Command Engine absenden
     await sendCloudCommand('GPS', '/', 'Fordere GPS-Ortung an...');
+}
+
+// Am Ende von app.js einfügen:
+function toggleTerminalDrawer() {
+    const drawer = document.getElementById('terminal-drawer');
+    const icon = document.getElementById('terminal-toggle-icon');
+    if (!drawer) return;
+    const isHidden = drawer.classList.contains('hidden');
+    drawer.classList.toggle('hidden', !isHidden);
+    if (icon) icon.innerText = isHidden ? '▼' : '▲';
+    if (isHidden) {
+        const cEl = document.getElementById('log-console');
+        if (cEl) cEl.scrollTop = cEl.scrollHeight;
+    }
+}
+
+function clearTerminalConsole() {
+    const cEl = document.getElementById('log-console');
+    if (cEl) cEl.innerText = '';
 }
