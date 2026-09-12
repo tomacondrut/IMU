@@ -417,7 +417,14 @@ function handleCommandResult(row) {
         if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            renderCloudFileList(row.payload?.items || []);
+
+            // Robustes Entpacken: Fängt sowohl JSONB-Objekte als auch Text-Strings ab
+            let payload = row.payload;
+            if (typeof payload === 'string') {
+                try { payload = JSON.parse(payload); } catch (e) { console.error('Payload Parse Error:', e); }
+            }
+
+            renderCloudFileList(payload?.items || []);
             if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Ordner geladen</span>';
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
@@ -427,11 +434,15 @@ function handleCommandResult(row) {
             if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
         }
     } else if (row.command === 'DOWNLOAD') {
-        if (row.status === 'DONE' && row.payload?.download_url) {
+        if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
+            let payload = row.payload;
+            if (typeof payload === 'string') {
+                try { payload = JSON.parse(payload); } catch (e) { }
+            }
             if (stat) stat.innerHTML = '<span class="text-green-400">✓ Bereitgestellt!</span>';
-            window.open(row.payload.download_url, '_blank');
+            if (payload?.download_url) window.open(payload.download_url, '_blank');
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
