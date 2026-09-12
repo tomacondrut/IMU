@@ -1,10 +1,10 @@
 /*
- * Breadcrumb: 2026-09-12 17:45 - Fully Consolidated app.js Engine
- * [CRITICAL BUGFIX FLAG - DEDUPLICATION & STREAM INTEGRITY]:
- * 1. Removed duplicate function declarations of loadCloudSdDirectory and renderCloudFileList.
- * 2. Guaranteed single-instance Supabase channel subscriptions for both IMU broadcast and SD commands.
- * 3. Restored clean state management for activeCommandId and activeCommandPollTimer.
- * 4. Added safe tab switching that pauses SD polling when navigating to 3D Live.
+ * Breadcrumb: 2026-09-12 18:30 - Fully Unified Cloud Command Engine with DOM Anchor Downloader
+ * [CRITICAL BUGFIX FLAG - COMMAND TRACKING & POPUP-FREE DOWNLOAD]:
+ * 1. Unified LIST, DOWNLOAD, and DELETE under sendCloudCommand() to guarantee activeCommandId tracking.
+ * 2. Implemented dual-channel resolution: instant Supabase Realtime event + robust 1s poll fallback.
+ * 3. Replaced blocked window.open() with native temporary DOM <a> click for 100% reliable downloads.
+ * 4. Preserved 60 FPS SLERP 3D engine, decoupled oscilloscope, and Replay Deck.
  */
 
 const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
@@ -59,19 +59,12 @@ function loadGLBModel() {
     const loader = new THREE.GLTFLoader();
     loader.load('./IMU.glb', (gltf) => {
         setupModelMesh(gltf.scene);
-        console.log("[3D] IMU.glb erfolgreich geladen!");
-    }, undefined, (err) => {
-        console.warn("[3D] IMU.glb nicht gefunden, Fallback aktiv:", err);
+        console.log("[3D] IMU.glb geladen!");
+    }, undefined, () => {
         createFallbackCube();
     });
 }
 
-/*
- * Breadcrumb: 2026-09-12 20:25 - 60 FPS SLERP Interpolation & Decoupled Graph Engine
- * [CRITICAL BUGFIX FLAG - SMOOTH STREAMING]:
- * 1. Implemented continuous spherical linear interpolation (slerp) in 3D animate loop.
- * 2. Decoupled drawAccGraphs via requestAnimationFrame flag to eliminate UI event-loop stutter.
- */
 let targetQuaternion = new THREE.Quaternion(0, 0, 0, 1);
 let graphNeedsRedraw = false;
 let lastGraphDrawTime = 0;
@@ -113,7 +106,6 @@ function init3D() {
     function animate(now) {
         requestAnimationFrame(animate);
         if (modelMesh) {
-            // Butterweiche 60 FPS Interpolation zum Zielquaternion
             modelMesh.quaternion.slerp(targetQuaternion, 0.22);
 
             const aLen = Math.hypot(curAx, curAy, curAz);
@@ -135,7 +127,6 @@ function init3D() {
         }
         renderer.render(scene, camera);
 
-        // Oszilloskop entkoppelt mit max. 25 FPS nachführen
         if (graphNeedsRedraw && (now - lastGraphDrawTime >= 40)) {
             lastGraphDrawTime = now;
             graphNeedsRedraw = false;
@@ -370,7 +361,7 @@ function initRealtimeChannel() {
             curAx = d.ax; curAy = d.ay; curAz = d.az;
             accHistory.push({ x: curAx, y: curAy, z: curAz });
             if (accHistory.length > maxAccPoints) accHistory.shift();
-            graphNeedsRedraw = true; // Signalisiert dem Render-Loop das Neuzeichnen
+            graphNeedsRedraw = true;
         }
 
         const el = document.getElementById('overlay-status');
@@ -413,17 +404,16 @@ function initCloudCommandChannel() {
 function handleCommandResult(row) {
     const stat = document.getElementById('sd-cloud-status-badge');
 
+    // JSON-String-Payload falls nötig parsen
+    let payload = row.payload;
+    if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch (e) { console.error('Payload Parse Error:', e); }
+    }
+
     if (row.command === 'LIST') {
         if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-
-            // Robustes Entpacken: Fängt sowohl JSONB-Objekte als auch Text-Strings ab
-            let payload = row.payload;
-            if (typeof payload === 'string') {
-                try { payload = JSON.parse(payload); } catch (e) { console.error('Payload Parse Error:', e); }
-            }
-
             renderCloudFileList(payload?.items || []);
             if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Ordner geladen</span>';
         } else if (row.status === 'ERROR') {
@@ -433,21 +423,11 @@ function handleCommandResult(row) {
                 `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${row.error_msg || 'Ordner konnte nicht gelesen werden.'}</div>`;
             if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
         }
-        /*
-     * Breadcrumb: 2026-09-12 16:25 - Native DOM Anchor File Trigger
-     * [CRITICAL BUGFIX FLAG - POPUP BLOCKER BYPASS]:
-     * Replaced window.open() with a transient DOM <a> click to guarantee instant download trigger across Chrome/Safari.
-     */
     } else if (row.command === 'DOWNLOAD') {
-        let payload = row.payload;
-        if (typeof payload === 'string') {
-            try { payload = JSON.parse(payload); } catch (e) { }
-        }
-
         if (row.status === 'DONE' && payload?.download_url) {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Datei heruntergeladen!</span>';
+            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Download bereit!</span>';
 
             // Direkter, blockierungsfreier Download über unsichtbares Link-Element
             const a = document.createElement('a');
@@ -460,77 +440,57 @@ function handleCommandResult(row) {
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-red-400">Download fehlgeschlagen</span>';
+            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
             alert('Download-Fehler vom Board:\n' + (row.error_msg || 'Unbekannter Fehler'));
         }
-    }
     } else if (row.command === 'DELETE') {
         if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Gelöscht</span>';
+            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Gelöscht</span>';
             loadCloudSdDirectory(currentCloudSdDir);
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            alert('Löschfehler: ' + row.error_msg);
+            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
+            alert('Löschfehler vom Board:\n' + (row.error_msg || 'Unbekannter Fehler'));
         }
     }
 }
 
-/*
- * Breadcrumb: 2026-09-12 15:20 - Clean Stale Queue & 30s Timeout in loadCloudSdDirectory
- * [CRITICAL BUGFIX FLAG - SD BROWSER RESPONSIVENESS]:
- * 1. Purges stale PENDING commands before inserting a new request to eliminate queue bottlenecks.
- * 2. Extended timeout from 15s to 30s to comfortably accommodate cloud handshake latency.
- */
-async function loadCloudSdDirectory(dir) {
-    let cleanDir = dir || '/';
-    while (cleanDir.includes('//')) cleanDir = cleanDir.replace('//', '/');
-    if (!cleanDir.startsWith('/')) cleanDir = '/' + cleanDir;
-    if (cleanDir.length > 1 && cleanDir.endsWith('/')) cleanDir = cleanDir.substring(0, cleanDir.length - 1);
-
-    currentCloudSdDir = cleanDir;
-    const pathEl = document.getElementById('sd-current-path');
-    if (pathEl) pathEl.innerText = currentCloudSdDir;
-
-    const listEl = document.getElementById('sd-file-list');
+// Universeller Dispatcher für alle 3 SD-Befehle (LIST, DOWNLOAD, DELETE)
+async function sendCloudCommand(command, path, statusPrompt) {
     const stat = document.getElementById('sd-cloud-status-badge');
+    if (stat) stat.innerHTML = `<span class="text-yellow-400 font-mono animate-pulse">${statusPrompt}</span>`;
 
     if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
 
-    listEl.innerHTML = `
-      <div class="text-xs text-green-400 py-4 text-center space-y-2">
-        <div class="animate-pulse">⏳ Öffne "${currentCloudSdDir}" via Cloud...</div>
-        <p class="text-[11px] text-gray-500">Board liest Dateisystem ein...</p>
-      </div>
-    `;
-    if (stat) stat.innerHTML = 'Lade...';
-
     initCloudCommandChannel();
 
-    // 1. Alte hängende PENDING-Befehle bereinigen, damit das Board nicht im Rückstand festhängt
+    // 1. Alte hängende PENDING-Befehle bereinigen
     await sbClient.from('sd_cloud_commands')
         .delete()
         .eq('device_id', 'STAG-IMU-01')
         .eq('status', 'PENDING');
 
-    // 2. Neuen Befehl absetzen
+    // 2. Neuen Befehl mit Rückgabe der generierten ID absetzen
     const { data, error } = await sbClient.from('sd_cloud_commands').insert([{
         device_id: 'STAG-IMU-01',
-        command: 'LIST',
-        path: currentCloudSdDir,
+        command: command,
+        path: path,
         status: 'PENDING'
     }]).select().single();
 
     if (error) {
-        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${error.message}</div>`;
+        if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
+        alert(`Befehlsfehler (${command}): ${error.message}`);
         return;
     }
 
     activeCommandId = data.id;
     const startTime = Date.now();
 
+    // 3. Dual-Channel Fallback Poller (1 Sekunde Intervall, 30s Timeout)
     activeCommandPollTimer = setInterval(async () => {
         if (!activeCommandId) {
             clearInterval(activeCommandPollTimer);
@@ -551,22 +511,45 @@ async function loadCloudSdDirectory(dir) {
             }
         }
 
-        // Auf 30 Sekunden erhöht
         if (Date.now() - startTime > 30000) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            listEl.innerHTML = `
-              <div class="p-3 bg-gray-900 border border-gray-800 rounded text-center text-xs space-y-2">
-                <p class="text-gray-300">⚠️ Board hat auf "${currentCloudSdDir}" nicht reagiert.</p>
-                <button onclick="loadCloudSdDirectory('${currentCloudSdDir}')" 
-                        class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">
-                  Erneut versuchen 🔄
-                </button>
-              </div>
-            `;
-            if (stat) stat.innerHTML = '<span class="text-yellow-400">Timeout</span>';
+            if (stat) stat.innerHTML = '<span class="text-yellow-400 font-bold">Timeout</span>';
+            if (command === 'LIST') {
+                document.getElementById('sd-file-list').innerHTML = `
+                  <div class="p-3 bg-gray-900 border border-gray-800 rounded text-center text-xs space-y-2">
+                    <p class="text-gray-300">⚠️ Board hat auf "${path}" nicht reagiert.</p>
+                    <button onclick="loadCloudSdDirectory('${path}')" 
+                            class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">
+                      Erneut versuchen 🔄
+                    </button>
+                  </div>
+                `;
+            } else {
+                alert(`⚠️ Zeitüberschreitung: Das Board hat auf "${command} ${path}" nicht innerhalb von 30s geantwortet.`);
+            }
         }
     }, 1000);
+}
+
+async function loadCloudSdDirectory(dir) {
+    let cleanDir = dir || '/';
+    while (cleanDir.includes('//')) cleanDir = cleanDir.replace('//', '/');
+    if (!cleanDir.startsWith('/')) cleanDir = '/' + cleanDir;
+    if (cleanDir.length > 1 && cleanDir.endsWith('/')) cleanDir = cleanDir.substring(0, cleanDir.length - 1);
+
+    currentCloudSdDir = cleanDir;
+    const pathEl = document.getElementById('sd-current-path');
+    if (pathEl) pathEl.innerText = currentCloudSdDir;
+
+    document.getElementById('sd-file-list').innerHTML = `
+      <div class="text-xs text-green-400 py-4 text-center space-y-2">
+        <div class="animate-pulse">⏳ Öffne "${currentCloudSdDir}" via Cloud...</div>
+        <p class="text-[11px] text-gray-500">Board liest Dateisystem ein...</p>
+      </div>
+    `;
+
+    await sendCloudCommand('LIST', currentCloudSdDir, 'Lade Ordner...');
 }
 
 function renderCloudFileList(items) {
@@ -615,29 +598,12 @@ function navigateCloudSdUp() {
 }
 
 async function requestCloudDownload(path, fileName) {
-    const stat = document.getElementById('sd-cloud-status-badge');
-    if (stat) stat.innerHTML = `Bereite Download vor...`;
-
-    await sbClient.from('sd_cloud_commands').insert([{
-        device_id: 'STAG-IMU-01',
-        command: 'DOWNLOAD',
-        path: path,
-        status: 'PENDING'
-    }]);
+    await sendCloudCommand('DOWNLOAD', path, `Bereite "${fileName}" vor...`);
 }
 
 async function requestCloudDelete(path, fileName) {
     if (!confirm(`Datei "${fileName}" wirklich von der physischen SD-Karte des Boards löschen?\n\nPfad: ${path}`)) return;
-
-    const stat = document.getElementById('sd-cloud-status-badge');
-    if (stat) stat.innerHTML = `Lösche...`;
-
-    await sbClient.from('sd_cloud_commands').insert([{
-        device_id: 'STAG-IMU-01',
-        command: 'DELETE',
-        path: path,
-        status: 'PENDING'
-    }]);
+    await sendCloudCommand('DELETE', path, `Lösche "${fileName}"...`);
 }
 
 // ==========================================
@@ -656,7 +622,6 @@ function switchTab(tab) {
     if (activeTab) activeTab.classList.remove('hidden');
     if (activeBtn) activeBtn.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
 
-    // Dateimanager-Timer sofort stoppen, wenn man den Tab verlässt
     if (tab !== 'files') {
         if (activeCommandPollTimer) {
             clearInterval(activeCommandPollTimer);
@@ -744,7 +709,6 @@ async function saveConfigToCloud() {
     let { error } = await sbClient.from('device_config').upsert(payload);
 
     if (error && error.message.includes('column')) {
-        console.warn('[CONFIG] SIM-Spalten nicht im Schema, speichere Basiskonfiguration:', error.message);
         const retry = await sbClient.from('device_config').upsert(basePayload);
         error = retry.error;
     }
@@ -1046,7 +1010,7 @@ function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
 
-    const sampleInterval = 0.1; // 10 Hz = 100ms
+    const sampleInterval = 0.1;
     const exactIndex = tSec / sampleInterval;
     const iA = Math.min(Math.floor(exactIndex), total - 1);
     const iB = Math.min(iA + 1, total - 1);
