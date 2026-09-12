@@ -1,10 +1,11 @@
 /*
- * Breadcrumb: 2026-09-11 06:40 - GitHub Dashboard Triple Accel Engine with Synchronized Global Scaling
- * Feature: 
- *  1. Implements 3 dedicated oscilloscope canvases for Linear Acceleration (X, Y, Z).
- *  2. Synchronized temporal X-axis zoom (2s - 60s) and pan/scroll controls with LIVE auto-snap.
- *  3. Global dynamic vertical scaling across all 3 channels pinned to the highest amplitude in view.
- *  4. Enforces a 1.5 m/s² minimum scale floor to prevent amplification of resting sensor noise.
+ * Breadcrumb: 2026-09-12 13:20 - Fully Unified Dashboard & 60FPS Slerp Replayer Engine
+ * [CRITICAL BUGFIX FLAG - CLEAN CONSOLIDATION]:
+ * 1. Eliminated duplicate declarations of replay state variables, Three.js scenes, and fetchImuCloudLogs.
+ * 2. 60 FPS continuous THREE.Quaternion.slerp & vector lerp interpolation (eliminates 10Hz stepping stutter).
+ * 3. Dual-mode Replay Oscilloscope: Acceleration (m/s²) vs. Tait-Bryan Euler Angles (Roll/Pitch/Yaw in °).
+ * 4. Added deleteImuCloudFile(): deletes chunks from Supabase Storage & Database index (SD card untouched).
+ * 5. Full GLB 3D model support in Replay Deck with dynamic translation displacement.
  */
 
 const SUPABASE_URL = "https://fajwusnwfywfebyffxtf.supabase.co";
@@ -14,14 +15,15 @@ const sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 let chartInstance = null;
 let liveModeActive = false;
 
-// --- 3D ENGINE STATE ---
+// ==========================================
+// 1. LIVE 3D ENGINE & RING BUFFER
+// ==========================================
 let scene, camera, renderer, modelMesh;
 let qw = 1, qx = 0, qy = 0, qz = 0;
 let lastQw = 1, lastQx = 0, lastQy = 0, lastQz = 0;
 let curAx = 0, curAy = 0, curAz = 0;
 let posX = 0, posY = 0, posZ = 0;
 
-// --- BESCHLEUNIGUNGS-RINGPUFFER & OSZILLOSKOP STATE ---
 const accHistory = [];
 const maxAccPoints = 1800; // 180 Sekunden bei 10 Hz
 let accZoom = 100;         // 100 Punkte = 10 s Standardfenster
@@ -130,19 +132,9 @@ function init3D() {
     animate();
 }
 
-/*
- * Breadcrumb: 2026-09-12 09:35 - High-Detail Oscilloscope with Kippstation Engineering Grids
- * [CRITICAL BUGFIX FLAG - DETAILED OSCILLOSCOPE RENDERING]:
- * Dismissed code: Single dashed center-line without time ticks or amplitude subdivisions.
- * Fix:
- *  1. Renders horizontal grid at 0, ±50% and ±100% with calibrated m/s² text readouts.
- *  2. Draws vertical time-grid with dynamic spacing (1s, 2s, 5s, 10s) and relative time labels (-Xs .. 0s).
- *  3. Computes RMS and Peak-to-Peak (P-P) values in real-time and displays them in a compact telemetry badge.
- *  4. Applies a subtle semi-transparent gradient beneath the signal wave (Chart.js / Kippstation style).
- *  5. Added setAccZoomPreset(seconds) for quick-zoom controls.
- */
-
-// --- SYNCHRONISIERTE OSZILLOSKOP-FUNKTIONEN ---
+// ==========================================
+// 2. LIVE OSZILLOSKOP-FUNKTIONEN
+// ==========================================
 function onAccZoom(v) {
     accZoom = parseInt(v, 10);
     document.getElementById('acc-zoom-val').innerText = (accZoom / 10).toFixed(0) + 's';
@@ -187,7 +179,6 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     const count = endIdx - startIdx;
     const timeWindowSec = (count > 1) ? (count / 10) : (accZoom / 10);
 
-    // 1. Horizontales Amplituden-Raster (100%, 50%, 0%, -50%, -100%)
     const gridLines = [
         { ratio: 1.0, style: 'rgba(255,255,255,0.06)', label: `+${maxAbs.toFixed(1)}` },
         { ratio: 0.5, style: 'rgba(255,255,255,0.04)', label: `+${(maxAbs * 0.5).toFixed(1)}` },
@@ -214,7 +205,6 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     });
     ctx.setLineDash([]);
 
-    // 2. Vertikales Zeit-Raster (analog zu Kippstation X-Scale Ticks)
     let timeStepSec = 5;
     if (timeWindowSec <= 5) timeStepSec = 1;
     else if (timeWindowSec <= 15) timeStepSec = 2;
@@ -244,7 +234,6 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
         return;
     }
 
-    // 3. Statistische Metriken (RMS, Peak-to-Peak, Aktueller Wert) berechnen
     let sumSq = 0;
     let minVal = Infinity;
     let maxVal = -Infinity;
@@ -259,13 +248,11 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     const p2p = maxVal - minVal;
     const curVal = accHistory[endIdx - 1][axisKey];
 
-    // 4. Signalverlauf mit weichem Gradient-Fill zeichnen
     ctx.save();
     ctx.beginPath();
     ctx.rect(32, 0, w - 32, h);
     ctx.clip();
 
-    // Area-Gradient unter der Kurve
     const grad = ctx.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, colorHex + '33');
     grad.addColorStop(0.5, colorHex + '08');
@@ -284,7 +271,6 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Signallinie
     ctx.strokeStyle = colorHex;
     ctx.lineWidth = 1.8;
     ctx.beginPath();
@@ -298,7 +284,6 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     ctx.stroke();
     ctx.restore();
 
-    // 5. Technische Infobox (Kompakter Metrik-Badge oben rechts)
     const badgeText = `${label}  IST: ${(curVal >= 0 ? '+' : '')}${curVal.toFixed(2)} m/s² | RMS: ${rms.toFixed(2)} | P-P: ${p2p.toFixed(2)}`;
     ctx.font = 'bold 10px monospace';
     const textW = ctx.measureText(badgeText).width;
@@ -327,7 +312,6 @@ function drawAccGraphs() {
     const startIdx = isAccLive ? maxStart : Math.round((accPan / 100) * maxStart);
     const endIdx = Math.min(total, startIdx + win);
 
-    // Globale Spitzenamplitude über alle 3 Achsen im sichtbaren Ausschnitt berechnen
     let globalMax = 1.5;
     for (let i = startIdx; i < endIdx; i++) {
         const ax = Math.abs(accHistory[i].x);
@@ -337,7 +321,6 @@ function drawAccGraphs() {
         if (ay > globalMax) globalMax = ay;
         if (az > globalMax) globalMax = az;
     }
-    // Glätten & mit 15% Headroom auf volle Dezimalstellen runden
     globalMax = Math.ceil(globalMax * 1.15 * 10) / 10;
 
     drawSingleAxis('cv-acc-x', 'x', '#ef4444', 'ACC X', globalMax, startIdx, endIdx);
@@ -345,6 +328,9 @@ function drawAccGraphs() {
     drawSingleAxis('cv-acc-z', 'z', '#3b82f6', 'ACC Z', globalMax, startIdx, endIdx);
 }
 
+// ==========================================
+// 3. REALTIME CHANNEL & SD MANAGEMENT
+// ==========================================
 function initRealtimeChannel() {
     const channel = sbClient.channel('imu_live', {
         config: { broadcast: { ack: false } }
@@ -384,7 +370,6 @@ function initRealtimeChannel() {
     });
 }
 
-// --- SD-DATEIMANAGER ROUTINEN ---
 let currentSdDir = '/';
 
 function getBoardBase() {
@@ -401,7 +386,6 @@ async function loadSdDirectory(dir) {
 
     const base = getBoardBase();
 
-    // Mixed-Content-Prüfung: HTTPS-Webseiten blockieren HTTP-Anfragen an lokale IPs
     if (window.location.protocol === 'https:' && base.startsWith('http://')) {
         listEl.innerHTML = `
       <div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300 leading-relaxed">
@@ -505,12 +489,9 @@ async function uploadFileToSd() {
     }
 }
 
-// --- TAB NAVIGATION ---
-/*
- * Breadcrumb: 2026-09-12 10:05 - Integrated IMU Cloud-Logs Tab & Auto-Fetcher
- * [CRITICAL BUGFIX FLAG - TAB ROUTING]:
- * Added 'imulogs' to the switchTab array and wired fetchImuCloudLogs to initial loader.
- */
+// ==========================================
+// 4. TAB NAVIGATION & SETTINGS
+// ==========================================
 function switchTab(tab) {
     ['3d', 'telemetry', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
         const tabEl = document.getElementById(`tab-${t}`);
@@ -567,14 +548,6 @@ async function fetchConfig() {
         : "px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition";
 }
 
-/*
- * Breadcrumb: 2026-09-11 07:05 - Fault-Tolerant Config Upsert & Mixed-Content Guard
- * [CRITICAL BUGFIX FLAG - SCHEMA & MIXED CONTENT]:
- * 1. Falls sim_pin/sim_apn in Supabase fehlen, fällt saveConfigToCloud automatisch auf 
- *    die Basiskonfiguration zurück, damit Abtastrate und Schwellenwerte nie blockiert werden.
- * 2. loadSdDirectory fängt Mixed-Content-Blockaden auf GitHub Pages (HTTPS -> HTTP) ab
- *    und zeigt eine klare Handlungsanweisung im UI.
- */
 async function saveConfigToCloud() {
     const btn = document.getElementById('btn-save-cfg');
     const status = document.getElementById('cfg-status-msg');
@@ -593,7 +566,6 @@ async function saveConfigToCloud() {
         updated_at: new Date().toISOString()
     };
 
-    // Versuche zuerst mit SIM-Daten zu speichern
     let payload = {
         ...basePayload,
         sim_pin: document.getElementById('cfg-sim-pin').value.trim(),
@@ -602,7 +574,6 @@ async function saveConfigToCloud() {
 
     let { error } = await sbClient.from('device_config').upsert(payload);
 
-    // Fallback: Falls Spalten in Supabase noch nicht existieren, ohne SIM-Felder speichern
     if (error && error.message.includes('column')) {
         console.warn('[CONFIG] SIM-Spalten nicht im Schema, speichere Basiskonfiguration:', error.message);
         const retry = await sbClient.from('device_config').upsert(basePayload);
@@ -685,95 +656,9 @@ async function fetchLatestData() {
   `).join('');
 }
 
-/*
- * Breadcrumb: 2026-09-12 10:35 - High-Performance IMU CSV Replayer & BootCycle Demuxer
- * [CRITICAL BUGFIX FLAG - REPLAY ENGINE]:
- * 1. Fast stream parser splits CSV without string allocations or memory leaks.
- * 2. Groups records by BootCycle for isolated cycle playback.
- * 3. Dedicated Three.js replay scene prevents collisions with live 3D stream.
- * 4. Interactive canvas timeline with dynamic playhead cursor and scrub support.
- */
-
-/*
- * Breadcrumb: 2026-09-12 11:00 - Unified Replay Engine, Euler Demuxer & Clean Scope
- * [CRITICAL BUGFIX FLAG - DEDUPLICATION & SCOPE INTEGRITY]:
- * 1. Resolved duplicate declarations of toggleReplayPlay, drawReplayGraph, and onReplayScrub.
- * 2. Retained full Tait-Bryan Euler conversion (Roll, Pitch, Yaw in °) and live mode toggle.
- * 3. Auto-rewinds playhead to start (index 0) if Play is triggered at the end of the buffer.
- * 4. Renders responsive color-coded telemetry legend badges and synchronized playhead cursor.
- */
-
-// --- REPLAY STATE ---
-let replayDataRaw = [];
-let replayFilteredData = [];
-let replayCurrentIndex = 0;
-let replayIsPlaying = false;
-let replaySpeed = 1.0;
-let replayAnimId = null;
-let replayLastFrameTime = 0;
-let replayGraphMode = 'accel'; // 'accel' oder 'euler'
-
-// Replay Three.js Szene
-let repScene, repCamera, repRenderer, repMesh;
-
-/*
- * Breadcrumb: 2026-09-12 11:30 - Embedded GLTF IMU.glb Loader for Replay Deck
- * [CRITICAL BUGFIX FLAG - REPLAY 3D MODEL & DISPLACEMENT]:
- * 1. Loads ./IMU.glb into the replay viewport via GLTFLoader with auto-centering & bounding scale.
- * 2. Instant green BoxGeometry fallback so viewport is never blank while loading.
- * 3. Matched dual directional lighting (1.2 / 0.6) and ambient light to live 3D viewport.
- * 4. Applies quaternion-projected linear acceleration displacement directly to repMesh.position.
- */
-
-function createReplayFallbackCube() {
-    if (repMesh && repScene) repScene.remove(repMesh);
-    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
-    repMesh = new THREE.Mesh(geo, mat);
-    repScene.add(repMesh);
-}
-
-function setupReplayModelMesh(gltfScene) {
-    if (repMesh && repScene) repScene.remove(repMesh);
-    repMesh = gltfScene;
-
-    const box = new THREE.Box3().setFromObject(repMesh);
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) {
-        const s = 1.8 / maxDim;
-        repMesh.scale.set(s, s, s);
-    }
-    repScene.add(repMesh);
-    if (repRenderer && repScene && repCamera) {
-        repRenderer.render(repScene, repCamera);
-    }
-}
-
-function loadReplayGLBModel() {
-    if (typeof THREE.GLTFLoader === 'undefined') {
-        createReplayFallbackCube();
-        return;
-    }
-    const loader = new THREE.GLTFLoader();
-    loader.load('./IMU.glb', (gltf) => {
-        setupReplayModelMesh(gltf.scene);
-        console.log("[REPLAY 3D] IMU.glb erfolgreich für Replay geladen!");
-    }, undefined, (err) => {
-        console.warn("[REPLAY 3D] IMU.glb nicht gefunden, Fallback aktiv:", err);
-        createReplayFallbackCube();
-    });
-}
-
-/*
- * Breadcrumb: 2026-09-12 13:10 - 60FPS Quaternion Slerp Interpolator & Cloud Deletion Engine
- * [CRITICAL BUGFIX FLAG - SMOOTH SLERP & CLOUD PURGE]:
- * 1. Replaced discrete 10Hz stepping with continuous 60FPS THREE.Quaternion.slerp interpolation.
- * 2. Playhead, translation and Euler angles lerp smoothly between keyframes without jitter.
- * 3. Added deleteImuCloudFile(): deletes from Storage Bucket & public.imu_log_files (SD untouched).
- */
-
-// --- REPLAY STATE ---
+// ==========================================
+// 5. INTERAKTIVE REPLAY-ENGINE (60 FPS SLERP)
+// ==========================================
 let replayDataRaw = [];
 let replayFilteredData = [];
 let replayCurrentTimeSec = 0.0;
@@ -988,7 +873,6 @@ function onReplayCycleSelect(cycleVal) {
     resetReplayPlayback();
 }
 
-// 60-FPS-Interpolation zwischen den Messpunkten (Slerp & Lerp)
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -1102,7 +986,6 @@ function drawReplayGraph(curTimeSec) {
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // Raster & Skala
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
@@ -1117,7 +1000,6 @@ function drawReplayGraph(curTimeSec) {
     });
     ctx.setLineDash([]);
 
-    // Kurven
     const drawCurve = (key, colorHex) => {
         ctx.save();
         ctx.beginPath();
@@ -1145,7 +1027,6 @@ function drawReplayGraph(curTimeSec) {
         drawCurve('yaw', '#8b5cf6');
     }
 
-    // Legende
     ctx.font = 'bold 9px monospace';
     const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
     const legendWidth = ctx.measureText(legendText).width;
@@ -1164,7 +1045,6 @@ function drawReplayGraph(curTimeSec) {
         ctx.fillStyle = '#8b5cf6'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
     }
 
-    // Fließender Playhead-Cursor
     const maxDur = Math.max((count - 1) * 0.1, 0.001);
     const progress = Math.min(Math.max((curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec) / maxDur, 0), 1);
     const curX = leftMargin + progress * (w - leftMargin);
@@ -1232,22 +1112,21 @@ function onReplaySpeedChange(spd) {
     replaySpeed = parseFloat(spd);
 }
 
-// Löschfunktion für Cloud-Dateien (Storage & DB-Index)
+// ==========================================
+// 6. STORAGE LOG BROWSER & CLOUD DELETION
+// ==========================================
 async function deleteImuCloudFile(filePath, fileName) {
     if (!confirm(`Möchtest du "${fileName}" wirklich aus Supabase löschen?\n\nHinweis: Die Originaldatei bleibt auf der SD-Karte des Boards erhalten.`)) {
         return;
     }
 
     try {
-        // 1. Aus Supabase Storage Bucket entfernen
         const { error: sErr } = await sbClient.storage.from('imu-logs').remove([filePath]);
         if (sErr) throw sErr;
 
-        // 2. Aus der Index-Tabelle entfernen
         const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
         if (dbErr) throw dbErr;
 
-        // Falls die gelöschte Datei gerade im Player geöffnet ist: Player schließen
         if (document.getElementById('replay-file-title').innerText === fileName) {
             closeImuReplayDeck();
         }
@@ -1339,92 +1218,10 @@ async function fetchImuCloudLogs() {
 
     container.innerHTML = html;
 }
-async function fetchImuCloudLogs() {
-    const container = document.getElementById('imu-logs-container');
-    if (!container) return;
 
-    container.innerHTML = '<div class="text-xs text-gray-500 py-6 text-center">Lade IMU-Archive aus Supabase...</div>';
-
-    const { data, error } = await sbClient
-        .from('imu_log_files')
-        .select('*')
-        .eq('device_id', 'STAG-IMU-01')
-        .order('uploaded_at', { ascending: false });
-
-    if (error) {
-        container.innerHTML = `<div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300">Fehler beim Laden der Log-Dateien: ${error.message}</div>`;
-        return;
-    }
-
-    if (!data || data.length === 0) {
-        container.innerHTML = '<div class="text-xs text-gray-500 py-6 text-center">Bisher wurden keine IMU-Dateiblöcke in den Storage synchronisiert.</div>';
-        return;
-    }
-
-    // Nach Kalendertagen (day_folder) gruppieren
-    const groupedByDay = {};
-    data.forEach(item => {
-        const folder = item.day_folder || 'Unbekanntes Datum';
-        if (!groupedByDay[folder]) {
-            groupedByDay[folder] = [];
-        }
-        groupedByDay[folder].push(item);
-    });
-
-    let html = '';
-
-    Object.keys(groupedByDay).forEach(day => {
-        const files = groupedByDay[day];
-        const totalBytes = files.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
-        const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
-
-        html += `
-        <div class="bg-gray-900/80 border border-gray-800 rounded-lg p-3.5">
-            <div class="flex justify-between items-center mb-2.5 pb-2 border-b border-gray-800">
-                <div class="flex items-center gap-2">
-                    <span class="text-green-400 font-bold text-xs">📅 ${day}</span>
-                    <span class="text-[11px] text-gray-400 font-mono">(${files.length} ${files.length === 1 ? 'Block' : 'Blöcke'} &bull; ${totalMb} MB gesamt)</span>
-                </div>
-            </div>
-            
-            <div class="space-y-1.5">
-        `;
-
-        files.forEach(f => {
-            const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
-            const uploadTime = new Date(f.uploaded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
-
-            html += `
-                <div class="flex justify-between items-center p-2 rounded bg-gray-950/60 border border-gray-800/80 text-xs font-mono hover:border-gray-700 transition">
-                    <div class="flex items-center gap-2 truncate mr-3">
-                        <span class="text-gray-300 font-semibold truncate">📄 ${f.file_name}</span>
-                        <span class="text-[10px] text-gray-500">(${kb} KB)</span>
-                    </div>
-                    <div class="flex items-center gap-2 shrink-0">
-                        <span class="text-[10px] text-gray-500 hidden sm:inline mr-1">${uploadTime}</span>
-                        <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
-                                class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-800/60 px-2.5 py-1 rounded text-xs font-bold transition">
-                            📊 Visualisieren & Abspielen
-                        </button>
-                        <a href="${downloadUrl}" download="${f.file_name}" target="_blank"
-                           class="text-gray-400 hover:text-white px-2 py-1 text-xs transition">
-                            ⬇
-                        </a>
-                    </div>
-                </div>
-            `;
-        });
-
-        html += `
-            </div>
-        </div>
-        `;
-    });
-
-    container.innerHTML = html;
-}
-
+// ==========================================
+// 7. FIRMWARE RELEASES & BOOTSTRAP
+// ==========================================
 async function fetchReleases() {
     const { data, error } = await sbClient.from('firmware_releases').select('*').order('id', { ascending: false });
     const tbody = document.getElementById('releases-table-body');
