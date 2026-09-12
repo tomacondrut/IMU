@@ -25,11 +25,22 @@ input[type="range"] {
 }
 
 /* Oszilloskop-Canvas für Beschleunigungsanzeigen */
+/*
+ * Breadcrumb: 2026-09-12 09:30 - Expanded Desktop Canvas Dimensions & Grid Styling
+ * Feature: Increased vertical resolution from cramped 62px to 85px (mobile) and 125px (desktop).
+ * Dismissed code: Fixed height: 62px squashed acceleration waveforms and clipped transient spikes.
+ */
 .acc-canvas {
 	width: 100%;
-	height: 62px;
-	background-color: #070a0f;
+	height: 85px;
+	background-color: #06090e;
 	border-radius: 6px;
 	border: 1px solid #1c2636;
 	display: block;
+}
+
+@media (min-width: 768px) {
+	.acc-canvas {
+		height: 125px;
+	}
 }

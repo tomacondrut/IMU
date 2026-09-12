@@ -130,6 +130,18 @@ function init3D() {
     animate();
 }
 
+/*
+ * Breadcrumb: 2026-09-12 09:35 - High-Detail Oscilloscope with Kippstation Engineering Grids
+ * [CRITICAL BUGFIX FLAG - DETAILED OSCILLOSCOPE RENDERING]:
+ * Dismissed code: Single dashed center-line without time ticks or amplitude subdivisions.
+ * Fix:
+ *  1. Renders horizontal grid at 0, ±50% and ±100% with calibrated m/s² text readouts.
+ *  2. Draws vertical time-grid with dynamic spacing (1s, 2s, 5s, 10s) and relative time labels (-Xs .. 0s).
+ *  3. Computes RMS and Peak-to-Peak (P-P) values in real-time and displays them in a compact telemetry badge.
+ *  4. Applies a subtle semi-transparent gradient beneath the signal wave (Chart.js / Kippstation style).
+ *  5. Added setAccZoomPreset(seconds) for quick-zoom controls.
+ */
+
 // --- SYNCHRONISIERTE OSZILLOSKOP-FUNKTIONEN ---
 function onAccZoom(v) {
     accZoom = parseInt(v, 10);
@@ -137,21 +149,33 @@ function onAccZoom(v) {
     drawAccGraphs();
 }
 
+function setAccZoomPreset(seconds) {
+    const points = Math.min(Math.max(seconds * 10, 20), 600);
+    accZoom = points;
+    document.getElementById('acc-zoom').value = points;
+    document.getElementById('acc-zoom-val').innerText = seconds + 's';
+    drawAccGraphs();
+}
+
 function onAccPan(v) {
     accPan = parseFloat(v);
     isAccLive = (accPan >= 99);
     document.getElementById('acc-pan-val').innerText = isAccLive ? 'LIVE' : accPan.toFixed(0) + '%';
-    document.getElementById('btn-acc-live').style.backgroundColor = isAccLive ? '#009B4C' : '#1f2937';
+    const liveBtn = document.getElementById('btn-acc-live');
+    if (liveBtn) {
+        liveBtn.style.backgroundColor = isAccLive ? '#009B4C' : '#1f2937';
+    }
     drawAccGraphs();
 }
 
 function jumpAccLive() {
     accPan = 100;
-    document.getElementById('acc-pan').value = 100;
+    const panEl = document.getElementById('acc-pan');
+    if (panEl) panEl.value = 100;
     onAccPan(100);
 }
 
-function drawSingleAxis(cvId, axisKey, color, label, maxAbs, startIdx, endIdx) {
+function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx) {
     const cv = document.getElementById(cvId);
     if (!cv) return;
     const ctx = cv.getContext('2d');
@@ -160,49 +184,133 @@ function drawSingleAxis(cvId, axisKey, color, label, maxAbs, startIdx, endIdx) {
     ctx.clearRect(0, 0, w, h);
 
     const midY = h / 2;
+    const count = endIdx - startIdx;
+    const timeWindowSec = (count > 1) ? (count / 10) : (accZoom / 10);
 
-    // Nulllinie (Dashed)
-    ctx.strokeStyle = '#1e2a3a';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 2]);
-    ctx.beginPath();
-    ctx.moveTo(0, midY);
-    ctx.lineTo(w, midY);
-    ctx.stroke();
+    // 1. Horizontales Amplituden-Raster (100%, 50%, 0%, -50%, -100%)
+    const gridLines = [
+        { ratio: 1.0, style: 'rgba(255,255,255,0.06)', label: `+${maxAbs.toFixed(1)}` },
+        { ratio: 0.5, style: 'rgba(255,255,255,0.04)', label: `+${(maxAbs * 0.5).toFixed(1)}` },
+        { ratio: 0.0, style: 'rgba(255,255,255,0.18)', label: '0.0', dashed: true },
+        { ratio: -0.5, style: 'rgba(255,255,255,0.04)', label: `-${(maxAbs * 0.5).toFixed(1)}` },
+        { ratio: -1.0, style: 'rgba(255,255,255,0.06)', label: `-${maxAbs.toFixed(1)}` }
+    ];
+
+    ctx.font = '9px monospace';
+    gridLines.forEach(gl => {
+        const y = midY - gl.ratio * (midY - 6);
+        ctx.strokeStyle = gl.style;
+        ctx.lineWidth = gl.ratio === 0 ? 1 : 0.8;
+        if (gl.dashed) ctx.setLineDash([3, 3]);
+        else ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.moveTo(32, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(gl.label, 4, y + 3);
+    });
     ctx.setLineDash([]);
 
-    const count = endIdx - startIdx;
+    // 2. Vertikales Zeit-Raster (analog zu Kippstation X-Scale Ticks)
+    let timeStepSec = 5;
+    if (timeWindowSec <= 5) timeStepSec = 1;
+    else if (timeWindowSec <= 15) timeStepSec = 2;
+    else if (timeWindowSec <= 35) timeStepSec = 5;
+    else timeStepSec = 10;
+
+    const numTimeSteps = Math.floor(timeWindowSec / timeStepSec);
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.fillStyle = '#475569';
+
+    for (let t = 1; t <= numTimeSteps; t++) {
+        const secAgo = t * timeStepSec;
+        const px = w - (secAgo / timeWindowSec) * w;
+        if (px > 35) {
+            ctx.beginPath();
+            ctx.moveTo(px, 0);
+            ctx.lineTo(px, h);
+            ctx.stroke();
+            ctx.fillText(`-${secAgo}s`, px + 2, h - 4);
+        }
+    }
+
     if (count < 2) {
-        ctx.fillStyle = '#556677';
-        ctx.font = '10px monospace';
-        ctx.fillText(`${label} (Warte auf Daten...)`, 10, midY + 3);
+        ctx.fillStyle = '#64748b';
+        ctx.font = '11px monospace';
+        ctx.fillText(`${label}: Warte auf Sensor-Stream...`, 40, midY + 4);
         return;
     }
 
-    // Y-Skalenbeschriftung (global synchronisiert)
-    ctx.fillStyle = '#607286';
-    ctx.font = '9px monospace';
-    ctx.fillText(`+${maxAbs.toFixed(1)}`, 4, 11);
-    ctx.fillText(`-${maxAbs.toFixed(1)}`, 4, h - 3);
+    // 3. Statistische Metriken (RMS, Peak-to-Peak, Aktueller Wert) berechnen
+    let sumSq = 0;
+    let minVal = Infinity;
+    let maxVal = -Infinity;
 
-    // Kurvenverlauf
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.6;
+    for (let i = 0; i < count; i++) {
+        const v = accHistory[startIdx + i][axisKey];
+        sumSq += v * v;
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+    }
+    const rms = Math.sqrt(sumSq / count);
+    const p2p = maxVal - minVal;
+    const curVal = accHistory[endIdx - 1][axisKey];
+
+    // 4. Signalverlauf mit weichem Gradient-Fill zeichnen
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(32, 0, w - 32, h);
+    ctx.clip();
+
+    // Area-Gradient unter der Kurve
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, colorHex + '33');
+    grad.addColorStop(0.5, colorHex + '08');
+    grad.addColorStop(1, colorHex + '33');
+
+    ctx.beginPath();
+    ctx.moveTo(32, midY);
+    for (let i = 0; i < count; i++) {
+        const pt = accHistory[startIdx + i];
+        const px = 32 + (i / (count - 1)) * (w - 32);
+        const py = midY - (pt[axisKey] / maxAbs) * (midY - 6);
+        ctx.lineTo(px, py);
+    }
+    ctx.lineTo(w, midY);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Signallinie
+    ctx.strokeStyle = colorHex;
+    ctx.lineWidth = 1.8;
     ctx.beginPath();
     for (let i = 0; i < count; i++) {
         const pt = accHistory[startIdx + i];
-        const px = (i / (count - 1)) * w;
-        const py = midY - (pt[axisKey] / maxAbs) * (midY - 4);
+        const px = 32 + (i / (count - 1)) * (w - 32);
+        const py = midY - (pt[axisKey] / maxAbs) * (midY - 6);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
     }
     ctx.stroke();
+    ctx.restore();
 
-    // Aktueller Messwert
-    const cur = accHistory[endIdx - 1][axisKey];
-    ctx.fillStyle = color;
+    // 5. Technische Infobox (Kompakter Metrik-Badge oben rechts)
+    const badgeText = `${label}  IST: ${(curVal >= 0 ? '+' : '')}${curVal.toFixed(2)} m/s² | RMS: ${rms.toFixed(2)} | P-P: ${p2p.toFixed(2)}`;
     ctx.font = 'bold 10px monospace';
-    ctx.fillText(`${label}: ${(cur >= 0 ? '+' : '')}${cur.toFixed(2)} m/s²`, w - 140, 11);
+    const textW = ctx.measureText(badgeText).width;
+
+    ctx.fillStyle = 'rgba(7, 10, 15, 0.85)';
+    ctx.fillRect(w - textW - 14, 3, textW + 10, 16);
+    ctx.strokeStyle = colorHex + '66';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(w - textW - 14, 3, textW + 10, 16);
+
+    ctx.fillStyle = colorHex;
+    ctx.fillText(badgeText, w - textW - 9, 15);
 }
 
 function drawAccGraphs() {
@@ -219,7 +327,7 @@ function drawAccGraphs() {
     const startIdx = isAccLive ? maxStart : Math.round((accPan / 100) * maxStart);
     const endIdx = Math.min(total, startIdx + win);
 
-    // Globale Y-Maximalauslenkung über alle 3 Achsen im sichtbaren Ausschnitt berechnen
+    // Globale Spitzenamplitude über alle 3 Achsen im sichtbaren Ausschnitt berechnen
     let globalMax = 1.5;
     for (let i = startIdx; i < endIdx; i++) {
         const ax = Math.abs(accHistory[i].x);
@@ -229,6 +337,7 @@ function drawAccGraphs() {
         if (ay > globalMax) globalMax = ay;
         if (az > globalMax) globalMax = az;
     }
+    // Glätten & mit 15% Headroom auf volle Dezimalstellen runden
     globalMax = Math.ceil(globalMax * 1.15 * 10) / 10;
 
     drawSingleAxis('cv-acc-x', 'x', '#ef4444', 'ACC X', globalMax, startIdx, endIdx);

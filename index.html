@@ -59,15 +59,29 @@
         </div>
 
         <!-- 3-Achsen Linearbeschleunigung Oszilloskop -->
+        <!--
+      Breadcrumb: 2026-09-12 09:32 - Professional Oscilloscope Section with Quick Presets
+      Feature:
+        1. Added time-window preset buttons (5s, 10s, 30s, 60s) directly into header.
+        2. Replaced static text labels with live metrics indicators (Peak, RMS).
+        3. Retained synchronized pan & zoom sliders with LIVE anchor.
+    -->
         <section class="card rounded-lg p-3 md:p-4 mb-5">
-            <div class="flex justify-between items-center mb-3">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
                 <div>
-                    <h2 class="text-xs font-bold uppercase tracking-wider text-gray-300">Beschleunigungsdynamik (Linear)</h2>
-                    <p class="text-[11px] text-gray-500 font-mono">Globale Y-Skalierung gekoppelt an Spitzenamplitude</p>
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-gray-200">Beschleunigungsdynamik (Linear 3-Achsen)</h2>
+                    <p class="text-[11px] text-gray-400 font-mono">Synchronisierte Amplituden-Skalierung mit Zeit- & Amplitudenraster</p>
                 </div>
-                <button id="btn-acc-live" onclick="jumpAccLive()" class="bg-stag-green text-white px-2.5 py-1 rounded text-xs font-bold transition">
-                    🔴 Live
-                </button>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="text-[11px] text-gray-400 mr-1 hidden md:inline">Zoom:</span>
+                    <button onclick="setAccZoomPreset(5)" class="px-2 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">5s</button>
+                    <button onclick="setAccZoomPreset(10)" class="px-2 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">10s</button>
+                    <button onclick="setAccZoomPreset(30)" class="px-2 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">30s</button>
+                    <button onclick="setAccZoomPreset(60)" class="px-2 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">60s</button>
+                    <button id="btn-acc-live" onclick="jumpAccLive()" class="ml-1 bg-stag-green text-white px-2.5 py-1 rounded text-[11px] font-bold transition">
+                        🔴 Live
+                    </button>
+                </div>
             </div>
 
             <!-- X-Achse (Rot) -->
@@ -81,14 +95,14 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-[#0b0f17] p-3 rounded-lg border border-[#233145]">
                 <div>
                     <div class="flex justify-between text-xs mb-1">
-                        <span class="text-gray-400 font-semibold">Zeitfenster (Zoom X)</span>
+                        <span class="text-gray-300 font-semibold">Zeitfenster (Zoom X)</span>
                         <span id="acc-zoom-val" class="font-mono text-green-400 font-bold">10s</span>
                     </div>
                     <input type="range" id="acc-zoom" min="20" max="600" value="100" oninput="onAccZoom(this.value)" class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
                 </div>
                 <div>
                     <div class="flex justify-between text-xs mb-1">
-                        <span class="text-gray-400 font-semibold">Zeitachse (Scroll X)</span>
+                        <span class="text-gray-300 font-semibold">Zeitachse (Scroll X)</span>
                         <span id="acc-pan-val" class="font-mono text-green-400 font-bold">LIVE</span>
                     </div>
                     <input type="range" id="acc-pan" min="0" max="100" value="100" oninput="onAccPan(this.value)" class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer">
