@@ -378,82 +378,153 @@ function getBoardBase() {
     return b || 'http://10.10.10.1';
 }
 
-async function loadSdDirectory(dir) {
-    currentSdDir = dir || '/';
-    document.getElementById('sd-current-path').innerText = currentSdDir;
+
+
+/*
+ * Breadcrumb: 2026-09-12 14:40 - Full Cloud SD File Manager Engine via Supabase Command Queue
+ * [CRITICAL BUGFIX FLAG - REMOTE SD QUEUE]:
+ * 1. Completely removes Mixed-Content block by operating strictly over Supabase HTTPS.
+ * 2. Issues asynchronous commands (LIST, DOWNLOAD, DELETE) into public.sd_cloud_commands.
+ * 3. Subscribes via Supabase Realtime to update file listing and trigger downloads instantly.
+ */
+
+let currentCloudSdDir = '/';
+let cloudCmdChannel = null;
+
+function initCloudCommandChannel() {
+    if (cloudCmdChannel) return;
+
+    cloudCmdChannel = sbClient.channel('sd_commands_feed')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sd_cloud_commands' }, (payload) => {
+            const row = payload.new;
+            if (row.device_id !== 'STAG-IMU-01') return;
+
+            const stat = document.getElementById('sd-cloud-status-badge');
+
+            if (row.command === 'LIST' && row.path === currentCloudSdDir) {
+                if (row.status === 'DONE' && row.payload?.items) {
+                    renderCloudFileList(row.payload.items);
+                    if (stat) stat.innerHTML = '✓ Ordnerinhalt aktuell';
+                } else if (row.status === 'ERROR') {
+                    document.getElementById('sd-file-list').innerHTML =
+                        `<div class="text-xs text-red-400 py-3 text-center">Fehler beim Laden: ${row.error_msg || 'Unbekannt'}</div>`;
+                }
+            } else if (row.command === 'DOWNLOAD') {
+                if (row.status === 'DONE' && row.payload?.download_url) {
+                    if (stat) stat.innerHTML = `✓ Datei bereitgestellt! Download startet...`;
+                    window.open(row.payload.download_url, '_blank');
+                } else if (row.status === 'ERROR') {
+                    alert('Download-Fehler: ' + row.error_msg);
+                }
+            } else if (row.command === 'DELETE') {
+                if (row.status === 'DONE') {
+                    if (stat) stat.innerHTML = '✓ Datei gelöscht!';
+                    loadCloudSdDirectory(currentCloudSdDir);
+                } else if (row.status === 'ERROR') {
+                    alert('Löschfehler: ' + row.error_msg);
+                }
+            }
+        })
+        .subscribe();
+}
+
+async function loadCloudSdDirectory(dir) {
+    currentCloudSdDir = dir || '/';
+    document.getElementById('sd-current-path').innerText = currentCloudSdDir;
     const listEl = document.getElementById('sd-file-list');
-    listEl.innerHTML = '<div class="text-xs text-gray-400 py-3 text-center">Lade Ordnerinhalt...</div>';
+    const stat = document.getElementById('sd-cloud-status-badge');
 
-    const base = getBoardBase();
+    listEl.innerHTML = '<div class="text-xs text-green-400 py-4 text-center animate-pulse">Sende Anfrage an Board via Cloud...</div>';
+    if (stat) stat.innerHTML = 'Warte auf Rückmeldung vom Board...';
 
-    if (window.location.protocol === 'https:' && base.startsWith('http://')) {
-        listEl.innerHTML = `
-      <div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300 leading-relaxed">
-        <b>⚠️ Browser-Sicherheitsblockade (Mixed Content):</b><br>
-        GitHub Pages läuft über <b>HTTPS</b>. Dein Browser verbietet direkte Abfragen an unverschlüsselte lokale Board-Adressen (<code>${base}</code>).<br><br>
-        <b>Lösungsmöglichkeiten:</b><br>
-        1. Öffne die <code>index.html</code> lokal von deiner Festplatte per Doppelklick (<code>file:///...</code>) oder über <code>http://localhost</code>.<br>
-        2. Klicke im Browser links neben der URL auf das Icon für Website-Einstellungen und setze <i>"Unsichere Inhalte" (Insecure Content)</i> auf <b>Zulassen</b>.<br>
-        3. Verbinde dich direkt mit dem Board-WLAN unter <a href="http://10.10.10.1" class="text-green-400 underline font-bold" target="_blank">http://10.10.10.1</a>.
-      </div>
-    `;
+    initCloudCommandChannel();
+
+    // Befehl in Supabase-Tabelle einreihen
+    const { error } = await sbClient.from('sd_cloud_commands').insert([{
+        device_id: 'STAG-IMU-01',
+        command: 'LIST',
+        path: currentCloudSdDir,
+        status: 'PENDING'
+    }]);
+
+    if (error) {
+        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Fehler beim Senden des Cloud-Befehls: ${error.message}</div>`;
+    }
+}
+
+function renderCloudFileList(items) {
+    const listEl = document.getElementById('sd-file-list');
+    if (!items || items.length === 0) {
+        listEl.innerHTML = '<div class="text-xs text-gray-500 py-4 text-center">Dieser Ordner ist leer.</div>';
         return;
     }
 
-    try {
-        const res = await fetch(`${base}/browse?dir=${encodeURIComponent(currentSdDir)}`);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-
-        if (!data.items || data.items.length === 0) {
-            listEl.innerHTML = '<div class="text-xs text-gray-500 py-3 text-center">Dieser Ordner ist leer.</div>';
-            return;
+    listEl.innerHTML = items.map(item => {
+        const fullPath = (currentCloudSdDir === '/' ? '' : currentCloudSdDir) + '/' + item.name;
+        if (item.is_dir) {
+            return `
+              <div class="flex justify-between items-center p-2.5 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
+                   onclick="loadCloudSdDirectory('${fullPath}')">
+                <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
+                <span class="text-xs text-gray-400">Öffnen ➔</span>
+              </div>
+            `;
+        } else {
+            const kb = (item.size / 1024).toFixed(1);
+            return `
+              <div class="flex justify-between items-center p-2.5 rounded bg-gray-900 border border-gray-800 text-xs font-mono hover:border-gray-700 transition">
+                <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
+                <div class="flex items-center gap-2 shrink-0">
+                  <button onclick="requestCloudDownload('${fullPath}', '${item.name}')" 
+                          class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-900/60 px-2.5 py-1 rounded text-xs font-bold transition">
+                    ⬇ Bereitstellen & Laden
+                  </button>
+                  <button onclick="requestCloudDelete('${fullPath}', '${item.name}')" 
+                          class="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1 rounded transition text-xs" title="Löschen">
+                    ✕
+                  </button>
+                </div>
+              </div>
+            `;
         }
-
-        listEl.innerHTML = data.items.map(item => {
-            const fullPath = (currentSdDir === '/' ? '' : currentSdDir) + '/' + item.name;
-            if (item.is_dir) {
-                return `
-          <div class="flex justify-between items-center p-2 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
-               onclick="loadSdDirectory('${fullPath}')">
-            <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
-            <span class="text-xs text-gray-400">Öffnen ➔</span>
-          </div>
-        `;
-            } else {
-                const kb = (item.size / 1024).toFixed(1);
-                return `
-          <div class="flex justify-between items-center p-2 rounded bg-gray-900 border border-gray-800 text-xs font-mono">
-            <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
-            <div class="flex items-center gap-2">
-              <a href="${base}/download?file=${encodeURIComponent(fullPath)}" download class="text-green-400 hover:underline">Download</a>
-              <button onclick="deleteSdFile('${fullPath}')" class="text-red-400 hover:text-red-300">✕</button>
-            </div>
-          </div>
-        `;
-            }
-        }).join('');
-    } catch (err) {
-        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Verbindung fehlgeschlagen (${err.message}).<br>Stelle sicher, dass du im selben WLAN wie das Board bist.</div>`;
-    }
+    }).join('');
 }
 
-function navigateSdUp() {
-    if (currentSdDir === '/' || currentSdDir === '') return;
-    const lastSlash = currentSdDir.lastIndexOf('/');
-    const parent = lastSlash <= 0 ? '/' : currentSdDir.substring(0, lastSlash);
-    loadSdDirectory(parent);
+function navigateCloudSdUp() {
+    if (currentCloudSdDir === '/' || currentCloudSdDir === '') return;
+    const lastSlash = currentCloudSdDir.lastIndexOf('/');
+    const parent = lastSlash <= 0 ? '/' : currentCloudSdDir.substring(0, lastSlash);
+    loadCloudSdDirectory(parent);
 }
 
-async function deleteSdFile(path) {
-    if (!confirm('Datei wirklich löschen?\n' + path)) return;
-    try {
-        const base = getBoardBase();
-        await fetch(`${base}/delete?file=${encodeURIComponent(path)}`);
-        loadSdDirectory(currentSdDir);
-    } catch (e) {
-        alert('Fehler beim Löschen.');
-    }
+async function requestCloudDownload(path, fileName) {
+    const stat = document.getElementById('sd-cloud-status-badge');
+    if (stat) stat.innerHTML = `Board streamt "${fileName}" in Storage...`;
+
+    const { error } = await sbClient.from('sd_cloud_commands').insert([{
+        device_id: 'STAG-IMU-01',
+        command: 'DOWNLOAD',
+        path: path,
+        status: 'PENDING'
+    }]);
+
+    if (error) alert('Fehler: ' + error.message);
+}
+
+async function requestCloudDelete(path, fileName) {
+    if (!confirm(`Möchtest du "${fileName}" wirklich von der physischen SD-Karte des Boards löschen?\n\nPfad: ${path}`)) return;
+
+    const stat = document.getElementById('sd-cloud-status-badge');
+    if (stat) stat.innerHTML = `Löschbefehl an Board übermittelt...`;
+
+    const { error } = await sbClient.from('sd_cloud_commands').insert([{
+        device_id: 'STAG-IMU-01',
+        command: 'DELETE',
+        path: path,
+        status: 'PENDING'
+    }]);
+
+    if (error) alert('Fehler: ' + error.message);
 }
 
 async function uploadFileToSd() {
@@ -508,7 +579,7 @@ function switchTab(tab) {
     if (tab === '3d') setTimeout(drawAccGraphs, 60);
     if (tab === 'telemetry') fetchLatestData();
     if (tab === 'imulogs') fetchImuCloudLogs();
-    if (tab === 'files') loadSdDirectory(currentSdDir);
+    if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
     if (tab === 'settings') fetchConfig();
     if (tab === 'ota') fetchReleases();
 }

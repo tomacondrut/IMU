@@ -295,18 +295,18 @@
         </div>
     </main>
     <!-- TAB 2: SD-DATEIMANAGER -->
+    <!-- TAB 2: CLOUD SD-DATEIMANAGER -->
     <main id="tab-files" class="hidden">
         <div class="card p-5 rounded-lg mb-5">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-gray-700">
                 <div>
-                    <h2 class="text-sm font-bold uppercase text-gray-200">SD-Explorer & Dateimanager</h2>
-                    <p class="text-xs text-gray-400">Direktverbindung zum Board (AP 10.10.10.1 oder lokale STA-IP).</p>
+                    <h2 class="text-sm font-bold uppercase text-gray-200">SD-Explorer & Dateimanager (Vollwertiger Cloud-Zugriff)</h2>
+                    <p class="text-xs text-gray-400">Weltweiter Zugriff über Supabase Command Queue. Kein lokales WLAN erforderlich.</p>
                 </div>
-                <div class="flex items-center gap-2 w-full sm:w-auto">
-                    <input type="text" id="board-endpoint" value="http://10.10.10.1" placeholder="http://10.10.10.1"
-                           class="bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white font-mono outline-none focus:border-green-500 w-full sm:w-44">
-                    <button onclick="loadSdDirectory(currentSdDir)" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
-                        Laden
+                <div class="flex items-center gap-2">
+                    <span id="sd-cloud-status-badge" class="text-xs font-mono text-gray-400">Bereit</span>
+                    <button onclick="loadCloudSdDirectory(currentCloudSdDir)" class="bg-stag-green text-white px-3.5 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
+                        🔄 Aktualisieren
                     </button>
                 </div>
             </div>
@@ -316,24 +316,13 @@
                     <span class="text-gray-500">Pfad:</span>
                     <span id="sd-current-path" class="text-green-400 font-bold ml-1">/</span>
                 </div>
-                <button onclick="navigateSdUp()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded text-xs transition">
+                <button onclick="navigateCloudSdUp()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded text-xs transition">
                     Ordner hoch ⬆
                 </button>
             </div>
 
-            <div id="sd-file-list" class="space-y-1.5 mb-4 min-h-[120px]">
-                <div class="text-xs text-gray-500 py-4 text-center">Klicke auf "Laden" um das Dateisystem abzufragen.</div>
-            </div>
-
-            <div class="bg-gray-900/60 p-3.5 rounded border border-gray-800">
-                <p class="text-xs font-bold text-gray-300 mb-2">Datei in aktuellen Ordner hochladen</p>
-                <div class="flex flex-col sm:flex-row gap-2">
-                    <input type="file" id="sd-upload-file" class="w-full text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-800 file:text-green-400 cursor-pointer">
-                    <button onclick="uploadFileToSd()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
-                        Hochladen
-                    </button>
-                </div>
-                <p id="sd-upload-status" class="text-xs font-mono mt-2 text-gray-400"></p>
+            <div id="sd-file-list" class="space-y-1.5 mb-4 min-h-[140px]">
+                <div class="text-xs text-gray-500 py-6 text-center">Klicke auf "Aktualisieren", um die Verzeichnisstruktur abzurufen.</div>
             </div>
         </div>
     </main>
