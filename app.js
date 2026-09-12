@@ -448,7 +448,10 @@ function handleCommandResult(row) {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
             if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Gelöscht</span>';
-            loadCloudSdDirectory(currentCloudSdDir);
+            // 600ms Pause entlastet den ESP32, bevor der LIST-Befehl gesendet wird
+            setTimeout(() => {
+                loadCloudSdDirectory(currentCloudSdDir);
+            }, 600);
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
