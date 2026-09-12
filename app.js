@@ -506,16 +506,27 @@ async function uploadFileToSd() {
 }
 
 // --- TAB NAVIGATION ---
+/*
+ * Breadcrumb: 2026-09-12 10:05 - Integrated IMU Cloud-Logs Tab & Auto-Fetcher
+ * [CRITICAL BUGFIX FLAG - TAB ROUTING]:
+ * Added 'imulogs' to the switchTab array and wired fetchImuCloudLogs to initial loader.
+ */
 function switchTab(tab) {
-    ['3d', 'telemetry', 'files', 'settings', 'ota'].forEach(t => {
-        document.getElementById(`tab-${t}`).classList.add('hidden');
-        document.getElementById(`btn-tab-${t}`).className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition";
+    ['3d', 'telemetry', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
+        const tabEl = document.getElementById(`tab-${t}`);
+        const btnEl = document.getElementById(`btn-tab-${t}`);
+        if (tabEl) tabEl.classList.add('hidden');
+        if (btnEl) btnEl.className = "bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition";
     });
-    document.getElementById(`tab-${tab}`).classList.remove('hidden');
-    document.getElementById(`btn-tab-${tab}`).className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
+
+    const activeTab = document.getElementById(`tab-${tab}`);
+    const activeBtn = document.getElementById(`btn-tab-${tab}`);
+    if (activeTab) activeTab.classList.remove('hidden');
+    if (activeBtn) activeBtn.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
 
     if (tab === '3d') setTimeout(drawAccGraphs, 60);
     if (tab === 'telemetry') fetchLatestData();
+    if (tab === 'imulogs') fetchImuCloudLogs();
     if (tab === 'files') loadSdDirectory(currentSdDir);
     if (tab === 'settings') fetchConfig();
     if (tab === 'ota') fetchReleases();
@@ -673,6 +684,94 @@ async function fetchLatestData() {
     </tr>
   `).join('');
 }
+/*
+ * Breadcrumb: 2026-09-12 10:10 - Grouped Daily IMU Chunk Browser with Direct Storage Download
+ * Feature:
+ *  1. Queries public.imu_log_files for STAG-IMU-01.
+ *  2. Groups files by day_folder with aggregate size calculation.
+ *  3. Generates direct Supabase Storage download links: /storage/v1/object/public/imu-logs/<file_path>
+ */
+async function fetchImuCloudLogs() {
+    const container = document.getElementById('imu-logs-container');
+    if (!container) return;
+
+    container.innerHTML = '<div class="text-xs text-gray-500 py-6 text-center">Lade IMU-Archive aus Supabase...</div>';
+
+    const { data, error } = await sbClient
+        .from('imu_log_files')
+        .select('*')
+        .eq('device_id', 'STAG-IMU-01')
+        .order('uploaded_at', { ascending: false });
+
+    if (error) {
+        container.innerHTML = `<div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300">Fehler beim Laden der Log-Dateien: ${error.message}</div>`;
+        return;
+    }
+
+    if (!data || data.length === 0) {
+        container.innerHTML = '<div class="text-xs text-gray-500 py-6 text-center">Bisher wurden keine IMU-Dateiblöcke in den Storage synchronisiert.</div>';
+        return;
+    }
+
+    // Nach Kalendertagen (day_folder) gruppieren
+    const groupedByDay = {};
+    data.forEach(item => {
+        const folder = item.day_folder || 'Unbekanntes Datum';
+        if (!groupedByDay[folder]) {
+            groupedByDay[folder] = [];
+        }
+        groupedByDay[folder].push(item);
+    });
+
+    let html = '';
+
+    Object.keys(groupedByDay).forEach(day => {
+        const files = groupedByDay[day];
+        const totalBytes = files.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+        const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
+
+        html += `
+        <div class="bg-gray-900/80 border border-gray-800 rounded-lg p-3.5">
+            <div class="flex justify-between items-center mb-2.5 pb-2 border-b border-gray-800">
+                <div class="flex items-center gap-2">
+                    <span class="text-green-400 font-bold text-xs">📅 ${day}</span>
+                    <span class="text-[11px] text-gray-400 font-mono">(${files.length} ${files.length === 1 ? 'Block' : 'Blöcke'} &bull; ${totalMb} MB gesamt)</span>
+                </div>
+            </div>
+            
+            <div class="space-y-1.5">
+        `;
+
+        files.forEach(f => {
+            const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
+            const uploadTime = new Date(f.uploaded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
+
+            html += `
+                <div class="flex justify-between items-center p-2 rounded bg-gray-950/60 border border-gray-800/80 text-xs font-mono hover:border-gray-700 transition">
+                    <div class="flex items-center gap-2 truncate mr-3">
+                        <span class="text-gray-300 font-semibold truncate">📄 ${f.file_name}</span>
+                        <span class="text-[10px] text-gray-500">(${kb} KB)</span>
+                    </div>
+                    <div class="flex items-center gap-3 shrink-0">
+                        <span class="text-[10px] text-gray-500 hidden sm:inline">${uploadTime}</span>
+                        <a href="${downloadUrl}" download="${f.file_name}" target="_blank"
+                           class="text-green-400 hover:text-green-300 font-bold text-xs transition">
+                            ⬇ Download
+                        </a>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `
+            </div>
+        </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
 
 async function fetchReleases() {
     const { data, error } = await sbClient.from('firmware_releases').select('*').order('id', { ascending: false });
@@ -747,6 +846,7 @@ function fetchAllData() {
     fetchLatestData();
     fetchConfig();
     fetchReleases();
+    fetchImuCloudLogs();
 }
 
 window.onload = () => {

@@ -37,6 +37,9 @@
         <button id="btn-tab-telemetry" onclick="switchTab('telemetry')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
             Telemetrie & Akku
         </button>
+        <button id="btn-tab-imulogs" onclick="switchTab('imulogs')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
+            IMU Cloud-Logs
+        </button>
         <button id="btn-tab-files" onclick="switchTab('files')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
             SD-Dateimanager
         </button>
@@ -60,12 +63,12 @@
 
         <!-- 3-Achsen Linearbeschleunigung Oszilloskop -->
         <!--
-      Breadcrumb: 2026-09-12 09:32 - Professional Oscilloscope Section with Quick Presets
-      Feature:
-        1. Added time-window preset buttons (5s, 10s, 30s, 60s) directly into header.
-        2. Replaced static text labels with live metrics indicators (Peak, RMS).
-        3. Retained synchronized pan & zoom sliders with LIVE anchor.
-    -->
+          Breadcrumb: 2026-09-12 09:32 - Professional Oscilloscope Section with Quick Presets
+          Feature:
+            1. Added time-window preset buttons (5s, 10s, 30s, 60s) directly into header.
+            2. Replaced static text labels with live metrics indicators (Peak, RMS).
+            3. Retained synchronized pan & zoom sliders with LIVE anchor.
+        -->
         <section class="card rounded-lg p-3 md:p-4 mb-5">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
                 <div>
@@ -163,7 +166,24 @@
             </div>
         </section>
     </main>
+    <!-- TAB: IMU CLOUD-LOGS (1-MB-CHUNKS) -->
+    <main id="tab-imulogs" class="hidden">
+        <div class="card p-5 rounded-lg mb-5">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-gray-700">
+                <div>
+                    <h2 class="text-sm font-bold uppercase text-gray-200">Indexierte IMU-Messdaten (Cloud-Storage)</h2>
+                    <p class="text-xs text-gray-400">10–30 Hz Rohdaten (Quaternione & Beschleunigung), gruppiert nach Kalendertag in 1-MB-Blöcken.</p>
+                </div>
+                <button onclick="fetchImuCloudLogs()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition whitespace-nowrap">
+                    Liste aktualisieren
+                </button>
+            </div>
 
+            <div id="imu-logs-container" class="space-y-4 min-h-[120px]">
+                <div class="text-xs text-gray-500 py-6 text-center">Lade IMU-Archive aus Supabase...</div>
+            </div>
+        </div>
+    </main>
     <!-- TAB 2: SD-DATEIMANAGER -->
     <main id="tab-files" class="hidden">
         <div class="card p-5 rounded-lg mb-5">
