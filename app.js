@@ -433,21 +433,37 @@ function handleCommandResult(row) {
                 `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${row.error_msg || 'Ordner konnte nicht gelesen werden.'}</div>`;
             if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
         }
+        /*
+     * Breadcrumb: 2026-09-12 16:25 - Native DOM Anchor File Trigger
+     * [CRITICAL BUGFIX FLAG - POPUP BLOCKER BYPASS]:
+     * Replaced window.open() with a transient DOM <a> click to guarantee instant download trigger across Chrome/Safari.
+     */
     } else if (row.command === 'DOWNLOAD') {
-        if (row.status === 'DONE') {
+        let payload = row.payload;
+        if (typeof payload === 'string') {
+            try { payload = JSON.parse(payload); } catch (e) { }
+        }
+
+        if (row.status === 'DONE' && payload?.download_url) {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            let payload = row.payload;
-            if (typeof payload === 'string') {
-                try { payload = JSON.parse(payload); } catch (e) { }
-            }
-            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Bereitgestellt!</span>';
-            if (payload?.download_url) window.open(payload.download_url, '_blank');
+            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Datei heruntergeladen!</span>';
+
+            // Direkter, blockierungsfreier Download über unsichtbares Link-Element
+            const a = document.createElement('a');
+            a.href = payload.download_url;
+            a.download = payload.download_url.split('/').pop();
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            alert('Download-Fehler: ' + row.error_msg);
+            if (stat) stat.innerHTML = '<span class="text-red-400">Download fehlgeschlagen</span>';
+            alert('Download-Fehler vom Board:\n' + (row.error_msg || 'Unbekannter Fehler'));
         }
+    }
     } else if (row.command === 'DELETE') {
         if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
