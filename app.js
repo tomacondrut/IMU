@@ -462,6 +462,12 @@ function handleCommandResult(row) {
 }
 
 // Universeller Dispatcher für alle 3 SD-Befehle (LIST, DOWNLOAD, DELETE)
+/*
+ * Breadcrumb: 2026-09-12 19:48 - Ultra-Verbose Cloud Command Dispatcher with UI Error Badges
+ * [CRITICAL BUGFIX FLAG - VISIBILITY & ERROR EXPOSURE]:
+ * 1. Outputs full console logs for DELETE and INSERT steps.
+ * 2. Directly prints database or RLS error messages into #sd-cloud-status-badge.
+ */
 async function sendCloudCommand(command, path, statusPrompt) {
     const stat = document.getElementById('sd-cloud-status-badge');
     if (stat) stat.innerHTML = `<span class="text-yellow-400 font-mono animate-pulse">${statusPrompt}</span>`;
@@ -470,13 +476,17 @@ async function sendCloudCommand(command, path, statusPrompt) {
 
     initCloudCommandChannel();
 
-    // 1. Alte hängende PENDING-Befehle bereinigen
-    await sbClient.from('sd_cloud_commands')
+    console.log(`[SD CLOUD] Bereinige alte PENDING-Befehle für ${command} ${path}...`);
+    const { error: delErr } = await sbClient.from('sd_cloud_commands')
         .delete()
         .eq('device_id', 'STAG-IMU-01')
         .eq('status', 'PENDING');
 
-    // 2. Neuen Befehl mit Rückgabe der generierten ID absetzen
+    if (delErr) {
+        console.warn('[SD CLOUD] Fehler beim Löschen alter PENDING-Befehle (RLS?):', delErr.message);
+    }
+
+    console.log(`[SD CLOUD] Sende neuen Befehl an Supabase: ${command} "${path}"`);
     const { data, error } = await sbClient.from('sd_cloud_commands').insert([{
         device_id: 'STAG-IMU-01',
         command: command,
@@ -485,32 +495,42 @@ async function sendCloudCommand(command, path, statusPrompt) {
     }]).select().single();
 
     if (error) {
-        if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
-        alert(`Befehlsfehler (${command}): ${error.message}`);
+        console.error('[SD CLOUD] FEHLER beim INSERT:', error);
+        if (stat) stat.innerHTML = `<span class="text-red-400 font-bold">Fehler: ${error.message}</span>`;
+        alert(`Befehlsfehler (${command}): ${error.message}\n\nPrüfe RLS-Policies auf 'sd_cloud_commands'!`);
         return;
     }
+
+    console.log('[SD CLOUD] Befehl erfolgreich in Supabase eingetragen! ID:', data.id);
+    if (stat) stat.innerHTML = `<span class="text-yellow-400 font-mono animate-pulse">Befehl #${data.id} wartet auf Board...</span>`;
 
     activeCommandId = data.id;
     const startTime = Date.now();
 
-    // 3. Dual-Channel Fallback Poller (1 Sekunde Intervall, 30s Timeout)
     activeCommandPollTimer = setInterval(async () => {
         if (!activeCommandId) {
             clearInterval(activeCommandPollTimer);
             return;
         }
 
-        const { data: checkData } = await sbClient
+        const { data: checkData, error: pollErr } = await sbClient
             .from('sd_cloud_commands')
             .select('*')
             .eq('id', activeCommandId)
             .single();
 
+        if (pollErr) {
+            console.warn('[SD CLOUD] Polling-Warnung:', pollErr.message);
+            return;
+        }
+
         if (checkData) {
+            const elapsed = Math.round((Date.now() - startTime) / 1000);
             if (checkData.status === 'DONE' || checkData.status === 'ERROR') {
+                console.log(`[SD CLOUD] Befehl #${activeCommandId} abgeschlossen:`, checkData.status);
                 handleCommandResult(checkData);
-            } else if (checkData.status === 'PROCESSING') {
-                if (stat) stat.innerHTML = '<span class="text-yellow-400 font-mono animate-pulse">Liest SD...</span>';
+            } else {
+                if (stat) stat.innerHTML = `<span class="text-yellow-400 font-mono animate-pulse">Warte auf Board (#${activeCommandId} &bull; ${elapsed}s)...</span>`;
             }
         }
 
