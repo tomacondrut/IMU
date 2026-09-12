@@ -396,8 +396,17 @@ function getBoardBase() {
  * 3. Informs user immediately if board is in deep sleep and needs to be woken up via button/motion.
  */
 
+/*
+ * Breadcrumb: 2026-09-12 16:30 - Robust Single-Subscription & Navigational Stack for Cloud SD
+ * [CRITICAL BUGFIX FLAG - REALTIME MULTI-LISTENER ELIMINATION]:
+ * 1. Guarantees sbClient.channel is created exactly ONCE to prevent listener stacking and race conditions.
+ * 2. Filters responses strictly by activeCommandId: prevents stale parent-folder payloads from overwriting subfolders.
+ * 3. Sanitizes directory paths (removes double slashes and ensures clean root handling).
+ */
+
 let currentCloudSdDir = '/';
 let cloudCmdChannel = null;
+let activeCommandId = null;
 let activeCommandPollTimer = null;
 
 function initCloudCommandChannel() {
@@ -407,7 +416,10 @@ function initCloudCommandChannel() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'sd_cloud_commands' }, (payload) => {
             const row = payload.new;
             if (!row || row.device_id !== 'STAG-IMU-01') return;
-            handleCommandResult(row);
+            // Nur auswerten, wenn es zum aktuell offenen Befehl gehört
+            if (activeCommandId && row.id === activeCommandId) {
+                handleCommandResult(row);
+            }
         })
         .subscribe();
 }
@@ -415,35 +427,52 @@ function initCloudCommandChannel() {
 function handleCommandResult(row) {
     const stat = document.getElementById('sd-cloud-status-badge');
 
-    if (row.command === 'LIST' && row.path === currentCloudSdDir) {
-        if (row.status === 'DONE' && row.payload?.items) {
+    if (row.command === 'LIST') {
+        if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
-            renderCloudFileList(row.payload.items);
-            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Ordnerinhalt aktuell</span>';
+            activeCommandId = null;
+            renderCloudFileList(row.payload?.items || []);
+            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Ordner geladen</span>';
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
             document.getElementById('sd-file-list').innerHTML =
-                `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${row.error_msg || 'Konnte Ordner nicht lesen.'}</div>`;
+                `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${row.error_msg || 'Ordner konnte nicht gelesen werden.'}</div>`;
+            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
         }
     } else if (row.command === 'DOWNLOAD') {
         if (row.status === 'DONE' && row.payload?.download_url) {
-            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Download bereitgestellt!</span>';
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
+            if (stat) stat.innerHTML = '<span class="text-green-400">✓ Bereitgestellt!</span>';
             window.open(row.payload.download_url, '_blank');
         } else if (row.status === 'ERROR') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
             alert('Download-Fehler: ' + row.error_msg);
         }
     } else if (row.command === 'DELETE') {
         if (row.status === 'DONE') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
             if (stat) stat.innerHTML = '<span class="text-green-400">✓ Gelöscht</span>';
             loadCloudSdDirectory(currentCloudSdDir);
         } else if (row.status === 'ERROR') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
             alert('Löschfehler: ' + row.error_msg);
         }
     }
 }
 
 async function loadCloudSdDirectory(dir) {
-    currentCloudSdDir = dir || '/';
+    // Pfad normalisieren
+    let cleanDir = dir || '/';
+    while (cleanDir.includes('//')) cleanDir = cleanDir.replace('//', '/');
+    if (!cleanDir.startsWith('/')) cleanDir = '/' + cleanDir;
+    if (cleanDir.length > 1 && cleanDir.endsWith('/')) cleanDir = cleanDir.substring(0, cleanDir.length - 1);
+
+    currentCloudSdDir = cleanDir;
     document.getElementById('sd-current-path').innerText = currentCloudSdDir;
     const listEl = document.getElementById('sd-file-list');
     const stat = document.getElementById('sd-cloud-status-badge');
@@ -452,15 +481,15 @@ async function loadCloudSdDirectory(dir) {
 
     listEl.innerHTML = `
       <div class="text-xs text-green-400 py-4 text-center space-y-2">
-        <div class="animate-pulse">⏳ Warte auf Board-Rückmeldung via Cloud...</div>
-        <p class="text-[11px] text-gray-500">Falls das Board schläft: Taster kurz drücken oder schütteln zum Wecken.</p>
+        <div class="animate-pulse">⏳ Öffne "${currentCloudSdDir}" via Cloud...</div>
+        <p class="text-[11px] text-gray-500">Board liest Dateisystem ein...</p>
       </div>
     `;
-    if (stat) stat.innerHTML = 'Befehl gesendet...';
+    if (stat) stat.innerHTML = 'Lade...';
 
     initCloudCommandChannel();
 
-    // 1. Befehl in Supabase-Tabelle einreihen
+    // Befehl in Supabase-Tabelle einreihen
     const { data, error } = await sbClient.from('sd_cloud_commands').insert([{
         device_id: 'STAG-IMU-01',
         command: 'LIST',
@@ -469,43 +498,46 @@ async function loadCloudSdDirectory(dir) {
     }]).select().single();
 
     if (error) {
-        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Cloud-Fehler: ${error.message}</div>`;
+        listEl.innerHTML = `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${error.message}</div>`;
         return;
     }
 
-    const commandId = data.id;
+    activeCommandId = data.id;
     const startTime = Date.now();
 
-    // 2. Paralleler Poller (alle 2 Sekunden), falls WebSocket-Realtime nicht feuert
+    // Fallback-Poller (alle 1,5s) falls WebSocket-Realtime hängt
     activeCommandPollTimer = setInterval(async () => {
+        if (!activeCommandId) {
+            clearInterval(activeCommandPollTimer);
+            return;
+        }
+
         const { data: checkData } = await sbClient
             .from('sd_cloud_commands')
             .select('*')
-            .eq('id', commandId)
+            .eq('id', activeCommandId)
             .single();
 
         if (checkData && checkData.status !== 'PENDING') {
             handleCommandResult(checkData);
         }
 
-        // Timeout nach 15 Sekunden
-        if (Date.now() - startTime > 15000) {
+        // Timeout nach 12 Sekunden
+        if (Date.now() - startTime > 12000) {
             clearInterval(activeCommandPollTimer);
-            if (document.getElementById('sd-file-list').innerHTML.includes('Warte auf Board-Rückmeldung')) {
-                listEl.innerHTML = `
-                  <div class="p-3 bg-gray-900 border border-gray-800 rounded text-center text-xs space-y-2">
-                    <p class="text-gray-300">⚠️ Board hat nicht innerhalb von 15s geantwortet.</p>
-                    <p class="text-[11px] text-gray-500">Das Gerät ist möglicherweise im Deep Sleep oder verbindet sich gerade.</p>
-                    <button onclick="loadCloudSdDirectory('${currentCloudSdDir}')" 
-                            class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">
-                      Erneut versuchen 🔄
-                    </button>
-                  </div>
-                `;
-                if (stat) stat.innerHTML = '<span class="text-yellow-400">Timeout</span>';
-            }
+            activeCommandId = null;
+            listEl.innerHTML = `
+              <div class="p-3 bg-gray-900 border border-gray-800 rounded text-center text-xs space-y-2">
+                <p class="text-gray-300">⚠️ Board hat auf "${currentCloudSdDir}" nicht reagiert.</p>
+                <button onclick="loadCloudSdDirectory('${currentCloudSdDir}')" 
+                        class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">
+                  Erneut versuchen 🔄
+                </button>
+              </div>
+            `;
+            if (stat) stat.innerHTML = '<span class="text-yellow-400">Timeout</span>';
         }
-    }, 2000);
+    }, 1500);
 }
 
 function renderCloudFileList(items) {
