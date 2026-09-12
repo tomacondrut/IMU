@@ -10,44 +10,125 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <link rel="stylesheet" href="style.css">
+    <!-- Leaflet OpenStreetMap Engine -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body class="p-3 md:p-8 max-w-6xl mx-auto">
 
-    <!-- Header -->
-    <header class="card rounded-lg p-4 mb-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-            <h1 class="text-xl font-bold stag-green tracking-wide">STAG AG &bull; CLOUD PORTAL</h1>
-            <p class="text-xs text-gray-400" id="device-id-display">Gerät: STAG-IMU-01</p>
+    <!--
+        Breadcrumb: 2026-09-12 18:52 - STAG Corporate Logo, Play Icon & Firmware Tab
+        [CRITICAL BUGFIX FLAG - UI BRANDING & TAB CLARITY]:
+        1. Replaced plain text 'STAG AG' with crisp inline vector SVG matching STAG AG corporate branding (#E30613).
+        2. Added Play vector icon to '3D Live-Stream' tab.
+        3. Renamed 'Cloud-OTA' to 'Firmware' and added universal microchip IC icon.
+        4. Retained switchTab('ota') and btn-tab-ota IDs for 100% backward compatibility with app.js.
+      -->
+    <!-- Header mit STAG Logo & Smartphone-Akkuanzeige im rechten oberen Eck -->
+    <header class="card rounded-lg p-3 sm:p-4 mb-4 flex flex-row justify-between items-center gap-3">
+        <div class="flex items-center gap-2.5 sm:gap-3">
+            <!-- STAG Logo (Base64) -->
+            <img class="h-6 sm:h-7 w-auto shrink-0 object-contain"
+                 src="data:image/png;base64,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"
+                 alt="STAG Logo">
+
+            <div class="border-l border-gray-700 pl-2 sm:pl-2.5">
+                <span class="text-xs sm:text-sm font-bold text-gray-200 uppercase tracking-wider block leading-none">Cloud Portal</span>
+                <p class="text-[10px] sm:text-[11px] text-gray-400 font-mono mt-1" id="device-id-display">Gerät: STAG-IMU-01</p>
+            </div>
         </div>
-        <div class="flex items-center gap-3">
-            <span id="realtime-indicator" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
-                <span class="w-2 h-2 rounded-full bg-gray-500"></span> Realtime Verbinden...
+
+
+
+        <div class="flex items-center gap-2 sm:gap-3">
+            <!-- Realtime Status Badge -->
+            <span id="realtime-indicator" class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
+                <span class="w-2 h-2 rounded-full bg-gray-500"></span> Realtime...
             </span>
+            <!--
+              Breadcrumb: 2026-09-12 19:15 - GPS Trigger Button Header Widget
+              [CRITICAL BUGFIX FLAG - MOBILE COMPACTNESS]:
+              Matches smartphone status bar aesthetics alongside battery widget.
+            -->
+            <!-- GPS Status & Abfrage-Button -->
+            <button id="header-gps-btn" onclick="openGpsModal()"
+                    class="flex items-center gap-1.5 bg-gray-900/90 hover:bg-gray-800/90 border border-gray-700/80 hover:border-blue-500/60 px-2.5 py-1.5 rounded-lg cursor-pointer transition select-none group"
+                    title="GPS-Position anzeigen / abfragen">
+                <svg class="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 2a8 8 0 00-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 00-8-8z" />
+                    <circle cx="12" cy="10" r="3" />
+                </svg>
+                <span id="header-gps-status" class="text-xs font-mono font-bold text-gray-300">GPS</span>
+            </button>
+
+            <!-- Smartphone Akkuanzeige mit Klick-Popup -->
+            <button id="header-battery-btn" onclick="openBatteryModal()"
+                    class="flex items-center gap-2 bg-gray-900/90 hover:bg-gray-800/90 border border-gray-700/80 hover:border-green-500/60 px-2.5 py-1.5 rounded-lg cursor-pointer transition select-none group"
+                    title="Akkudetails & Entladegraph öffnen">
+                <span id="header-battery-pct" class="text-xs font-mono font-bold text-gray-200">--%</span>
+
+                <!-- Smartphone Battery Body -->
+                <div class="relative flex items-center">
+                    <div class="w-6 h-3 rounded-[3px] border border-gray-400 p-[1.5px] flex items-center bg-gray-950">
+                        <div id="header-battery-fill" class="h-full bg-green-500 rounded-[1px] transition-all duration-300" style="width: 0%;"></div>
+                    </div>
+                    <!-- Akku-Nippel -->
+                    <div class="w-[2px] h-1.5 bg-gray-400 rounded-r-[1px] ml-[1px]"></div>
+                    <!-- Lade-Blitz -->
+                    <span id="header-battery-bolt" class="hidden absolute -top-1.5 -right-1 text-[10px] text-yellow-400 animate-pulse">⚡</span>
+                </div>
+            </button>
+
             <button onclick="fetchAllData()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-semibold hover:opacity-90 transition">
-                Aktualisieren
+                Sync 🔄
             </button>
         </div>
     </header>
 
-    <!-- Navigation Tabs -->
-    <div class="flex gap-2 mb-5 overflow-x-auto pb-1">
-        <button id="btn-tab-3d" onclick="switchTab('3d')" class="bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition">
-            3D Live-Stream
+    <!-- Navigation Tabs mit Play-, Cloud-, SD-, Settings- & Microchip-Icons -->
+    <div class="flex gap-2 mb-4 overflow-x-auto pb-1">
+        <!-- 3D Live-Stream mit Play-Icon -->
+        <button id="btn-tab-3d" onclick="switchTab('3d')" class="bg-stag-green text-white px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 fill-current shrink-0" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+            </svg>
+            <span>3D Live-Stream</span>
         </button>
-        <button id="btn-tab-telemetry" onclick="switchTab('telemetry')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-            Telemetrie & Akku
+
+        <!-- Cloud IMU mit Wölkchen-Icon -->
+        <button id="btn-tab-imulogs" onclick="switchTab('imulogs')" class="bg-gray-800 text-gray-400 px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition flex items-center gap-1.5">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z" />
+            </svg>
+            <span>Cloud IMU</span>
         </button>
-        <button id="btn-tab-imulogs" onclick="switchTab('imulogs')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-            IMU Cloud-Logs
+
+        <!-- SD-Kartenmanager mit SD-Karten-Icon -->
+        <button id="btn-tab-files" onclick="switchTab('files')" class="bg-gray-800 text-gray-400 px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition flex items-center gap-1.5">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 4a1 1 0 011-1h8.5l3.5 3.5V20a1 1 0 01-1 1H6a1 1 0 01-1-1V4z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7v2.5m2.5-2.5v2.5m2.5-2.5v2.5" />
+            </svg>
+            <span>SD-Dateimanager</span>
         </button>
-        <button id="btn-tab-files" onclick="switchTab('files')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-            SD-Dateimanager
+
+        <!-- Parameter mit Settings-Rädchen-Icon -->
+        <button id="btn-tab-settings" onclick="switchTab('settings')" class="bg-gray-800 text-gray-400 px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition flex items-center gap-1.5">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span>Parameter</span>
         </button>
-        <button id="btn-tab-settings" onclick="switchTab('settings')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-            Parameter & Sleep
-        </button>
-        <button id="btn-tab-ota" onclick="switchTab('ota')" class="bg-gray-800 text-gray-400 px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition">
-            Cloud-OTA
+
+        <!-- Firmware mit Microchip-Icon (ehemals Cloud-OTA) -->
+        <button id="btn-tab-ota" onclick="switchTab('ota')" class="bg-gray-800 text-gray-400 px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition flex items-center gap-1.5">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <rect x="5" y="5" width="14" height="14" rx="2" />
+                <rect x="9" y="9" width="6" height="6" />
+                <path stroke-linecap="round" d="M9 2v3m6-3v3M9 19v3m6-3v3M19 9h3m-3 6h3M2 9h3m-3 6h3" />
+            </svg>
+            <span>Firmware</span>
         </button>
     </div>
 
@@ -114,58 +195,7 @@
         </section>
     </main>
 
-    <!-- TAB 1: TELEMETRIE -->
-    <main id="tab-telemetry" class="hidden">
-        <section class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-5">
-            <div class="card p-4 rounded-lg">
-                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Akkustand</p>
-                <div class="text-2xl font-bold" id="metric-pct">--%</div>
-                <p class="text-xs text-gray-400" id="metric-volt">-- V</p>
-            </div>
-            <div class="card p-4 rounded-lg">
-                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Status</p>
-                <div class="text-base font-bold text-gray-200 truncate" id="metric-status">--</div>
-                <p class="text-xs text-gray-400">Stromversorgung</p>
-            </div>
-            <div class="card p-4 rounded-lg">
-                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Boot-Zyklus</p>
-                <div class="text-2xl font-bold" id="metric-boot">#--</div>
-                <p class="text-xs text-gray-400">Deep Sleep Weckungen</p>
-            </div>
-            <div class="card p-4 rounded-lg">
-                <p class="text-xs uppercase text-gray-400 font-semibold mb-1">Letzte Messung</p>
-                <div class="text-xs font-semibold mt-1" id="metric-time">--</div>
-                <p class="text-xs text-gray-400" id="metric-ago">Vor --</p>
-            </div>
-        </section>
 
-        <section class="card p-4 rounded-lg mb-5">
-            <h2 class="text-sm font-semibold uppercase text-gray-300 mb-4">Spannungsverlauf & Entladekurve</h2>
-            <div class="relative h-64 w-full">
-                <canvas id="batChart"></canvas>
-            </div>
-        </section>
-
-        <section class="card p-4 rounded-lg overflow-hidden">
-            <h2 class="text-sm font-semibold uppercase text-gray-300 mb-3">Historische Telemetriedaten</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-left text-xs font-mono">
-                    <thead class="text-gray-400 border-b border-gray-700">
-                        <tr>
-                            <th class="py-2 px-3">Zeitstempel</th>
-                            <th class="py-2 px-3">Spannung</th>
-                            <th class="py-2 px-3">Ladung</th>
-                            <th class="py-2 px-3">Modus</th>
-                            <th class="py-2 px-3">Boot</th>
-                        </tr>
-                    </thead>
-                    <tbody id="log-table-body" class="divide-y divide-gray-800">
-                        <tr><td colspan="5" class="py-4 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-    </main>
     <!-- TAB: IMU CLOUD-LOGS (1-MB-CHUNKS) -->
     <!--
       Breadcrumb: 2026-09-12 10:30 - IMU Cloud-Logs Explorer with Embedded Replay & Cycle Inspector
@@ -483,5 +513,150 @@
     </main>
 
     <script src="app.js"></script>
+
+    <!--
+      Breadcrumb: 2026-09-12 18:45 - Battery Modal Popup with Scrollable Discharge Canvas
+      [CRITICAL BUGFIX FLAG - HORIZONTAL SCROLL CANVAS]:
+      Encloses batChart canvas in a minimum 720px width wrapper inside an overflow-x-auto container.
+      Allows swipe scrolling on iOS and Android without label distortion.
+    -->
+    <div id="battery-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="card bg-[#111827] border border-[#233145] rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <!-- Modal Header -->
+            <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/70">
+                <div class="flex items-center gap-2">
+                    <span class="text-base">🔋</span>
+                    <h2 class="text-sm font-bold uppercase tracking-wider text-gray-200">Akkuzustand & Entladehistorie</h2>
+                </div>
+                <button onclick="closeBatteryModal()" class="text-gray-400 hover:text-white p-1 rounded-md hover:bg-gray-800 transition text-sm">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Modal Body (Scrollable) -->
+            <div class="p-4 overflow-y-auto space-y-4">
+                <!-- KPI-Übersicht -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <div class="bg-gray-900/80 p-2.5 rounded-lg border border-gray-800">
+                        <p class="text-[10px] uppercase text-gray-400 font-semibold">Kapazität</p>
+                        <div class="text-xl font-bold text-green-400" id="modal-metric-pct">--%</div>
+                        <p class="text-[10px] text-gray-400 font-mono" id="modal-metric-volt">-- V</p>
+                    </div>
+                    <div class="bg-gray-900/80 p-2.5 rounded-lg border border-gray-800">
+                        <p class="text-[10px] uppercase text-gray-400 font-semibold">Status</p>
+                        <div class="text-xs font-bold text-gray-200 truncate mt-1" id="modal-metric-status">--</div>
+                        <p class="text-[10px] text-gray-500">Versorgung</p>
+                    </div>
+                    <div class="bg-gray-900/80 p-2.5 rounded-lg border border-gray-800">
+                        <p class="text-[10px] uppercase text-gray-400 font-semibold">Boot-Zyklen</p>
+                        <div class="text-xl font-bold text-gray-200" id="modal-metric-boot">#--</div>
+                        <p class="text-[10px] text-gray-500">Deep Sleep</p>
+                    </div>
+                    <div class="bg-gray-900/80 p-2.5 rounded-lg border border-gray-800">
+                        <p class="text-[10px] uppercase text-gray-400 font-semibold">Letzter Log</p>
+                        <div class="text-xs font-bold text-gray-200 mt-1" id="modal-metric-time">--</div>
+                        <p class="text-[10px] text-gray-500 font-mono" id="modal-metric-ago">Vor --</p>
+                    </div>
+                </div>
+
+                <!-- Scrollbarer Graph Container -->
+                <div class="bg-gray-950 p-3 rounded-lg border border-gray-800">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs font-bold text-gray-300">Spannungsverlauf & Kapazität</span>
+                        <span class="text-[10px] text-gray-500 font-mono">← Horizontal wischbar →</span>
+                    </div>
+                    <div class="overflow-x-auto w-full border border-gray-800/60 rounded pb-1">
+                        <div class="min-w-[650px] sm:min-w-[780px] h-56 relative p-1">
+                            <canvas id="batChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Historische Messwerte -->
+                <div class="bg-gray-900/60 rounded-lg border border-gray-800 overflow-hidden">
+                    <div class="px-3 py-2 border-b border-gray-800">
+                        <span class="text-xs font-semibold text-gray-300">Letzte 20 Messpunkte</span>
+                    </div>
+                    <div class="overflow-x-auto max-h-40">
+                        <table class="w-full text-left text-[11px] font-mono">
+                            <thead class="text-gray-400 border-b border-gray-800 bg-gray-950 sticky top-0">
+                                <tr>
+                                    <th class="py-1.5 px-3">Zeitstempel</th>
+                                    <th class="py-1.5 px-3">Spannung</th>
+                                    <th class="py-1.5 px-3">Ladung</th>
+                                    <th class="py-1.5 px-3">Modus</th>
+                                    <th class="py-1.5 px-3">Boot</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modal-log-table-body" class="divide-y divide-gray-800/60">
+                                <tr><td colspan="5" class="py-3 text-center text-gray-500">Lade Daten aus Supabase...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+
+    <!--
+      Breadcrumb: 2026-09-12 19:15 - On-Demand GPS Leaflet Map Modal
+      [CRITICAL BUGFIX FLAG - LEAFLET GREY TILE COLLAPSE]:
+      1. Uses a responsive container with min-height and dark OSM CartoDB tiles.
+      2. Includes satellite count, altitude, speed and timestamp badges.
+    -->
+    <div id="gps-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="card bg-[#111827] border border-[#233145] rounded-xl w-full max-w-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            <!-- Modal Header -->
+            <div class="p-3.5 sm:p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/80">
+                <div class="flex items-center gap-2">
+                    <span class="text-base text-blue-400">📍</span>
+                    <h2 class="text-sm font-bold uppercase tracking-wider text-gray-200">GNSS / GPS-Ortung</h2>
+                </div>
+                <button onclick="closeGpsModal()" class="text-gray-400 hover:text-white p-1 rounded-md hover:bg-gray-800 transition text-sm">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-4 overflow-y-auto space-y-3">
+                <!-- Status & KPI-Leiste -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                    <div class="bg-gray-950 p-2.5 rounded border border-gray-800">
+                        <span class="text-gray-500 block text-[10px] uppercase">Status</span>
+                        <span id="gps-fix-badge" class="font-bold text-yellow-400">Kein Fix</span>
+                    </div>
+                    <div class="bg-gray-950 p-2.5 rounded border border-gray-800">
+                        <span class="text-gray-500 block text-[10px] uppercase">Satelliten</span>
+                        <span id="gps-sats-val" class="font-bold text-gray-300">--</span>
+                    </div>
+                    <div class="bg-gray-950 p-2.5 rounded border border-gray-800">
+                        <span class="text-gray-500 block text-[10px] uppercase">Höhe / Speed</span>
+                        <span id="gps-alt-val" class="font-bold text-gray-300">-- m</span>
+                    </div>
+                    <div class="bg-gray-950 p-2.5 rounded border border-gray-800">
+                        <span class="text-gray-500 block text-[10px] uppercase">Koordinaten</span>
+                        <span id="gps-coords-val" class="font-bold text-blue-400 truncate block">--</span>
+                    </div>
+                </div>
+
+                <!-- Interaktive Karte -->
+                <div class="relative w-full h-[45vh] min-h-[260px] rounded-lg border border-[#233145] overflow-hidden bg-[#070a0f]">
+                    <div id="leaflet-map" class="w-full h-full"></div>
+                </div>
+
+                <!-- Aktionsleiste -->
+                <div class="flex flex-col sm:flex-row justify-between items-center gap-2 pt-1">
+                    <span id="gps-timestamp" class="text-[11px] font-mono text-gray-400">Letzte Messung: Nie</span>
+                    <button id="btn-request-gps" onclick="triggerGpsLocationFix()"
+                            class="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-2 rounded text-xs transition flex items-center justify-center gap-1.5">
+                        <span>📡 GPS-Position jetzt abfragen</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

@@ -458,8 +458,23 @@ function handleCommandResult(row) {
             if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
             alert('Löschfehler vom Board:\n' + (row.error_msg || 'Unbekannter Fehler'));
         }
+
+    } else if (row.command === 'GPS') {
+        if (row.status === 'DONE' && payload) {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
+            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ GPS-Fix erfasst!</span>';
+            updateGpsUI(payload);
+        } else if (row.status === 'ERROR') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
+            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">GPS-Fehler</span>';
+            alert('GPS-Fehler:\n' + (row.error_msg || 'Kein Satellitenempfang innerhalb des Zeitfensters.'));
+            updateGpsUI({ has_fix: false });
+        }
     }
 }
+
 
 // Universeller Dispatcher für alle 3 SD-Befehle (LIST, DOWNLOAD, DELETE)
 /*
@@ -1466,3 +1481,116 @@ window.onload = () => {
     fetchAllData();
     setInterval(fetchLatestData, 30000);
 };
+
+/*
+* Breadcrumb: 2026-09-12 19:20 - Leaflet Map Integration & On-Demand GPS Engine
+* [CRITICAL BUGFIX FLAG - LEAFLET RENDER & FIX TRACKING]:
+* 1. map.invalidateSize() called after modal visibility animation to prevent tile rendering artifacts.
+* 2. Uses Dark CartoDB basemap matching the dark STAG theme without API keys.
+* 3. Handles dual-channel response (Local WebSocket + Supabase Realtime).
+*/
+
+let gpsMapInstance = null;
+let gpsMarker = null;
+let gpsAccuracyCircle = null;
+
+function initLeafletMap(lat = 47.2372, lon = 9.5981) {
+    if (gpsMapInstance) return;
+
+    const mapContainer = document.getElementById('leaflet-map');
+    if (!mapContainer) return;
+
+    // Dark-Matter CartoDB Kacheln für Dark Theme
+    gpsMapInstance = L.map('leaflet-map').setView([lat, lon], 14);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19
+    }).addTo(gpsMapInstance);
+}
+
+function openGpsModal() {
+    const modal = document.getElementById('gps-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+
+    if (!gpsMapInstance) {
+        initLeafletMap();
+    }
+    // Verhindert graue Kacheln nach dem Einblenden des Containers
+    setTimeout(() => {
+        if (gpsMapInstance) gpsMapInstance.invalidateSize();
+    }, 150);
+}
+
+function closeGpsModal() {
+    const modal = document.getElementById('gps-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+window.addEventListener('click', (e) => {
+    const modal = document.getElementById('gps-modal');
+    if (modal && e.target === modal) closeGpsModal();
+});
+
+function updateGpsUI(data) {
+    const fixBadge = document.getElementById('gps-fix-badge');
+    const satsVal = document.getElementById('gps-sats-val');
+    const altVal = document.getElementById('gps-alt-val');
+    const coordsVal = document.getElementById('gps-coords-val');
+    const timeVal = document.getElementById('gps-timestamp');
+    const btn = document.getElementById('btn-request-gps');
+
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = '📡 GPS-Position jetzt abfragen';
+    }
+
+    if (!data || !data.has_fix) {
+        if (fixBadge) {
+            fixBadge.innerText = 'Kein Fix / Suche...';
+            fixBadge.className = 'font-bold text-yellow-400';
+        }
+        return;
+    }
+
+    if (fixBadge) {
+        fixBadge.innerText = 'Fix OK (3D)';
+        fixBadge.className = 'font-bold text-green-400';
+    }
+    if (satsVal) satsVal.innerText = `${data.sats || '--'} Sats`;
+    if (altVal) altVal.innerText = `${Number(data.alt || 0).toFixed(1)} m (${Number(data.speed || 0).toFixed(1)} km/h)`;
+    if (coordsVal) coordsVal.innerText = `${data.lat.toFixed(5)}, ${data.lon.toFixed(5)}`;
+    if (timeVal) timeVal.innerText = `Letzte Messung: ${new Date().toLocaleTimeString()} (${data.utc || ''})`;
+
+    const headerGps = document.getElementById('header-gps-status');
+    if (headerGps) headerGps.innerText = 'GPS OK';
+
+    // Karte zentrieren und Marker setzen
+    if (gpsMapInstance) {
+        gpsMapInstance.setView([data.lat, data.lon], 16);
+
+        if (gpsMarker) {
+            gpsMarker.setLatLng([data.lat, data.lon]);
+        } else {
+            gpsMarker = L.marker([data.lat, data.lon]).addTo(gpsMapInstance);
+        }
+
+        gpsMarker.bindPopup(`<b>STAG-IMU-01</b><br>Lat: ${data.lat.toFixed(5)}<br>Lon: ${data.lon.toFixed(5)}<br>Höhe: ${data.alt}m`).openPopup();
+    }
+}
+
+async function triggerGpsLocationFix() {
+    const btn = document.getElementById('btn-request-gps');
+    const fixBadge = document.getElementById('gps-fix-badge');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ Schalte GNSS ein & warte auf Satelliten (bis zu 45s)...';
+    }
+    if (fixBadge) {
+        fixBadge.innerText = 'Fix wird gesucht...';
+        fixBadge.className = 'font-bold text-yellow-400 animate-pulse';
+    }
+
+    // 1. Befehl via Cloud SD Command Engine absenden
+    await sendCloudCommand('GPS', '/', 'Fordere GPS-Ortung an...');
+}
