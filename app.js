@@ -652,16 +652,25 @@ function switchTab(tab) {
         }
     }
 
+    /*
+     * Breadcrumb: 2026-09-12 20:15 - Dimension-Guarded 3D Tab Switcher
+     * [CRITICAL BUGFIX FLAG - ZERO NAN VIEWPORT CRASH]:
+     * Verifies positive clientWidth and clientHeight before recalculating aspect ratio to prevent camera corruption.
+     */
     if (tab === '3d') {
         setTimeout(() => {
             const container = document.getElementById('canvas-container');
             if (container && camera && renderer) {
-                camera.aspect = container.clientWidth / container.clientHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(container.clientWidth, container.clientHeight);
+                const nw = container.clientWidth;
+                const nh = container.clientHeight;
+                if (nw > 0 && nh > 0) {
+                    camera.aspect = nw / nh;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(nw, nh);
+                }
             }
             drawAccGraphs();
-        }, 50);
+        }, 80);
     }
     if (tab === 'telemetry') fetchLatestData();
     if (tab === 'imulogs') fetchImuCloudLogs();
