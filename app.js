@@ -746,6 +746,13 @@ async function uploadFileToSd() {
 // ==========================================
 // 4. TAB NAVIGATION & SETTINGS
 // ==========================================
+/*
+ * Breadcrumb: 2026-09-12 17:25 - Tab-Aware Resource Throttling & Reconnect Engine
+ * [CRITICAL BUGFIX FLAG - STREAM RESTORATION]:
+ * 1. Stops polling timers immediately when navigating away from the SD tab.
+ * 2. Restores 3D Canvas aspect ratio and WebGL viewport rendering on return to 3d tab.
+ * 3. Prevents background DOM/fetch accumulation.
+ */
 function switchTab(tab) {
     ['3d', 'telemetry', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
         const tabEl = document.getElementById(`tab-${t}`);
@@ -759,7 +766,25 @@ function switchTab(tab) {
     if (activeTab) activeTab.classList.remove('hidden');
     if (activeBtn) activeBtn.className = "bg-stag-green text-white px-4 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition";
 
-    if (tab === '3d') setTimeout(drawAccGraphs, 60);
+    // Dateimanager-Timer stoppen, wenn man den Tab verlässt
+    if (tab !== 'files') {
+        if (typeof activeCommandPollTimer !== 'undefined' && activeCommandPollTimer) {
+            clearInterval(activeCommandPollTimer);
+            activeCommandPollTimer = null;
+        }
+    }
+
+    if (tab === '3d') {
+        setTimeout(() => {
+            const container = document.getElementById('canvas-container');
+            if (container && camera && renderer) {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            }
+            drawAccGraphs();
+        }, 50);
+    }
     if (tab === 'telemetry') fetchLatestData();
     if (tab === 'imulogs') fetchImuCloudLogs();
     if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
