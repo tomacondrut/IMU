@@ -268,10 +268,11 @@ async function sendCloudCommand(command, path, statusPrompt) {
             handleCommandResult(checkData);
         }
 
-        if (Date.now() - startTime > 25000) {
+        const maxWaitMs = (command === 'DOWNLOAD') ? 60000 : 25000;
+        if (Date.now() - startTime > maxWaitMs) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            appendTerminalLog(`[CLOUD CMD TIMEOUT] Keine Rückmeldung nach 25s.`);
+            appendTerminalLog(`[CLOUD CMD TIMEOUT] Keine Rückmeldung auf '${command}' nach ${maxWaitMs / 1000}s.`);
             if (stat) stat.innerHTML = '<span class="text-amber-600 font-bold">Timeout</span>';
         }
     }, 1500);
@@ -342,7 +343,37 @@ function navigateCloudSdUp() {
     loadCloudSdDirectory(parent);
 }
 
+/*
+ * Breadcrumb: 2026-09-14 00:50 - Instant CDN Download for Synced Chunks & 60s Timeout
+ * [CRITICAL BUGFIX FLAG - ZERO LATENCY DOWNLOAD]:
+ * 1. .synced files are ALREADY in Supabase Storage: downloads instantly from CDN URL without ESP32 radio load.
+ * 2. Unsynced files (configs, active logs) are uploaded by ESP32 with an extended 60s timeout.
+ */
 async function requestCloudDownload(path, fileName) {
+    const stat = document.getElementById('sd-cloud-status-badge');
+
+    // FAST-PATH: Datei wurde bereits in die Cloud synchronisiert
+    if (fileName.endsWith('.synced')) {
+        const cleanName = fileName.replace('.synced', '');
+        const parts = path.split('/');
+        // Ordner ermitteln (z.B. '2026-09-12' aus '/Logs/2026-09-12/...')
+        const dayFolder = parts[parts.length - 2] || '';
+        const directUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${selectedDeviceId}/${dayFolder}/${cleanName}`;
+
+        appendTerminalLog(`\n[DOWNLOAD] Direkter CDN-Download aus Supabase Storage: ${cleanName}`);
+        if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ Download gestartet!</span>';
+
+        const a = document.createElement('a');
+        a.href = directUrl;
+        a.download = cleanName;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+    }
+
+    // SLOW-PATH: Unsynchronisierte Datei (z.B. config.json) vom Board anfordern
     await sendCloudCommand('DOWNLOAD', path, `Bereite "${fileName}" vor...`);
 }
 
