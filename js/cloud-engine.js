@@ -1,10 +1,9 @@
 /*
- * Breadcrumb: 2026-09-13 09:30 - Multi-Device Cloud Command Engine with Live Tracing
- * [CRITICAL BUGFIX FLAG - GPS FEEDBACK & DISPATCH VISIBILITY]:
- * 1. Targets realtime:imu_live_<selectedDeviceId> to isolate data streams per board.
- * 2. Logs every command lifecycle directly into the terminal so GPS triggers are immediately visible.
- * 3. Dismissed blind PENDING-deletes: preserves command records to prevent command drops.
- * 4. Extended GPS timeout to 45s to accommodate cold-start GNSS ephemeris acquisition.
+ * Breadcrumb: 2026-09-13 10:10 - Resilient Cloud Engine with Legacy Topic Fallback
+ * [CRITICAL BUGFIX FLAG - DUAL CHANNEL COMPATIBILITY]:
+ * 1. Subscribes to 'imu_live' for STAG-IMU-01 (matches current ESP32 firmware) and 'imu_live_STAG-IMU-02' for box 2.
+ * 2. Connects pos, log and phx_reply events directly to 3D engine and terminal drawer.
+ * 3. Handles SD and GPS command dispatching with UI error badges.
  */
 
 function initRealtimeChannel() {
@@ -13,7 +12,9 @@ function initRealtimeChannel() {
         liveChannel = null;
     }
 
-    const topic = `imu_live_${selectedDeviceId}`;
+    // Abwärtskompatibel: STAG-IMU-01 nutzt 'imu_live' der aktuellen Firmware
+    const topic = (selectedDeviceId === 'STAG-IMU-01') ? 'imu_live' : `imu_live_${selectedDeviceId}`;
+
     liveChannel = sbClient.channel(topic, {
         config: { broadcast: { ack: false } }
     });
@@ -30,7 +31,6 @@ function initRealtimeChannel() {
         qw = inW; qx = inX; qy = inY; qz = inZ;
         lastQw = qw; lastQx = qx; lastQy = qy; lastQz = qz;
 
-        // An 3D-Engine weiterreichen (falls Modul geladen)
         if (window.updateTargetOrientation) {
             window.updateTargetOrientation(qw, qx, qy, qz);
         }
@@ -59,10 +59,11 @@ function initRealtimeChannel() {
         const ind = document.getElementById('realtime-indicator');
         if (!ind) return;
         if (status === 'SUBSCRIBED') {
-            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ${selectedDeviceId} LIVE`;
-            ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-950/40 text-green-400 border border-green-800';
+            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ${selectedDeviceId} LIVE`;
+            ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300';
         } else {
-            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-yellow-500"></span> ${status}`;
+            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> ${status}`;
+            ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300';
         }
     });
 }
@@ -99,19 +100,19 @@ function handleCommandResult(row) {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
             renderCloudFileList(payload?.items || []);
-            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Ordner geladen</span>';
+            if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ Ordner geladen</span>';
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
             document.getElementById('sd-file-list').innerHTML =
-                `<div class="text-xs text-red-400 py-3 text-center">Fehler: ${row.error_msg || 'Ordner konnte nicht gelesen werden.'}</div>`;
-            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
+                `<div class="text-xs text-red-600 py-3 text-center">Fehler: ${row.error_msg || 'Ordner konnte nicht gelesen werden.'}</div>`;
+            if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">Fehler</span>';
         }
     } else if (row.command === 'DOWNLOAD') {
         if (row.status === 'DONE' && payload?.download_url) {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Download bereit!</span>';
+            if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ Download bereit!</span>';
 
             const a = document.createElement('a');
             a.href = payload.download_url;
@@ -123,32 +124,32 @@ function handleCommandResult(row) {
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
+            if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">Fehler</span>';
             alert('Download-Fehler vom Board:\n' + (row.error_msg || 'Unbekannter Fehler'));
         }
     } else if (row.command === 'DELETE') {
         if (row.status === 'DONE') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ Gelöscht</span>';
+            if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ Gelöscht</span>';
             setTimeout(() => { loadCloudSdDirectory(currentCloudSdDir); }, 600);
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">Fehler</span>';
+            if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">Fehler</span>';
             alert('Löschfehler vom Board:\n' + (row.error_msg || 'Unbekannter Fehler'));
         }
     } else if (row.command === 'GPS') {
         if (row.status === 'DONE' && payload) {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-green-400 font-bold">✓ GPS-Fix erfasst!</span>';
+            if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ GPS-Fix erfasst!</span>';
             appendTerminalLog(`[GPS FIX] Lat: ${payload.lat} | Lon: ${payload.lon} | Sats: ${payload.sats}`);
             if (window.updateGpsUI) window.updateGpsUI(payload);
         } else if (row.status === 'ERROR') {
             if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            if (stat) stat.innerHTML = '<span class="text-red-400 font-bold">GPS-Fehler</span>';
+            if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">GPS-Fehler</span>';
             appendTerminalLog(`[GPS FEHLER] ${row.error_msg || 'Kein Satellitenempfang.'}`);
             if (window.updateGpsUI) window.updateGpsUI({ has_fix: false });
         }
@@ -157,7 +158,7 @@ function handleCommandResult(row) {
 
 async function sendCloudCommand(command, path, statusPrompt) {
     const stat = document.getElementById('sd-cloud-status-badge');
-    if (stat) stat.innerHTML = `<span class="text-yellow-400 font-mono animate-pulse">${statusPrompt}</span>`;
+    if (stat) stat.innerHTML = `<span class="text-amber-600 font-mono animate-pulse">${statusPrompt}</span>`;
 
     if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
     initCloudCommandChannel();
@@ -174,7 +175,7 @@ async function sendCloudCommand(command, path, statusPrompt) {
     if (error) {
         console.error('[SD CLOUD] FEHLER beim INSERT:', error);
         appendTerminalLog(`[CLOUD CMD FEHLER] INSERT gescheitert: ${error.message}`);
-        if (stat) stat.innerHTML = `<span class="text-red-400 font-bold">Fehler: ${error.message}</span>`;
+        if (stat) stat.innerHTML = `<span class="text-red-600 font-bold">Fehler: ${error.message}</span>`;
         alert(`Befehlsfehler (${command}): ${error.message}\n\nPrüfe RLS-Policies auf 'sd_cloud_commands'!`);
         return;
     }
@@ -206,16 +207,15 @@ async function sendCloudCommand(command, path, statusPrompt) {
                 appendTerminalLog(`[CLOUD CMD] Befehl #${activeCommandId} beendet (${checkData.status}).`);
                 handleCommandResult(checkData);
             } else {
-                if (stat) stat.innerHTML = `<span class="text-yellow-400 font-mono animate-pulse">Warte auf ${selectedDeviceId} (#${activeCommandId} &bull; ${elapsed}s)...</span>`;
+                if (stat) stat.innerHTML = `<span class="text-amber-600 font-mono animate-pulse">Warte auf ${selectedDeviceId} (#${activeCommandId} &bull; ${elapsed}s)...</span>`;
             }
         }
 
-        // 45s Timeout für GPS-Kaltstart
         if (Date.now() - startTime > 45000) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
             appendTerminalLog(`[CLOUD CMD TIMEOUT] ${selectedDeviceId} hat auf '${command}' nicht geantwortet.`);
-            if (stat) stat.innerHTML = '<span class="text-yellow-400 font-bold">Timeout</span>';
+            if (stat) stat.innerHTML = '<span class="text-amber-600 font-bold">Timeout</span>';
             if (command === 'GPS') {
                 const fixBadge = document.getElementById('gps-fix-badge');
                 if (fixBadge) fixBadge.innerText = 'Timeout (Keine Rückmeldung)';
@@ -237,22 +237,14 @@ async function loadCloudSdDirectory(dir) {
     if (pathEl) pathEl.innerText = currentCloudSdDir;
 
     document.getElementById('sd-file-list').innerHTML = `
-      <div class="text-xs text-green-400 py-4 text-center space-y-2">
+      <div class="text-xs text-green-700 py-4 text-center space-y-2">
         <div class="animate-pulse">⏳ Öffne "${currentCloudSdDir}" auf ${selectedDeviceId}...</div>
-        <p class="text-[11px] text-gray-500">Board liest Dateisystem ein...</p>
+        <p class="text-[11px] text-slate-500">Board liest Dateisystem ein...</p>
       </div>
     `;
 
     await sendCloudCommand('LIST', currentCloudSdDir, 'Lade Ordner...');
 }
-
-/*
- * Breadcrumb: 2026-09-13 10:00 - Light Theme SD File Renderer & Mode Toggle
- * [CRITICAL BUGFIX FLAG - LIGHT UI SYNC]:
- * 1. Folder rows rendered in subtle green-50 with green-700 typography.
- * 2. File rows rendered in pure white card style with slate-800 labels.
- * 3. Live mode toggle button styled with clean white/green contrast.
- */
 
 function renderCloudFileList(items) {
     const listEl = document.getElementById('sd-file-list');
@@ -290,15 +282,6 @@ function renderCloudFileList(items) {
             `;
         }
     }).join('');
-}
-
-function toggleLiveModeUI() {
-    liveModeActive = !liveModeActive;
-    const btn = document.getElementById('btn-toggle-live');
-    btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
-    btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
 }
 
 function navigateCloudSdUp() {
@@ -339,8 +322,8 @@ async function fetchConfig() {
     const btn = document.getElementById('btn-toggle-live');
     btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
     btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white border border-green-400 transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition";
+        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
+        : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
 }
 
 async function saveConfigToCloud() {
@@ -378,9 +361,18 @@ async function saveConfigToCloud() {
 
     if (error) {
         status.innerText = 'Fehler beim Speichern: ' + error.message;
-        status.className = 'text-xs text-center mt-2 text-red-400 font-mono font-bold';
+        status.className = 'text-xs text-center mt-2 text-red-600 font-mono font-bold';
     } else {
         status.innerText = `✓ Gespeichert! ${selectedDeviceId} synchronisiert beim nächsten Sync.`;
-        status.className = 'text-xs text-center mt-2 text-green-400 font-mono font-bold';
+        status.className = 'text-xs text-center mt-2 text-green-700 font-mono font-bold';
     }
+}
+
+function toggleLiveModeUI() {
+    liveModeActive = !liveModeActive;
+    const btn = document.getElementById('btn-toggle-live');
+    btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
+    btn.className = liveModeActive
+        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
+        : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
 }
