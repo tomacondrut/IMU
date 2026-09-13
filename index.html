@@ -102,8 +102,10 @@
         </button>
     </div>
 
+
     <!-- TAB 0: 3D LIVE-STREAM & ACCELERATION WAVEFORMS -->
     <main id="tab-3d">
+        <!-- 3D Viewport: Hellgrauer Studio-Look -->
         <div class="card rounded-lg p-3 mb-4">
             <div id="canvas-container" class="w-full h-[42vh] rounded-lg relative overflow-hidden border border-slate-300" style="background-color: #dbe2ea;">
                 <div id="overlay-status" class="absolute bottom-2 left-2 bg-white/95 backdrop-blur-sm border border-slate-300 px-3 py-1.5 rounded text-[11px] font-mono text-slate-800 pointer-events-none z-10 leading-tight shadow-sm">
@@ -362,6 +364,17 @@
                                 <input type="text" id="cfg-sim-apn" placeholder="gprs.swisscom.ch"
                                        class="w-full bg-white border border-slate-300 rounded p-1.5 text-xs text-slate-900 outline-none focus:border-green-600">
                             </div>
+                        </div>
+                        <!-- LTE-Diagnosetest Trigger -->
+                        <div class="mt-3 pt-2.5 border-t border-slate-200 flex items-center justify-between">
+                            <div>
+                                <span class="text-xs font-bold text-slate-800">Modem-Diagnose</span>
+                                <p class="text-[11px] text-slate-500">Prüft SIM, Netzregistrierung, Signal (CSQ) und Datenkanal.</p>
+                            </div>
+                            <button type="button" onclick="triggerLteDiagnosticTest()"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3.5 py-1.5 rounded-lg text-xs shadow-sm transition flex items-center gap-1.5">
+                                <span>⚡ LTE Testen</span>
+                            </button>
                         </div>
                     </div>
 
