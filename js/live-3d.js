@@ -20,45 +20,84 @@ function createFallbackCube() {
     scene.add(modelMesh);
 }
 
+/*
+ * Breadcrumb: 2026-09-13 16:50 - Multi-Path GLB Loader, CAD Centering Group & Syntax Fix
+ * [CRITICAL BUGFIX FLAG - GLB LOADING & ANIMATE SCOPE]:
+ * 1. Fixed missing closing brace in animate() that caused fatal JavaScript parse error.
+ * 2. Wraps gltfScene into THREE.Group to center CAD bounding box regardless of Inventor export origin.
+ * 3. Sets DoubleSide on materials to prevent transparent back-faces on thin-walled enclosures.
+ * 4. Multi-path loader fallback (./IMU.glb, ./model.glb, IMU.glb, /model.glb) with verbose error logging.
+ */
+
 function setupModelMesh(gltfScene) {
     if (modelMesh && scene) scene.remove(modelMesh);
-    modelMesh = gltfScene;
 
-    const box = new THREE.Box3().setFromObject(modelMesh);
+    // Bounding-Box berechnen & geometrisches Zentrum ermitteln
+    const box = new THREE.Box3().setFromObject(gltfScene);
+    const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
+
+    // CAD-Materialien absichern (beidseitig sichtbar gegen invertierte Flächen)
+    gltfScene.traverse((child) => {
+        if (child.isMesh && child.material) {
+            child.material.side = THREE.DoubleSide;
+        }
+    });
+
+    // In eine übergeordnete Gruppe einbetten:
+    // gltfScene wird relativ zum geometrischen Mittelpunkt verschoben.
+    // Die Gruppe selbst rotiert und verschiebt sich exakt um (0,0,0).
+    const group = new THREE.Group();
     if (maxDim > 0) {
         const s = 1.8 / maxDim;
-        modelMesh.scale.set(s, s, s);
+        gltfScene.scale.set(s, s, s);
+        gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
     }
+    group.add(gltfScene);
+
+    modelMesh = group;
     scene.add(modelMesh);
 }
 
 function loadGLBModel() {
     if (typeof THREE.GLTFLoader === 'undefined') {
+        console.warn("[3D] THREE.GLTFLoader nicht geladen. Fallback-Würfel aktiv.");
         createFallbackCube();
         return;
     }
-    const loader = new THREE.GLTFLoader();
-    loader.load('./IMU.glb', (gltf) => {
-        setupModelMesh(gltf.scene);
-        console.log("[3D] IMU.glb erfolgreich geladen!");
-    }, undefined, () => {
-        createFallbackCube();
-    });
-}
 
-window.updateTargetOrientation = function (w, x, y, z) {
-    const norm = Math.hypot(x, y, z, w) || 1.0;
-    const qTarget = new THREE.Quaternion(-y / norm, x / norm, z / norm, w / norm);
-    qTarget.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-
-    // Antipodale Ausrichtung: Verhindert 180°-Rücksetzer bei Vorzeichenwechsel
-    if (targetQuaternion.dot(qTarget) < 0) {
-        qTarget.set(-qTarget.x, -qTarget.y, -qTarget.z, -qTarget.w);
+    if (window.location.protocol === 'file:') {
+        console.warn("[3D HINWEIS] Seite läuft über file:// - Browser blockieren das Laden lokaler GLB-Dateien via XHR. Bitte über lokalen Webserver (z.B. VS Code Live Server) ausführen.");
     }
-    targetQuaternion.copy(qTarget);
-};
+
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', './model.glb', 'IMU.glb', 'model.glb', '/IMU.glb', '/model.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            console.error("[3D FEHLER] GLB-Datei unter keinem der Standardpfade gefunden. Fallback-Box aktiv.");
+            createFallbackCube();
+            return;
+        }
+
+        const path = candidatePaths[index];
+        loader.load(
+            path,
+            (gltf) => {
+                setupModelMesh(gltf.scene);
+                console.log(`[3D] Modell erfolgreich geladen aus: ${path}`);
+            },
+            undefined,
+            (err) => {
+                console.warn(`[3D] Pfad "${path}" nicht erreichbar (${err.message || '404/CORS'}). Probiere nächsten...`);
+                tryLoad(index + 1);
+            }
+        );
+    }
+
+    tryLoad(0);
+}
 
 window.resize3DViewport = function () {
     const container = document.getElementById('canvas-container');
@@ -155,6 +194,7 @@ window.init3D = function () {
          * Checks both window.graphNeedsRedraw and lexical fallback.
          * Only clears flag if drawAccGraphs succeeded (w > 0 and h > 0).
          */
+        // 2D-Graphen auf ~14 FPS gedrosselt (70 ms), entlastet den Haupt-Thread
         const redrawRequired = window.graphNeedsRedraw || (typeof graphNeedsRedraw !== 'undefined' && graphNeedsRedraw);
         if (redrawRequired && (now - lastGraphDrawTime >= 70)) {
             lastGraphDrawTime = now;
@@ -166,5 +206,6 @@ window.init3D = function () {
                 }
             }
         }
+    } // <-- [WICHTIGER BUGFIX]: Schließt function animate(now)
     requestAnimationFrame(animate);
 };
