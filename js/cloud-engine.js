@@ -6,25 +6,25 @@
  * 3. Handles SD and GPS command dispatching with UI error badges.
  */
 
+/*
+ * Breadcrumb: 2026-09-13 23:55 - Direct Realtime WSS Command & Response Engine
+ * [CRITICAL BUGFIX FLAG - IMMEDIATE COMMAND DISPATCH]:
+ * 1. Broadcasts commands ('cmd') directly through the established WebSocket connection.
+ * 2. Listens for 'cmd_res' to update UI in <50ms without waiting for REST table polling.
+ * 3. Still inserts into sd_cloud_commands for persistent history.
+ */
 function initRealtimeChannel() {
     if (liveChannel) {
         sbClient.removeChannel(liveChannel);
         liveChannel = null;
     }
 
-    // Abwärtskompatibel: STAG-IMU-01 nutzt 'imu_live' der aktuellen Firmware
     const topic = (selectedDeviceId === 'STAG-IMU-01') ? 'imu_live' : `imu_live_${selectedDeviceId}`;
 
     liveChannel = sbClient.channel(topic, {
         config: { broadcast: { ack: false } }
     });
 
-    /*
- * Breadcrumb: 2026-09-13 16:40 - Synchronized Accel & Redraw Flag Dispatcher
- * [CRITICAL BUGFIX FLAG - LIVE STREAM PROPAGATION]:
- * Propagates curAx/ay/az and graphNeedsRedraw directly to window so live-3d.js
- * render loop receives continuous triggers on incoming packets.
- */
     liveChannel.on('broadcast', { event: 'pos' }, (event) => {
         const d = event.payload?.payload || event.payload;
         if (!d) return;
@@ -64,6 +64,16 @@ function initRealtimeChannel() {
         const d = event.payload?.payload || event.payload;
         if (d && d.msg) {
             appendTerminalLog(d.msg);
+        }
+    });
+
+    // Sofort-Rückmeldung von Befehlen über WebSocket empfangen
+    liveChannel.on('broadcast', { event: 'cmd_res' }, (event) => {
+        const row = event.payload?.payload || event.payload;
+        if (!row) return;
+        if (activeCommandId && row.id === activeCommandId) {
+            appendTerminalLog(`[CLOUD CMD] Sofort-Antwort via WSS erhalten (#${row.id}: ${row.status})`);
+            handleCommandResult(row);
         }
     });
 
@@ -204,10 +214,23 @@ async function sendCloudCommand(command, path, statusPrompt) {
         return;
     }
 
-    appendTerminalLog(`[CLOUD CMD] Befehl #${data.id} in Warteschlange. Warte auf ${selectedDeviceId}...`);
     activeCommandId = data.id;
-    const startTime = Date.now();
+    appendTerminalLog(`[CLOUD CMD] Befehl #${data.id} aktiv. Sende Echtzeit-Trigger...`);
 
+    // Sofortiger Direkt-Versand über den offenen WebSocket
+    if (liveChannel) {
+        liveChannel.send({
+            type: 'broadcast',
+            event: 'cmd',
+            payload: {
+                id: data.id,
+                command: command,
+                path: path
+            }
+        });
+    }
+
+    const startTime = Date.now();
     activeCommandPollTimer = setInterval(async () => {
         if (!activeCommandId) {
             clearInterval(activeCommandPollTimer);
@@ -220,34 +243,17 @@ async function sendCloudCommand(command, path, statusPrompt) {
             .eq('id', activeCommandId)
             .single();
 
-        if (pollErr) {
-            console.warn('[SD CLOUD] Polling-Warnung:', pollErr.message);
-            return;
+        if (checkData && (checkData.status === 'DONE' || checkData.status === 'ERROR')) {
+            handleCommandResult(checkData);
         }
 
-        if (checkData) {
-            const elapsed = Math.round((Date.now() - startTime) / 1000);
-            if (checkData.status === 'DONE' || checkData.status === 'ERROR') {
-                appendTerminalLog(`[CLOUD CMD] Befehl #${activeCommandId} beendet (${checkData.status}).`);
-                handleCommandResult(checkData);
-            } else {
-                if (stat) stat.innerHTML = `<span class="text-amber-600 font-mono animate-pulse">Warte auf ${selectedDeviceId} (#${activeCommandId} &bull; ${elapsed}s)...</span>`;
-            }
-        }
-
-        if (Date.now() - startTime > 45000) {
+        if (Date.now() - startTime > 25000) {
             clearInterval(activeCommandPollTimer);
             activeCommandId = null;
-            appendTerminalLog(`[CLOUD CMD TIMEOUT] ${selectedDeviceId} hat auf '${command}' nicht geantwortet.`);
+            appendTerminalLog(`[CLOUD CMD TIMEOUT] Keine Rückmeldung nach 25s.`);
             if (stat) stat.innerHTML = '<span class="text-amber-600 font-bold">Timeout</span>';
-            if (command === 'GPS') {
-                const fixBadge = document.getElementById('gps-fix-badge');
-                if (fixBadge) fixBadge.innerText = 'Timeout (Keine Rückmeldung)';
-                const btn = document.getElementById('btn-request-gps');
-                if (btn) { btn.disabled = false; btn.innerText = '📡 GPS-Position jetzt abfragen'; }
-            }
         }
-    }, 1000);
+    }, 1500);
 }
 
 async function loadCloudSdDirectory(dir) {
