@@ -1,12 +1,16 @@
 /*
- * Breadcrumb: 2026-09-13 10:00 - High-Contrast Light Theme Oscilloscope
- * [CRITICAL BUGFIX FLAG - CANVAS VISIBILITY]:
- * 1. Switched gridlines to visible slate-300/400 (rgba(15, 23, 42, 0.08)).
- * 2. Time-step labels rendered in crisp slate-500 (#64748b).
- * 3. Metric badges styled with clean white background and clear contrast borders.
+ * Breadcrumb: 2026-09-13 17:45 - Clean 30s Time-Anchored Oscilloscope Engine
+ * [CRITICAL BUGFIX FLAG - DEDUPLICATION & 30S FIXED GRID]:
+ * 1. Removed duplicate drawSingleAxis and jumpAccLive function declarations.
+ * 2. Default zoom locked to 300 points (30.0s time window at 10 Hz).
+ * 3. Physical time-grid (-5s, -10s, -15s, -20s, -25s, -30s) locked to fixed pixel offsets.
+ * 4. Fixed left-to-right sample progression: incoming live data enters at x = w
+ *    and scrolls left without startup squashing or stretching.
+ * 5. Robust firstPoint path clipping protects against off-screen panning tears.
+ * 6. Explicit window exports for all HTML UI interaction bindings.
  */
 
-let accZoom = 100; // 100 Punkte = 10 s Standardfenster
+let accZoom = 300; // 300 Punkte = 30 Sekunden Standardfenster bei 10 Hz
 let accPan = 100;  // 0 bis 100% (100 = Live-Rand)
 let isAccLive = true;
 
@@ -14,17 +18,32 @@ function onAccZoom(v) {
     accZoom = parseInt(v, 10);
     const valEl = document.getElementById('acc-zoom-val');
     if (valEl) valEl.innerText = (accZoom / 10).toFixed(0) + 's';
+    updateZoomButtonsUI(accZoom / 10);
     drawAccGraphs();
 }
 
 function setAccZoomPreset(seconds) {
-    const points = Math.min(Math.max(seconds * 10, 20), 600);
+    const points = Math.min(Math.max(seconds * 10, 50), 600);
     accZoom = points;
     const zoomEl = document.getElementById('acc-zoom');
     if (zoomEl) zoomEl.value = points;
     const valEl = document.getElementById('acc-zoom-val');
     if (valEl) valEl.innerText = seconds + 's';
+    updateZoomButtonsUI(seconds);
     drawAccGraphs();
+}
+
+function updateZoomButtonsUI(activeSec) {
+    [5, 10, 30, 60].forEach(s => {
+        const btn = document.getElementById(`btn-zoom-${s}`);
+        if (btn) {
+            if (s === activeSec) {
+                btn.className = "px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition";
+            } else {
+                btn.className = "px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 shadow-sm transition";
+            }
+        }
+    });
 }
 
 function onAccPan(v) {
@@ -47,12 +66,6 @@ function jumpAccLive() {
     onAccPan(100);
 }
 
-/*
- * Breadcrumb: 2026-09-13 16:40 - Boolean Layout Guard for Canvas Drawing
- * [CRITICAL BUGFIX FLAG - LAYOUT DETECTION]:
- * Returns false if canvas dimensions are 0 (waiting for layout pass),
- * allowing live-3d.js to keep graphNeedsRedraw=true until successfully rendered.
- */
 function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx) {
     const cv = document.getElementById(cvId);
     if (!cv) return false;
@@ -67,9 +80,13 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     ctx.clearRect(0, 0, w, h);
 
     const midY = h / 2;
-    const count = endIdx - startIdx;
-    const timeWindowSec = (count > 1) ? (count / 10) : (accZoom / 10);
+    const leftMargin = 38;
+    const plotW = w - leftMargin;
 
+    // Feste Zeitfenster-Länge in Sekunden (Standard: 30s)
+    const windowSec = accZoom / 10;
+
+    // 1. Horizontale Amplituden-Gitterlinien
     const gridLines = [
         { ratio: 1.0, style: 'rgba(15, 23, 42, 0.09)', label: `+${maxAbs.toFixed(1)}` },
         { ratio: 0.5, style: 'rgba(15, 23, 42, 0.05)', label: `+${(maxAbs * 0.5).toFixed(1)}` },
@@ -80,36 +97,37 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
 
     ctx.font = '9px monospace';
     gridLines.forEach(gl => {
-        const y = midY - gl.ratio * (midY - 6);
+        const y = midY - gl.ratio * (midY - 8);
         ctx.strokeStyle = gl.style;
         ctx.lineWidth = gl.ratio === 0 ? 1 : 0.8;
         if (gl.dashed) ctx.setLineDash([3, 3]);
         else ctx.setLineDash([]);
 
         ctx.beginPath();
-        ctx.moveTo(32, y);
+        ctx.moveTo(leftMargin, y);
         ctx.lineTo(w, y);
         ctx.stroke();
 
         ctx.fillStyle = '#64748b';
-        ctx.fillText(gl.label, 4, y + 3);
+        ctx.fillText(gl.label, 2, y + 3);
     });
     ctx.setLineDash([]);
 
+    // 2. Feste vertikale Zeit-Rasterlinien (bleiben an festen Pixeln stehen)
     let timeStepSec = 5;
-    if (timeWindowSec <= 5) timeStepSec = 1;
-    else if (timeWindowSec <= 15) timeStepSec = 2;
-    else if (timeWindowSec <= 35) timeStepSec = 5;
+    if (windowSec <= 5) timeStepSec = 1;
+    else if (windowSec <= 15) timeStepSec = 2;
+    else if (windowSec <= 35) timeStepSec = 5;
     else timeStepSec = 10;
 
-    const numTimeSteps = Math.floor(timeWindowSec / timeStepSec);
-    ctx.strokeStyle = 'rgba(15, 23, 42, 0.05)';
+    const numSteps = Math.floor(windowSec / timeStepSec);
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
     ctx.fillStyle = '#94a3b8';
 
-    for (let t = 1; t <= numTimeSteps; t++) {
+    for (let t = 1; t <= numSteps; t++) {
         const secAgo = t * timeStepSec;
-        const px = w - (secAgo / timeWindowSec) * w;
-        if (px > 35) {
+        const px = w - (secAgo / windowSec) * plotW;
+        if (px >= leftMargin) {
             ctx.beginPath();
             ctx.moveTo(px, 0);
             ctx.lineTo(px, h);
@@ -118,13 +136,15 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
         }
     }
 
+    const count = endIdx - startIdx;
     if (count < 2) {
         ctx.fillStyle = '#64748b';
         ctx.font = '11px monospace';
-        ctx.fillText(`${label}: Warte auf Sensor-Stream...`, 40, midY + 4);
+        ctx.fillText(`${label}: Signal läuft ein... (${windowSec.toFixed(0)}s Fenster)`, leftMargin + 10, midY + 4);
         return true;
     }
 
+    // 3. Statistische Auswertung
     let sumSq = 0;
     let minVal = Infinity;
     let maxVal = -Infinity;
@@ -139,42 +159,38 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     const p2p = maxVal - minVal;
     const curVal = accHistory[endIdx - 1][axisKey];
 
+    // 4. Kurvenverlauf mit festem Zeitanker zeichnen
     ctx.save();
     ctx.beginPath();
-    ctx.rect(32, 0, w - 32, h);
+    ctx.rect(leftMargin, 0, plotW, h);
     ctx.clip();
-
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, colorHex + '25');
-    grad.addColorStop(0.5, colorHex + '06');
-    grad.addColorStop(1, colorHex + '25');
-
-    ctx.beginPath();
-    ctx.moveTo(32, midY);
-    for (let i = 0; i < count; i++) {
-        const pt = accHistory[startIdx + i];
-        const px = 32 + (i / (count - 1)) * (w - 32);
-        const py = midY - (pt[axisKey] / maxAbs) * (midY - 6);
-        ctx.lineTo(px, py);
-    }
-    ctx.lineTo(w, midY);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
 
     ctx.strokeStyle = colorHex;
     ctx.lineWidth = 1.8;
     ctx.beginPath();
+
+    const anchorIdx = isAccLive ? (endIdx - 1) : endIdx;
+    let firstPoint = true;
+
     for (let i = 0; i < count; i++) {
         const pt = accHistory[startIdx + i];
-        const px = 32 + (i / (count - 1)) * (w - 32);
-        const py = midY - (pt[axisKey] / maxAbs) * (midY - 6);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
+        const agePoints = (anchorIdx - (startIdx + i));
+        const px = w - (agePoints / accZoom) * plotW;
+        const py = midY - (pt[axisKey] / maxAbs) * (midY - 8);
+
+        if (px >= leftMargin - 10) {
+            if (firstPoint) {
+                ctx.moveTo(px, py);
+                firstPoint = false;
+            } else {
+                ctx.lineTo(px, py);
+            }
+        }
     }
     ctx.stroke();
     ctx.restore();
 
+    // 5. Live-Messwertanzeige
     const badgeText = `${label}  IST: ${(curVal >= 0 ? '+' : '')}${curVal.toFixed(2)} m/s² | RMS: ${rms.toFixed(2)} | P-P: ${p2p.toFixed(2)}`;
     ctx.font = 'bold 10px monospace';
     const textW = ctx.measureText(badgeText).width;
@@ -226,4 +242,9 @@ function drawAccGraphs() {
     return true;
 }
 
+// Globale Bereitstellung für Event-Handler aus index.html
+window.onAccZoom = onAccZoom;
+window.setAccZoomPreset = setAccZoomPreset;
+window.onAccPan = onAccPan;
+window.jumpAccLive = jumpAccLive;
 window.drawAccGraphs = drawAccGraphs;
