@@ -106,8 +106,19 @@
     <!-- TAB 0: 3D LIVE-STREAM & ACCELERATION WAVEFORMS -->
     <main id="tab-3d">
         <!-- 3D Viewport: Hellgrauer Studio-Look -->
+        <!-- Breadcrumb: 2026-09-13 17:10 - 3D Isometric Viewport with Camera Controls & Quick Presets -->
         <div class="card rounded-lg p-3 mb-4">
-            <div id="canvas-container" class="w-full h-[42vh] rounded-lg relative overflow-hidden border border-slate-300" style="background-color: #dbe2ea;">
+            <div id="canvas-container" class="w-full h-[45vh] min-h-[300px] rounded-lg relative overflow-hidden border border-slate-300" style="background-color: #dbe2ea;">
+
+                <!-- Schnellauswahl Blickwinkel -->
+                <div class="absolute top-2 right-2 flex items-center gap-1 z-10 bg-white/90 backdrop-blur-sm border border-slate-300 rounded-lg p-1 shadow-sm select-none">
+                    <button onclick="setCameraView('iso')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Isometrische 3D-Ansicht">🎲 3D Iso</button>
+                    <button onclick="setCameraView('top')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Draufsicht (Top-Down)">🔝 Oben</button>
+                    <button onclick="setCameraView('front')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Frontansicht">📐 Front</button>
+                    <button onclick="setCameraView('side')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Seitenansicht">↔ Seite</button>
+                    <button onclick="setCameraView('reset')" class="px-1.5 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-500 transition" title="Kamera zurücksetzen">🔄</button>
+                </div>
+
                 <div id="overlay-status" class="absolute bottom-2 left-2 bg-white/95 backdrop-blur-sm border border-slate-300 px-3 py-1.5 rounded text-[11px] font-mono text-slate-800 pointer-events-none z-10 leading-tight shadow-sm">
                     Warte auf IMU Stream...
                 </div>
