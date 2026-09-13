@@ -20,14 +20,22 @@ async function fetchReleases() {
         return;
     }
 
+    /*
+ * Breadcrumb: 2026-09-13 16:55 - Light Theme Table Rows for Firmware Releases
+ * [CRITICAL BUGFIX FLAG - THEME CONSISTENCY]:
+ * Replaced legacy dark-mode classes (text-gray-300/400, bg-green-950) with
+ * high-contrast light theme classes matching the main portal cards.
+ */
     tbody.innerHTML = data.map((rel, idx) => `
-    <tr class="hover:bg-gray-800/40 ${idx === 0 ? 'bg-green-950/20' : ''}">
-      <td class="py-2 px-3 font-bold text-green-400">
-        ${rel.version} ${idx === 0 ? '<span class="ml-1 text-[10px] bg-stag-green text-white px-1.5 py-0.5 rounded">LATEST</span>' : ''}
+    <tr class="hover:bg-slate-50 transition border-b border-slate-100 ${idx === 0 ? 'bg-emerald-50/40' : ''}">
+      <td class="py-2.5 px-3 font-bold text-green-700 font-mono">
+        ${rel.version} ${idx === 0 ? '<span class="ml-1 text-[10px] bg-stag-green text-white px-1.5 py-0.5 rounded font-sans">LATEST</span>' : ''}
       </td>
-      <td class="py-2 px-3 text-gray-400">${new Date(rel.created_at).toLocaleString()}</td>
-      <td class="py-2 px-3 text-gray-300 max-w-xs truncate">${rel.release_notes || '-'}</td>
-      <td class="py-2 px-3 text-right"><a href="${rel.bin_url}" download class="text-green-500 hover:underline">Download</a></td>
+      <td class="py-2.5 px-3 text-slate-500 font-mono">${new Date(rel.created_at).toLocaleString()}</td>
+      <td class="py-2.5 px-3 text-slate-700 max-w-xs truncate">${rel.release_notes || '-'}</td>
+      <td class="py-2.5 px-3 text-right">
+        <a href="${rel.bin_url}" download class="text-green-700 hover:text-green-800 font-bold hover:underline">Download</a>
+      </td>
     </tr>
   `).join('');
 }

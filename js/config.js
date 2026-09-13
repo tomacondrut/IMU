@@ -21,9 +21,21 @@ let activeCommandId = null;
 let activeCommandPollTimer = null;
 
 // Geteilte Telemetrie-Puffer (für 3D und Oszilloskop)
+/*
+ * Breadcrumb: 2026-09-13 16:40 - Window-Bound State & Immediate Redraw Flag
+ * [CRITICAL BUGFIX FLAG - SCOPE & CONTINUOUS DRAW]:
+ * Explicitly binds accHistory, curAx/y/z and graphNeedsRedraw to window object
+ * to eliminate scope isolation between config.js, cloud-engine.js and live-3d.js.
+ */
+// Geteilte Telemetrie-Puffer (für 3D und Oszilloskop)
 const accHistory = [];
 const maxAccPoints = 1800; // 180 s Puffer bei 10 Hz
 let curAx = 0, curAy = 0, curAz = 0;
 let qw = 1, qx = 0, qy = 0, qz = 0;
 let lastQw = 1, lastQx = 0, lastQy = 0, lastQz = 0;
-let graphNeedsRedraw = false;
+let graphNeedsRedraw = true;
+
+// Bindung an window für script-übergreifende Sichtbarkeit
+window.accHistory = accHistory;
+window.curAx = 0; window.curAy = 0; window.curAz = 0;
+window.graphNeedsRedraw = true;

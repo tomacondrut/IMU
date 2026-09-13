@@ -19,6 +19,12 @@ function initRealtimeChannel() {
         config: { broadcast: { ack: false } }
     });
 
+    /*
+ * Breadcrumb: 2026-09-13 16:40 - Synchronized Accel & Redraw Flag Dispatcher
+ * [CRITICAL BUGFIX FLAG - LIVE STREAM PROPAGATION]:
+ * Propagates curAx/ay/az and graphNeedsRedraw directly to window so live-3d.js
+ * render loop receives continuous triggers on incoming packets.
+ */
     liveChannel.on('broadcast', { event: 'pos' }, (event) => {
         const d = event.payload?.payload || event.payload;
         if (!d) return;
@@ -37,9 +43,15 @@ function initRealtimeChannel() {
 
         if (d.ax !== undefined) {
             curAx = d.ax; curAy = d.ay; curAz = d.az;
+            window.curAx = curAx;
+            window.curAy = curAy;
+            window.curAz = curAz;
+
             accHistory.push({ x: curAx, y: curAy, z: curAz });
             if (accHistory.length > maxAccPoints) accHistory.shift();
+
             graphNeedsRedraw = true;
+            window.graphNeedsRedraw = true;
         }
 
         const el = document.getElementById('overlay-status');

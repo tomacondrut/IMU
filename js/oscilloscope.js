@@ -47,12 +47,23 @@ function jumpAccLive() {
     onAccPan(100);
 }
 
+/*
+ * Breadcrumb: 2026-09-13 16:40 - Boolean Layout Guard for Canvas Drawing
+ * [CRITICAL BUGFIX FLAG - LAYOUT DETECTION]:
+ * Returns false if canvas dimensions are 0 (waiting for layout pass),
+ * allowing live-3d.js to keep graphNeedsRedraw=true until successfully rendered.
+ */
 function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx) {
     const cv = document.getElementById(cvId);
-    if (!cv) return;
+    if (!cv) return false;
+
+    const w = cv.clientWidth;
+    const h = cv.clientHeight;
+    if (w === 0 || h === 0) return false;
+
+    cv.width = w;
+    cv.height = h;
     const ctx = cv.getContext('2d');
-    const w = cv.width = cv.clientWidth;
-    const h = cv.height = cv.clientHeight;
     ctx.clearRect(0, 0, w, h);
 
     const midY = h / 2;
@@ -111,7 +122,7 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
         ctx.fillStyle = '#64748b';
         ctx.font = '11px monospace';
         ctx.fillText(`${label}: Warte auf Sensor-Stream...`, 40, midY + 4);
-        return;
+        return true;
     }
 
     let sumSq = 0;
@@ -176,15 +187,21 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
 
     ctx.fillStyle = colorHex;
     ctx.fillText(badgeText, w - textW - 9, 15);
+    return true;
 }
 
 function drawAccGraphs() {
+    const cvCheck = document.getElementById('cv-acc-x');
+    if (!cvCheck || cvCheck.clientWidth === 0 || cvCheck.clientHeight === 0) {
+        return false;
+    }
+
     const total = accHistory.length;
     if (total < 2) {
         drawSingleAxis('cv-acc-x', 'x', '#dc2626', 'ACC X', 1.5, 0, 0);
         drawSingleAxis('cv-acc-y', 'y', '#009B4C', 'ACC Y', 1.5, 0, 0);
         drawSingleAxis('cv-acc-z', 'z', '#2563eb', 'ACC Z', 1.5, 0, 0);
-        return;
+        return true;
     }
 
     const win = Math.min(accZoom, total);
@@ -206,6 +223,7 @@ function drawAccGraphs() {
     drawSingleAxis('cv-acc-x', 'x', '#dc2626', 'ACC X', globalMax, startIdx, endIdx);
     drawSingleAxis('cv-acc-y', 'y', '#009B4C', 'ACC Y', globalMax, startIdx, endIdx);
     drawSingleAxis('cv-acc-z', 'z', '#2563eb', 'ACC Z', globalMax, startIdx, endIdx);
+    return true;
 }
 
 window.drawAccGraphs = drawAccGraphs;

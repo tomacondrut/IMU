@@ -49,8 +49,11 @@ function switchTab(tab) {
         activeCommandPollTimer = null;
     }
 
-    if (tab === '3d' && window.resize3DViewport) {
-        setTimeout(window.resize3DViewport, 80);
+    if (tab === '3d') {
+        setTimeout(() => {
+            if (window.resize3DViewport) window.resize3DViewport();
+            if (window.drawAccGraphs) window.drawAccGraphs();
+        }, 80);
     }
     if (tab === 'imulogs' && window.fetchImuCloudLogs) window.fetchImuCloudLogs();
     if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
@@ -69,6 +72,13 @@ window.onload = () => {
     if (window.init3D) window.init3D();
     initRealtimeChannel();
     fetchAllData();
+
+    // [BUGFIX]: Zeichnet das Koordinatengitter sofort beim Laden,
+    // noch bevor das erste Sensorpaket aus der Cloud eintrifft.
+    setTimeout(() => {
+        if (window.drawAccGraphs) window.drawAccGraphs();
+    }, 100);
+
     setInterval(() => {
         if (window.fetchLatestBatteryData) window.fetchLatestBatteryData();
     }, 30000);

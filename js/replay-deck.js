@@ -112,17 +112,26 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     return { roll, pitch, yaw };
 }
 
+/*
+ * Breadcrumb: 2026-09-13 16:45 - Light Theme Button Styles Restoration
+ * [CRITICAL BUGFIX FLAG - THEME CONSISTENCY]:
+ * Replaced legacy dark-mode classes (bg-gray-800/text-gray-400) with
+ * high-contrast light theme classes (bg-slate-100/border-slate-300/text-slate-700).
+ */
 function setReplayGraphMode(mode) {
     replayGraphMode = mode;
     const btnAcc = document.getElementById('btn-replay-mode-acc');
     const btnEuler = document.getElementById('btn-replay-mode-euler');
 
+    const activeClass = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition shadow-sm';
+    const inactiveClass = 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition';
+
     if (mode === 'accel') {
-        if (btnAcc) btnAcc.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition';
-        if (btnEuler) btnEuler.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition';
+        if (btnAcc) btnAcc.className = activeClass;
+        if (btnEuler) btnEuler.className = inactiveClass;
     } else {
-        if (btnEuler) btnEuler.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition';
-        if (btnAcc) btnAcc.className = 'px-2.5 py-1 text-[11px] font-bold rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition';
+        if (btnEuler) btnEuler.className = activeClass;
+        if (btnAcc) btnAcc.className = inactiveClass;
     }
     drawReplayGraph();
 }

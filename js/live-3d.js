@@ -149,14 +149,22 @@ window.init3D = function () {
         renderer.render(scene, camera);
 
         // 2D-Graphen auf ~14 FPS gedrosselt (70 ms), entlastet den Haupt-Thread
-        const redrawRequired = window.graphNeedsRedraw || false;
+        /*
+         * Breadcrumb: 2026-09-13 16:40 - Resilient 14 FPS Canvas Redraw Engine
+         * [CRITICAL BUGFIX FLAG - DUAL FLAG CHECK & LAYOUT RETRY]:
+         * Checks both window.graphNeedsRedraw and lexical fallback.
+         * Only clears flag if drawAccGraphs succeeded (w > 0 and h > 0).
+         */
+        const redrawRequired = window.graphNeedsRedraw || (typeof graphNeedsRedraw !== 'undefined' && graphNeedsRedraw);
         if (redrawRequired && (now - lastGraphDrawTime >= 70)) {
             lastGraphDrawTime = now;
-            window.graphNeedsRedraw = false;
             if (typeof window.drawAccGraphs === 'function') {
-                window.drawAccGraphs();
+                const drawn = window.drawAccGraphs();
+                if (drawn !== false) {
+                    window.graphNeedsRedraw = false;
+                    if (typeof graphNeedsRedraw !== 'undefined') graphNeedsRedraw = false;
+                }
             }
         }
-    }
     requestAnimationFrame(animate);
 };
