@@ -77,21 +77,28 @@ window.init3D = function () {
     const h = container.clientHeight || (window.innerHeight * 0.40);
 
     scene = new THREE.Scene();
+    // Mattgrauer Studio-Hintergrund für maximalen Kontrast zum schwarzen Gehäuse:
+    scene.background = new THREE.Color(0xdbe2ea);
+
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
     camera.position.set(0, 0, 3.8);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0xdbe2ea, 1.0);
     container.appendChild(renderer.domElement);
 
-    const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
+    // Studio-Ausleuchtung für dunkle Oberflächen
+    const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
     l1.position.set(5, 10, 7);
     scene.add(l1);
-    const l2 = new THREE.DirectionalLight(0xffffff, 0.6);
+
+    const l2 = new THREE.DirectionalLight(0xffffff, 0.9);
     l2.position.set(-5, -10, -7);
     scene.add(l2);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
     createFallbackCube();
     loadGLBModel();

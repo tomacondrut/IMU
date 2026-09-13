@@ -26,6 +26,7 @@ function initReplay3D() {
     const h = container.clientHeight || 240;
 
     repScene = new THREE.Scene();
+    repScene.background = new THREE.Color(0xe2e8f0);
     repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
     repCamera.position.set(0, 0, 3.8);
 
@@ -293,6 +294,14 @@ function renderInterpolatedFrame(tSec) {
     drawReplayGraph(tSec);
 }
 
+/*
+ * Breadcrumb: 2026-09-13 10:00 - Light Theme Replay Graph & Storage Browser
+ * [CRITICAL BUGFIX FLAG - REPLAY CANVAS & FILE LIST]:
+ * 1. Gridlines rendered in subtle dark alpha on white canvas.
+ * 2. Legend and time markers adapted for bright backgrounds.
+ * 3. File browser items rendered in clean slate-100 with distinct border lines.
+ */
+
 function drawReplayGraph(curTimeSec) {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || replayFilteredData.length === 0) return;
@@ -336,7 +345,7 @@ function drawReplayGraph(curTimeSec) {
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
         const y = midY - ratio * (midY - 8);
-        ctx.strokeStyle = ratio === 0 ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.05)';
+        ctx.strokeStyle = ratio === 0 ? 'rgba(15, 23, 42, 0.25)' : 'rgba(15, 23, 42, 0.07)';
         ctx.lineWidth = 1;
         if (ratio === 0) ctx.setLineDash([3, 3]); else ctx.setLineDash([]);
         ctx.beginPath();
@@ -364,24 +373,42 @@ function drawReplayGraph(curTimeSec) {
     };
 
     if (!isEuler) {
-        drawCurve('ax', '#ef4444');
+        drawCurve('ax', '#dc2626');
         drawCurve('ay', '#009B4C');
-        drawCurve('az', '#3b82f6');
+        drawCurve('az', '#2563eb');
     } else {
-        drawCurve('roll', '#ef4444');
+        drawCurve('roll', '#dc2626');
         drawCurve('pitch', '#009B4C');
-        drawCurve('yaw', '#8b5cf6');
+        drawCurve('yaw', '#7c3aed');
+    }
+
+    ctx.font = 'bold 9px monospace';
+    const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
+    const legendWidth = ctx.measureText(legendText).width;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.fillRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.strokeRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
+
+    if (!isEuler) {
+        ctx.fillStyle = '#dc2626'; ctx.fillText('● ACC X', w - legendWidth - 9, 14);
+        ctx.fillStyle = '#009B4C'; ctx.fillText('● ACC Y', w - legendWidth + 37, 14);
+        ctx.fillStyle = '#2563eb'; ctx.fillText('● ACC Z', w - legendWidth + 83, 14);
+    } else {
+        ctx.fillStyle = '#dc2626'; ctx.fillText('● Roll', w - legendWidth - 9, 14);
+        ctx.fillStyle = '#009B4C'; ctx.fillText('● Pitch', w - legendWidth + 31, 14);
+        ctx.fillStyle = '#7c3aed'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
     }
 
     const maxDur = Math.max((count - 1) * 0.1, 0.001);
     const progress = Math.min(Math.max((curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec) / maxDur, 0), 1);
     const curX = leftMargin + progress * (w - leftMargin);
 
-    ctx.strokeStyle = '#f59e0b';
+    ctx.strokeStyle = '#d97706';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(curX, 0); ctx.lineTo(curX, h); ctx.stroke();
-    ctx.fillStyle = '#f59e0b';
+    ctx.fillStyle = '#d97706';
     ctx.beginPath(); ctx.arc(curX, 6, 4, 0, Math.PI * 2); ctx.fill();
 }
 
@@ -466,7 +493,7 @@ async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
 
-    container.innerHTML = `<div class="text-xs text-gray-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId}...</div>`;
+    container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId}...</div>`;
 
     const { data, error } = await sbClient
         .from('imu_log_files')
@@ -475,12 +502,12 @@ async function fetchImuCloudLogs() {
         .order('uploaded_at', { ascending: false });
 
     if (error) {
-        container.innerHTML = `<div class="p-3 bg-red-950/40 border border-red-800 rounded text-xs text-red-300">Fehler beim Laden: ${error.message}</div>`;
+        container.innerHTML = `<div class="p-3 bg-red-50 border border-red-300 rounded text-xs text-red-700">Fehler beim Laden: ${error.message}</div>`;
         return;
     }
 
     if (!data || data.length === 0) {
-        container.innerHTML = `<div class="text-xs text-gray-500 py-6 text-center">Keine IMU-Dateiblöcke für ${selectedDeviceId} vorhanden.</div>`;
+        container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Keine IMU-Dateiblöcke für ${selectedDeviceId} vorhanden.</div>`;
         return;
     }
 
@@ -498,11 +525,11 @@ async function fetchImuCloudLogs() {
         const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
 
         html += `
-        <div class="bg-gray-900/80 border border-gray-800 rounded-lg p-3.5">
-            <div class="flex justify-between items-center mb-2.5 pb-2 border-b border-gray-800">
+        <div class="bg-slate-50 border border-slate-300 rounded-lg p-3.5 shadow-sm">
+            <div class="flex justify-between items-center mb-2.5 pb-2 border-b border-slate-200">
                 <div class="flex items-center gap-2">
-                    <span class="text-green-400 font-bold text-xs">📅 ${day}</span>
-                    <span class="text-[11px] text-gray-400 font-mono">(${files.length} ${files.length === 1 ? 'Block' : 'Blöcke'} &bull; ${totalMb} MB gesamt)</span>
+                    <span class="text-green-700 font-bold text-xs">📅 ${day}</span>
+                    <span class="text-[11px] text-slate-500 font-mono">(${files.length} ${files.length === 1 ? 'Block' : 'Blöcke'} &bull; ${totalMb} MB gesamt)</span>
                 </div>
             </div>
             <div class="space-y-1.5">
@@ -514,23 +541,23 @@ async function fetchImuCloudLogs() {
             const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
 
             html += `
-                <div class="flex justify-between items-center p-2 rounded bg-gray-950/60 border border-gray-800/80 text-xs font-mono hover:border-gray-700 transition">
+                <div class="flex justify-between items-center p-2 rounded bg-white border border-slate-200 text-xs font-mono hover:border-slate-400 transition shadow-sm">
                     <div class="flex items-center gap-2 truncate mr-3">
-                        <span class="text-gray-300 font-semibold truncate">📄 ${f.file_name}</span>
-                        <span class="text-[10px] text-gray-500">(${kb} KB)</span>
+                        <span class="text-slate-800 font-semibold truncate">📄 ${f.file_name}</span>
+                        <span class="text-[10px] text-slate-500">(${kb} KB)</span>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
-                        <span class="text-[10px] text-gray-500 hidden sm:inline mr-1">${uploadTime}</span>
+                        <span class="text-[10px] text-slate-500 hidden sm:inline mr-1">${uploadTime}</span>
                         <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
-                                class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-800/60 px-2.5 py-1 rounded text-xs font-bold transition">
-                            📊 Visualisieren & Abspielen
+                                class="bg-slate-100 hover:bg-slate-200 text-green-700 border border-slate-300 px-2.5 py-1 rounded text-xs font-bold transition">
+                            📊 Visualisieren
                         </button>
                         <a href="${downloadUrl}" download="${f.file_name}" target="_blank"
-                           class="text-gray-400 hover:text-white px-2 py-1 text-xs transition">
+                           class="text-slate-600 hover:text-slate-900 px-2 py-1 text-xs transition">
                             ⬇
                         </a>
                         <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" title="Aus Cloud löschen"
-                                class="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1 rounded transition text-xs">
+                                class="text-red-600 hover:text-red-700 hover:bg-red-50 p-1 rounded transition text-xs">
                             🗑️
                         </button>
                     </div>

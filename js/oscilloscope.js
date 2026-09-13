@@ -1,9 +1,9 @@
 /*
- * Breadcrumb: 2026-09-13 09:35 - Decoupled Triple-Axis Oscilloscope Engine
- * [CRITICAL BUGFIX FLAG - OSCILLOSCOPE TIME GRID & METRICS]:
- * 1. Synchronized temporal grid lines with auto-scaling time steps (1s, 2s, 5s, 10s).
- * 2. Real-time metric badges: Peak-to-Peak, RMS, and current m/s² readout per axis.
- * 3. Zero-delay pan/zoom presets (5s, 10s, 30s, 60s) and sticky LIVE tracking anchor.
+ * Breadcrumb: 2026-09-13 10:00 - High-Contrast Light Theme Oscilloscope
+ * [CRITICAL BUGFIX FLAG - CANVAS VISIBILITY]:
+ * 1. Switched gridlines to visible slate-300/400 (rgba(15, 23, 42, 0.08)).
+ * 2. Time-step labels rendered in crisp slate-500 (#64748b).
+ * 3. Metric badges styled with clean white background and clear contrast borders.
  */
 
 let accZoom = 100; // 100 Punkte = 10 s Standardfenster
@@ -34,7 +34,8 @@ function onAccPan(v) {
     if (panValEl) panValEl.innerText = isAccLive ? 'LIVE' : accPan.toFixed(0) + '%';
     const liveBtn = document.getElementById('btn-acc-live');
     if (liveBtn) {
-        liveBtn.style.backgroundColor = isAccLive ? '#009B4C' : '#1f2937';
+        liveBtn.style.backgroundColor = isAccLive ? '#009B4C' : '#e2e8f0';
+        liveBtn.style.color = isAccLive ? '#ffffff' : '#334155';
     }
     drawAccGraphs();
 }
@@ -59,11 +60,11 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     const timeWindowSec = (count > 1) ? (count / 10) : (accZoom / 10);
 
     const gridLines = [
-        { ratio: 1.0, style: 'rgba(255,255,255,0.06)', label: `+${maxAbs.toFixed(1)}` },
-        { ratio: 0.5, style: 'rgba(255,255,255,0.04)', label: `+${(maxAbs * 0.5).toFixed(1)}` },
-        { ratio: 0.0, style: 'rgba(255,255,255,0.18)', label: '0.0', dashed: true },
-        { ratio: -0.5, style: 'rgba(255,255,255,0.04)', label: `-${(maxAbs * 0.5).toFixed(1)}` },
-        { ratio: -1.0, style: 'rgba(255,255,255,0.06)', label: `-${maxAbs.toFixed(1)}` }
+        { ratio: 1.0, style: 'rgba(15, 23, 42, 0.09)', label: `+${maxAbs.toFixed(1)}` },
+        { ratio: 0.5, style: 'rgba(15, 23, 42, 0.05)', label: `+${(maxAbs * 0.5).toFixed(1)}` },
+        { ratio: 0.0, style: 'rgba(15, 23, 42, 0.25)', label: '0.0', dashed: true },
+        { ratio: -0.5, style: 'rgba(15, 23, 42, 0.05)', label: `-${(maxAbs * 0.5).toFixed(1)}` },
+        { ratio: -1.0, style: 'rgba(15, 23, 42, 0.09)', label: `-${maxAbs.toFixed(1)}` }
     ];
 
     ctx.font = '9px monospace';
@@ -91,8 +92,8 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     else timeStepSec = 10;
 
     const numTimeSteps = Math.floor(timeWindowSec / timeStepSec);
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.fillStyle = '#475569';
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.05)';
+    ctx.fillStyle = '#94a3b8';
 
     for (let t = 1; t <= numTimeSteps; t++) {
         const secAgo = t * timeStepSec;
@@ -133,9 +134,9 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     ctx.clip();
 
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, colorHex + '33');
-    grad.addColorStop(0.5, colorHex + '08');
-    grad.addColorStop(1, colorHex + '33');
+    grad.addColorStop(0, colorHex + '25');
+    grad.addColorStop(0.5, colorHex + '06');
+    grad.addColorStop(1, colorHex + '25');
 
     ctx.beginPath();
     ctx.moveTo(32, midY);
@@ -167,9 +168,9 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
     ctx.font = 'bold 10px monospace';
     const textW = ctx.measureText(badgeText).width;
 
-    ctx.fillStyle = 'rgba(7, 10, 15, 0.85)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
     ctx.fillRect(w - textW - 14, 3, textW + 10, 16);
-    ctx.strokeStyle = colorHex + '66';
+    ctx.strokeStyle = colorHex + '88';
     ctx.lineWidth = 1;
     ctx.strokeRect(w - textW - 14, 3, textW + 10, 16);
 
@@ -180,9 +181,9 @@ function drawSingleAxis(cvId, axisKey, colorHex, label, maxAbs, startIdx, endIdx
 function drawAccGraphs() {
     const total = accHistory.length;
     if (total < 2) {
-        drawSingleAxis('cv-acc-x', 'x', '#ef4444', 'ACC X', 1.5, 0, 0);
+        drawSingleAxis('cv-acc-x', 'x', '#dc2626', 'ACC X', 1.5, 0, 0);
         drawSingleAxis('cv-acc-y', 'y', '#009B4C', 'ACC Y', 1.5, 0, 0);
-        drawSingleAxis('cv-acc-z', 'z', '#3b82f6', 'ACC Z', 1.5, 0, 0);
+        drawSingleAxis('cv-acc-z', 'z', '#2563eb', 'ACC Z', 1.5, 0, 0);
         return;
     }
 
@@ -202,9 +203,9 @@ function drawAccGraphs() {
     }
     globalMax = Math.ceil(globalMax * 1.15 * 10) / 10;
 
-    drawSingleAxis('cv-acc-x', 'x', '#ef4444', 'ACC X', globalMax, startIdx, endIdx);
+    drawSingleAxis('cv-acc-x', 'x', '#dc2626', 'ACC X', globalMax, startIdx, endIdx);
     drawSingleAxis('cv-acc-y', 'y', '#009B4C', 'ACC Y', globalMax, startIdx, endIdx);
-    drawSingleAxis('cv-acc-z', 'z', '#3b82f6', 'ACC Z', globalMax, startIdx, endIdx);
+    drawSingleAxis('cv-acc-z', 'z', '#2563eb', 'ACC Z', globalMax, startIdx, endIdx);
 }
 
 window.drawAccGraphs = drawAccGraphs;

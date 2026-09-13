@@ -23,6 +23,14 @@ function closeBatteryModal() {
     if (modal) modal.classList.add('hidden');
 }
 
+/*
+ * Breadcrumb: 2026-09-13 10:00 - Light Theme Battery Chart & Table Rows
+ * [CRITICAL BUGFIX FLAG - BATTERY CONTRAST]:
+ * 1. Chart.js ticks set to slate-500 (#64748b) and grids to slate-100 (#f1f5f9).
+ * 2. Legend text switched to slate-900 (#0f172a).
+ * 3. Table body rows use hover:bg-slate-50 and slate-800 text.
+ */
+
 function initChart(labels, voltages, percents) {
     const cv = document.getElementById('batChart');
     if (!cv) return;
@@ -38,7 +46,7 @@ function initChart(labels, voltages, percents) {
                     label: 'Spannung (V)',
                     data: voltages,
                     borderColor: '#009B4C',
-                    backgroundColor: 'rgba(0, 155, 76, 0.1)',
+                    backgroundColor: 'rgba(0, 155, 76, 0.08)',
                     yAxisID: 'yVolt',
                     tension: 0.25,
                     fill: true
@@ -46,7 +54,7 @@ function initChart(labels, voltages, percents) {
                 {
                     label: 'Kapazität (%)',
                     data: percents,
-                    borderColor: '#3498db',
+                    borderColor: '#0284c7',
                     yAxisID: 'yPct',
                     borderDash: [5, 5],
                     tension: 0.2
@@ -58,8 +66,8 @@ function initChart(labels, voltages, percents) {
             maintainAspectRatio: false,
             scales: {
                 x: {
-                    ticks: { color: '#7f8c8d', maxTicksLimit: 12 },
-                    grid: { color: '#1a2332' }
+                    ticks: { color: '#64748b', maxTicksLimit: 12 },
+                    grid: { color: '#f1f5f9' }
                 },
                 yVolt: {
                     type: 'linear',
@@ -67,19 +75,19 @@ function initChart(labels, voltages, percents) {
                     min: 3.2,
                     max: 4.3,
                     ticks: { color: '#009B4C' },
-                    grid: { color: '#1a2332' }
+                    grid: { color: '#f1f5f9' }
                 },
                 yPct: {
                     type: 'linear',
                     position: 'right',
                     min: 0,
                     max: 100,
-                    ticks: { color: '#3498db' },
+                    ticks: { color: '#0284c7' },
                     grid: { display: false }
                 }
             },
             plugins: {
-                legend: { labels: { color: '#ecf0f1' } }
+                legend: { labels: { color: '#0f172a' } }
             }
         }
     });
@@ -105,7 +113,6 @@ async function fetchLatestBatteryData() {
     const isCharging = (latest.charging_status || '').toLowerCase().includes('lad') ||
         (latest.charging_status || '').toLowerCase().includes('usb');
 
-    // 1. Akkuanzeige im Header aktualisieren
     const hdrPct = document.getElementById('header-battery-pct');
     const hdrFill = document.getElementById('header-battery-fill');
     const hdrBolt = document.getElementById('header-battery-bolt');
@@ -114,9 +121,9 @@ async function fetchLatestBatteryData() {
     if (hdrFill) {
         hdrFill.style.width = `${Math.min(Math.max(pct, 4), 100)}%`;
         if (pct >= 50) {
-            hdrFill.className = 'h-full bg-green-500 rounded-[1px] transition-all duration-300';
+            hdrFill.className = 'h-full bg-green-600 rounded-[1px] transition-all duration-300';
         } else if (pct >= 25) {
-            hdrFill.className = 'h-full bg-yellow-500 rounded-[1px] transition-all duration-300';
+            hdrFill.className = 'h-full bg-amber-500 rounded-[1px] transition-all duration-300';
         } else {
             hdrFill.className = 'h-full bg-red-500 rounded-[1px] transition-all duration-300';
         }
@@ -125,7 +132,6 @@ async function fetchLatestBatteryData() {
         hdrBolt.classList.toggle('hidden', !isCharging);
     }
 
-    // 2. Akku-Modal KPIs aktualisieren
     const mPct = document.getElementById('modal-metric-pct');
     const mVolt = document.getElementById('modal-metric-volt');
     const mStatus = document.getElementById('modal-metric-status');
@@ -140,7 +146,6 @@ async function fetchLatestBatteryData() {
     if (mTime) mTime.innerText = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     if (mAgo) mAgo.innerText = recTime.toLocaleDateString();
 
-    // 3. Diagramm & Tabelle im Modal befüllen
     const reversed = [...data].reverse();
     const labels = reversed.map(r => new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     const volts = reversed.map(r => r.battery_voltage);
@@ -151,16 +156,17 @@ async function fetchLatestBatteryData() {
     const tblBody = document.getElementById('modal-log-table-body');
     if (tblBody) {
         tblBody.innerHTML = data.slice(0, 20).map(r => `
-            <tr class="hover:bg-gray-800/40">
-                <td class="py-1.5 px-3 text-gray-300">${new Date(r.recorded_at).toLocaleString()}</td>
-                <td class="py-1.5 px-3 text-green-400 font-semibold">${Number(r.battery_voltage).toFixed(3)} V</td>
-                <td class="py-1.5 px-3">${r.battery_percent}%</td>
-                <td class="py-1.5 px-3 text-gray-400">${r.charging_status}</td>
-                <td class="py-1.5 px-3">#${r.boot_cycle}</td>
+            <tr class="hover:bg-slate-50 transition">
+                <td class="py-1.5 px-3 text-slate-600">${new Date(r.recorded_at).toLocaleString()}</td>
+                <td class="py-1.5 px-3 text-green-700 font-semibold">${Number(r.battery_voltage).toFixed(3)} V</td>
+                <td class="py-1.5 px-3 text-slate-800">${r.battery_percent}%</td>
+                <td class="py-1.5 px-3 text-slate-600">${r.charging_status}</td>
+                <td class="py-1.5 px-3 text-slate-500">#${r.boot_cycle}</td>
             </tr>
         `).join('');
     }
 }
+
 
 window.fetchLatestBatteryData = fetchLatestBatteryData;
 window.openBatteryModal = openBatteryModal;

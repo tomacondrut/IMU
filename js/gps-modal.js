@@ -17,7 +17,8 @@ function initLeafletMap(lat = 47.2372, lon = 9.5981) {
     if (!mapContainer) return;
 
     gpsMapInstance = L.map('leaflet-map').setView([lat, lon], 14);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // Helle, kontrastreiche CartoDB Positron Kacheln
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         maxZoom: 19
     }).addTo(gpsMapInstance);

@@ -246,10 +246,18 @@ async function loadCloudSdDirectory(dir) {
     await sendCloudCommand('LIST', currentCloudSdDir, 'Lade Ordner...');
 }
 
+/*
+ * Breadcrumb: 2026-09-13 10:00 - Light Theme SD File Renderer & Mode Toggle
+ * [CRITICAL BUGFIX FLAG - LIGHT UI SYNC]:
+ * 1. Folder rows rendered in subtle green-50 with green-700 typography.
+ * 2. File rows rendered in pure white card style with slate-800 labels.
+ * 3. Live mode toggle button styled with clean white/green contrast.
+ */
+
 function renderCloudFileList(items) {
     const listEl = document.getElementById('sd-file-list');
     if (!items || items.length === 0) {
-        listEl.innerHTML = '<div class="text-xs text-gray-500 py-4 text-center">Dieser Ordner ist leer.</div>';
+        listEl.innerHTML = '<div class="text-xs text-slate-500 py-4 text-center">Dieser Ordner ist leer.</div>';
         return;
     }
 
@@ -257,24 +265,24 @@ function renderCloudFileList(items) {
         const fullPath = (currentCloudSdDir === '/' ? '' : currentCloudSdDir) + '/' + item.name;
         if (item.is_dir) {
             return `
-              <div class="flex justify-between items-center p-2.5 rounded bg-green-950/20 border border-green-900/40 cursor-pointer hover:bg-green-950/40 transition"
+              <div class="flex justify-between items-center p-2.5 rounded bg-emerald-50 border border-emerald-200 cursor-pointer hover:bg-emerald-100 transition shadow-sm"
                    onclick="loadCloudSdDirectory('${fullPath}')">
-                <span class="text-xs font-bold text-green-400">📁 ${item.name}</span>
-                <span class="text-xs text-gray-400">Öffnen ➔</span>
+                <span class="text-xs font-bold text-emerald-800">📁 ${item.name}</span>
+                <span class="text-xs text-emerald-600 font-semibold">Öffnen ➔</span>
               </div>
             `;
         } else {
             const kb = (item.size / 1024).toFixed(1);
             return `
-              <div class="flex justify-between items-center p-2.5 rounded bg-gray-900 border border-gray-800 text-xs font-mono hover:border-gray-700 transition">
-                <span class="text-gray-300 truncate mr-2">📄 ${item.name} <span class="text-gray-500 text-[10px]">(${kb} KB)</span></span>
+              <div class="flex justify-between items-center p-2.5 rounded bg-white border border-slate-200 text-xs font-mono hover:border-slate-400 transition shadow-sm">
+                <span class="text-slate-800 truncate mr-2">📄 ${item.name} <span class="text-slate-500 text-[10px]">(${kb} KB)</span></span>
                 <div class="flex items-center gap-2 shrink-0">
                   <button onclick="requestCloudDownload('${fullPath}', '${item.name}')" 
-                          class="bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-900/60 px-2.5 py-1 rounded text-xs font-bold transition">
+                          class="bg-slate-100 hover:bg-slate-200 text-green-700 border border-slate-300 px-2.5 py-1 rounded text-xs font-bold transition">
                     ⬇ Download
                   </button>
                   <button onclick="requestCloudDelete('${fullPath}', '${item.name}')" 
-                          class="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1 rounded transition text-xs" title="Löschen">
+                          class="text-red-600 hover:text-red-800 hover:bg-red-50 p-1 rounded transition text-xs" title="Löschen">
                     ✕
                   </button>
                 </div>
@@ -282,6 +290,15 @@ function renderCloudFileList(items) {
             `;
         }
     }).join('');
+}
+
+function toggleLiveModeUI() {
+    liveModeActive = !liveModeActive;
+    const btn = document.getElementById('btn-toggle-live');
+    btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
+    btn.className = liveModeActive
+        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
+        : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
 }
 
 function navigateCloudSdUp() {
@@ -366,13 +383,4 @@ async function saveConfigToCloud() {
         status.innerText = `✓ Gespeichert! ${selectedDeviceId} synchronisiert beim nächsten Sync.`;
         status.className = 'text-xs text-center mt-2 text-green-400 font-mono font-bold';
     }
-}
-
-function toggleLiveModeUI() {
-    liveModeActive = !liveModeActive;
-    const btn = document.getElementById('btn-toggle-live');
-    btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
-    btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white border border-green-400 transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-gray-800 text-gray-400 border border-gray-600 transition";
 }

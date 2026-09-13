@@ -36,13 +36,13 @@ function switchTab(tab) {
         const tabEl = document.getElementById(`tab-${t}`);
         const btnEl = document.getElementById(`btn-tab-${t}`);
         if (tabEl) tabEl.classList.add('hidden');
-        if (btnEl) btnEl.className = "bg-gray-800 text-gray-400 px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap hover:text-white transition flex items-center gap-1.5";
+        if (btnEl) btnEl.className = "bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 px-3.5 py-2 rounded-lg text-xs font-bold uppercase whitespace-nowrap transition flex items-center gap-1.5";
     });
 
     const activeTab = document.getElementById(`tab-${tab}`);
     const activeBtn = document.getElementById(`btn-tab-${tab}`);
     if (activeTab) activeTab.classList.remove('hidden');
-    if (activeBtn) activeBtn.className = "bg-stag-green text-white px-3.5 py-2 rounded text-xs font-bold uppercase whitespace-nowrap transition flex items-center gap-1.5";
+    if (activeBtn) activeBtn.className = "bg-stag-green text-white px-3.5 py-2 rounded-lg text-xs font-bold uppercase whitespace-nowrap shadow-sm transition flex items-center gap-1.5";
 
     if (tab !== 'files' && activeCommandPollTimer) {
         clearInterval(activeCommandPollTimer);
