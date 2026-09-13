@@ -154,6 +154,20 @@ function handleCommandResult(row) {
             if (window.updateGpsUI) window.updateGpsUI({ has_fix: false });
         }
     }
+
+} else if (row.command === 'LTE_TEST') {
+    if (row.status === 'DONE') {
+        if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+        activeCommandId = null;
+        if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ LTE-Test gestartet!</span>';
+        appendTerminalLog(`[LTE TEST] Befehl von ${selectedDeviceId} empfangen. Modem-Diagnose läuft...`);
+    } else if (row.status === 'ERROR') {
+        if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+        activeCommandId = null;
+        if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">LTE-Fehler</span>';
+        appendTerminalLog(`[LTE TEST FEHLER] Start fehlgeschlagen: ${row.error_msg || 'Unbekannter Fehler'}`);
+    }
+}
 }
 
 async function sendCloudCommand(command, path, statusPrompt) {
@@ -376,3 +390,16 @@ function toggleLiveModeUI() {
         ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
         : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
 }
+
+/*
+* Breadcrumb: 2026-09-13 10:15 - Cloud-Triggered LTE Diagnostic Test Dispatcher
+*/
+async function triggerLteDiagnosticTest() {
+    if (window.ensureTerminalOpen) {
+        window.ensureTerminalOpen();
+    }
+    appendTerminalLog(`\n[LTE TEST] Fordere Mobilfunk-Diagnose für ${selectedDeviceId} an...`);
+    await sendCloudCommand('LTE_TEST', '/', `Starte LTE-Test auf ${selectedDeviceId}...`);
+}
+
+window.triggerLteDiagnosticTest = triggerLteDiagnosticTest;

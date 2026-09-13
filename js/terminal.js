@@ -45,3 +45,19 @@ function clearTerminalConsole() {
     const cEl = document.getElementById('log-console');
     if (cEl) cEl.innerText = '';
 }
+/*
+ * Breadcrumb: 2026-09-13 10:15 - Programmatic Terminal Drawer Opener
+ */
+function ensureTerminalOpen() {
+    const drawer = document.getElementById('terminal-drawer');
+    const icon = document.getElementById('terminal-toggle-icon');
+    if (!drawer) return;
+    if (drawer.classList.contains('hidden')) {
+        drawer.classList.remove('hidden');
+        if (icon) icon.innerText = '▼';
+        const cEl = document.getElementById('log-console');
+        if (cEl) cEl.scrollTop = cEl.scrollHeight;
+    }
+}
+
+window.ensureTerminalOpen = ensureTerminalOpen;

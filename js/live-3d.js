@@ -105,11 +105,20 @@ window.init3D = function () {
 
     window.addEventListener('resize', window.resize3DViewport);
 
+    let lastRenderTime = performance.now();
+
     function animate(now) {
         requestAnimationFrame(animate);
-        if (modelMesh) {
-            modelMesh.quaternion.slerp(targetQuaternion, 0.22);
 
+        const dt = Math.min((now - lastRenderTime) / 1000.0, 0.1); // Sekunden seit letztem Frame
+        lastRenderTime = now;
+
+        if (modelMesh) {
+            // Frame-Rate-unabhängiger SLERP: Glättet 25-Hz-Pakete auf 60/120 FPS
+            const slerpFactor = 1.0 - Math.exp(-14.0 * dt);
+            modelMesh.quaternion.slerp(targetQuaternion, slerpFactor);
+
+            // Beschleunigungs-Offset mit Federdämpfung
             const aLen = Math.hypot(curAx, curAy, curAz);
             const axF = (aLen > 0.20) ? curAx : 0;
             const ayF = (aLen > 0.20) ? curAy : 0;
@@ -122,18 +131,18 @@ window.init3D = function () {
             const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
             const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
 
-            posX += (tx - posX) * 0.15;
-            posY += (ty - posY) * 0.15;
-            posZ += (tz - posZ) * 0.15;
+            const posDamping = 1.0 - Math.exp(-10.0 * dt);
+            posX += (tx - posX) * posDamping;
+            posY += (ty - posY) * posDamping;
+            posZ += (tz - posZ) * posDamping;
             modelMesh.position.set(posX, posY, posZ);
         }
         renderer.render(scene, camera);
 
-        if (graphNeedsRedraw && (now - lastGraphDrawTime >= 40)) {
+        if (graphNeedsRedraw && (now - lastGraphDrawTime >= 35)) {
             lastGraphDrawTime = now;
             graphNeedsRedraw = false;
             if (window.drawAccGraphs) window.drawAccGraphs();
         }
     }
     requestAnimationFrame(animate);
-};
