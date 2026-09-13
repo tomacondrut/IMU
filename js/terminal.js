@@ -59,5 +59,4 @@ function ensureTerminalOpen() {
         if (cEl) cEl.scrollTop = cEl.scrollHeight;
     }
 }
-
 window.ensureTerminalOpen = ensureTerminalOpen;

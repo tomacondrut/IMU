@@ -146,3 +146,4 @@ window.init3D = function () {
         }
     }
     requestAnimationFrame(animate);
+};

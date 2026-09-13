@@ -153,21 +153,19 @@ function handleCommandResult(row) {
             appendTerminalLog(`[GPS FEHLER] ${row.error_msg || 'Kein Satellitenempfang.'}`);
             if (window.updateGpsUI) window.updateGpsUI({ has_fix: false });
         }
+    } else if (row.command === 'LTE_TEST') { // <-- HIER: Sauberes 'else if' OHNE vorherige schließende Klammer
+        if (row.status === 'DONE') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
+            if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ LTE-Test gestartet!</span>';
+            appendTerminalLog(`[LTE TEST] Befehl von ${selectedDeviceId} empfangen. Modem-Diagnose läuft...`);
+        } else if (row.status === 'ERROR') {
+            if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
+            if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">LTE-Fehler</span>';
+            appendTerminalLog(`[LTE TEST FEHLER] Start fehlgeschlagen: ${row.error_msg || 'Unbekannter Fehler'}`);
+        }
     }
-
-} else if (row.command === 'LTE_TEST') {
-    if (row.status === 'DONE') {
-        if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
-        activeCommandId = null;
-        if (stat) stat.innerHTML = '<span class="text-green-700 font-bold">✓ LTE-Test gestartet!</span>';
-        appendTerminalLog(`[LTE TEST] Befehl von ${selectedDeviceId} empfangen. Modem-Diagnose läuft...`);
-    } else if (row.status === 'ERROR') {
-        if (activeCommandPollTimer) clearInterval(activeCommandPollTimer);
-        activeCommandId = null;
-        if (stat) stat.innerHTML = '<span class="text-red-600 font-bold">LTE-Fehler</span>';
-        appendTerminalLog(`[LTE TEST FEHLER] Start fehlgeschlagen: ${row.error_msg || 'Unbekannter Fehler'}`);
-    }
-}
 }
 
 async function sendCloudCommand(command, path, statusPrompt) {
