@@ -1,15 +1,22 @@
 /*
- * STAG Telemetrie Hub - Global Stylesheet
+ * Breadcrumb: 2026-09-13 09:50 - STAG High-Contrast Light Theme
+ * [CRITICAL BUGFIX FLAG - CONTRAST & BRANDING]:
+ * 1. Switched base palette to Slate-50 (#f8fafc) and pure white cards (#ffffff).
+ * 2. High-contrast viewport background (#f1f5f9) so black STAG logo and black enclosure pop out.
+ * 3. Preserved STAG corporate green (#009B4C) for active states and primary accents.
  */
+
 body {
-	background-color: #0b0f17;
-	color: #ecf0f1;
+	background-color: #f8fafc;
+	color: #0f172a;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	-webkit-font-smoothing: antialiased;
 }
 
 .card {
-	background-color: #151d2a;
-	border: 1px solid #233145;
+	background-color: #ffffff;
+	border: 1px solid #e2e8f0;
+	box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
 }
 
 .stag-green {
@@ -24,18 +31,13 @@ input[type="range"] {
 	accent-color: #009B4C;
 }
 
-/* Oszilloskop-Canvas für Beschleunigungsanzeigen */
-/*
- * Breadcrumb: 2026-09-12 09:30 - Expanded Desktop Canvas Dimensions & Grid Styling
- * Feature: Increased vertical resolution from cramped 62px to 85px (mobile) and 125px (desktop).
- * Dismissed code: Fixed height: 62px squashed acceleration waveforms and clipped transient spikes.
- */
+/* Oszilloskop-Canvas auf weißem Grund */
 .acc-canvas {
 	width: 100%;
 	height: 85px;
-	background-color: #06090e;
+	background-color: #ffffff;
 	border-radius: 6px;
-	border: 1px solid #1c2636;
+	border: 1px solid #e2e8f0;
 	display: block;
 }
 
@@ -44,3 +46,22 @@ input[type="range"] {
 		height: 125px;
 	}
 }
+
+/* Scrollbars für Light Theme */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+	background: #cbd5e1;
+	border-radius: 3px;
+}
+
+	::-webkit-scrollbar-thumb:hover {
+		background: #94a3b8;
+	}
