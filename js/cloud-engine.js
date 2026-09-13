@@ -68,12 +68,26 @@ function initRealtimeChannel() {
     });
 
     // Sofort-Rückmeldung von Befehlen über WebSocket empfangen
+    /*
+ * Breadcrumb: 2026-09-14 00:15 - Instant WebSocket UI Handshake & Background DB Sync
+ * [CRITICAL BUGFIX FLAG - ZERO LATENCY COMMAND RESOLUTION]:
+ * 1. Consumes 'cmd_res' via WSS in <50ms and updates file manager/GPS UI immediately.
+ * 2. Browser background-updates public.sd_cloud_commands to DONE/ERROR via Supabase JS,
+ *    relieving the ESP32 from having to perform HTTPS PATCH requests.
+ */
     liveChannel.on('broadcast', { event: 'cmd_res' }, (event) => {
         const row = event.payload?.payload || event.payload;
         if (!row) return;
         if (activeCommandId && row.id === activeCommandId) {
             appendTerminalLog(`[CLOUD CMD] Sofort-Antwort via WSS erhalten (#${row.id}: ${row.status})`);
             handleCommandResult(row);
+
+            // Browser aktualisiert die Datenbank im Hintergrund (ESP32 spart sich den HTTPS-PATCH)
+            sbClient.from('sd_cloud_commands').update({
+                status: row.status,
+                payload: row.payload,
+                executed_at: new Date().toISOString()
+            }).eq('id', row.id).then(() => { });
         }
     });
 
