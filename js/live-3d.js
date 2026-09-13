@@ -1,10 +1,10 @@
 /*
- * Breadcrumb: 2026-09-13 09:35 - Decoupled 3D WebGL Engine & SLERP Interpolator
- * [CRITICAL BUGFIX FLAG - 3D LIFECYCLE & AXIS MAPPING]:
- * 1. Encapsulates Three.js scene, camera, and renderer with auto-resize observer.
- * 2. Exposes updateTargetOrientation() for clean decoupled updates from cloud-engine.js.
- * 3. Preserves sensor-to-model coordinate transformation (ay, -ax, az) with 0.20 m/s² deadband damping.
- * 4. Fallback cube generation if IMU.glb fails to load or WebGL context resets.
+ * Breadcrumb: 2026-09-13 12:15 - Smooth WAN SLERP Engine & Render Decoupling
+ * [CRITICAL BUGFIX FLAG - JITTER & HEMISPHERE FLIP RESOLUTION]:
+ * 1. Antipodal sign alignment prevents 180° SLERP flip hesitation on quaternion sign inversion.
+ * 2. Tuned damping factor (lambda = 8.5) eliminates bursty WAN packet stop-and-go stuttering.
+ * 3. Throttled 2D acceleration graph redraws to 70 ms (~14 FPS) to keep WebGL pinned at 60 FPS.
+ * 4. Added defensive fallbacks for global acceleration and redraw flags against NaN propagation.
  */
 
 let scene, camera, renderer, modelMesh;
@@ -52,6 +52,11 @@ window.updateTargetOrientation = function (w, x, y, z) {
     const norm = Math.hypot(x, y, z, w) || 1.0;
     const qTarget = new THREE.Quaternion(-y / norm, x / norm, z / norm, w / norm);
     qTarget.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+
+    // Antipodale Ausrichtung: Verhindert 180°-Rücksetzer bei Vorzeichenwechsel
+    if (targetQuaternion.dot(qTarget) < 0) {
+        qTarget.set(-qTarget.x, -qTarget.y, -qTarget.z, -qTarget.w);
+    }
     targetQuaternion.copy(qTarget);
 };
 
@@ -77,19 +82,17 @@ window.init3D = function () {
     const h = container.clientHeight || (window.innerHeight * 0.40);
 
     scene = new THREE.Scene();
-    // Mattgrauer Studio-Hintergrund für maximalen Kontrast zum schwarzen Gehäuse:
     scene.background = new THREE.Color(0xdbe2ea);
 
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
     camera.position.set(0, 0, 3.8);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0xdbe2ea, 1.0);
     container.appendChild(renderer.domElement);
 
-    // Studio-Ausleuchtung für dunkle Oberflächen
     const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
     l1.position.set(5, 10, 7);
     scene.add(l1);
@@ -110,19 +113,24 @@ window.init3D = function () {
     function animate(now) {
         requestAnimationFrame(animate);
 
-        const dt = Math.min((now - lastRenderTime) / 1000.0, 0.1); // Sekunden seit letztem Frame
+        const dt = Math.min((now - lastRenderTime) / 1000.0, 0.1);
         lastRenderTime = now;
 
         if (modelMesh) {
-            // Frame-Rate-unabhängiger SLERP: Glättet 25-Hz-Pakete auf 60/120 FPS
-            const slerpFactor = 1.0 - Math.exp(-14.0 * dt);
+            // Glättung optimiert für WAN-Latenzschwankungen (80–120ms Paketabstand)
+            // lambda = 8.5 überbrückt TCP-Jitter kontinuierlich ohne Stillstand
+            const slerpFactor = 1.0 - Math.exp(-8.5 * dt);
             modelMesh.quaternion.slerp(targetQuaternion, slerpFactor);
 
-            // Beschleunigungs-Offset mit Federdämpfung
-            const aLen = Math.hypot(curAx, curAy, curAz);
-            const axF = (aLen > 0.20) ? curAx : 0;
-            const ayF = (aLen > 0.20) ? curAy : 0;
-            const azF = (aLen > 0.20) ? curAz : 0;
+            // Defensive Werteübernahme gegen NaN
+            const ax = window.curAx || 0;
+            const ay = window.curAy || 0;
+            const az = window.curAz || 0;
+
+            const aLen = Math.hypot(ax, ay, az);
+            const axF = (aLen > 0.20) ? ax : 0;
+            const ayF = (aLen > 0.20) ? ay : 0;
+            const azF = (aLen > 0.20) ? az : 0;
 
             const aVec = new THREE.Vector3(ayF, -axF, azF);
             aVec.applyQuaternion(modelMesh.quaternion);
@@ -131,18 +139,23 @@ window.init3D = function () {
             const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
             const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
 
-            const posDamping = 1.0 - Math.exp(-10.0 * dt);
+            const posDamping = 1.0 - Math.exp(-8.0 * dt);
             posX += (tx - posX) * posDamping;
             posY += (ty - posY) * posDamping;
             posZ += (tz - posZ) * posDamping;
             modelMesh.position.set(posX, posY, posZ);
         }
+
         renderer.render(scene, camera);
 
-        if (graphNeedsRedraw && (now - lastGraphDrawTime >= 35)) {
+        // 2D-Graphen auf ~14 FPS gedrosselt (70 ms), entlastet den Haupt-Thread
+        const redrawRequired = window.graphNeedsRedraw || false;
+        if (redrawRequired && (now - lastGraphDrawTime >= 70)) {
             lastGraphDrawTime = now;
-            graphNeedsRedraw = false;
-            if (window.drawAccGraphs) window.drawAccGraphs();
+            window.graphNeedsRedraw = false;
+            if (typeof window.drawAccGraphs === 'function') {
+                window.drawAccGraphs();
+            }
         }
     }
     requestAnimationFrame(animate);
