@@ -75,14 +75,21 @@ function initRealtimeChannel() {
  * 2. Browser background-updates public.sd_cloud_commands to DONE/ERROR via Supabase JS,
  *    relieving the ESP32 from having to perform HTTPS PATCH requests.
  */
+    // Sofort-Rückmeldung von Befehlen über WebSocket empfangen
+    /*
+     * Breadcrumb: 2026-09-14 00:30 - Safe WSS Command Unwrapper & Browser DB Sync
+     * [CRITICAL BUGFIX FLAG - COMMAND PAYLOAD UNWRAPPING]:
+     * 1. Evaluates row.id safely: avoids assigning row = event.payload.payload (which stripped id and command).
+     * 2. Unlocks activeCommandId, renders file list, and updates Supabase DB record to DONE.
+     */
     liveChannel.on('broadcast', { event: 'cmd_res' }, (event) => {
-        const row = event.payload?.payload || event.payload;
+        const row = (event.payload && event.payload.id !== undefined) ? event.payload : event;
         if (!row) return;
         if (activeCommandId && row.id === activeCommandId) {
             appendTerminalLog(`[CLOUD CMD] Sofort-Antwort via WSS erhalten (#${row.id}: ${row.status})`);
             handleCommandResult(row);
 
-            // Browser aktualisiert die Datenbank im Hintergrund (ESP32 spart sich den HTTPS-PATCH)
+            // Browser aktualisiert die Datenbank im Hintergrund (spart dem ESP32 den HTTPS-PATCH)
             sbClient.from('sd_cloud_commands').update({
                 status: row.status,
                 payload: row.payload,
