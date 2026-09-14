@@ -171,12 +171,17 @@
 
     <!-- TAB 1: IMU CLOUD-LOGS (1-MB-CHUNKS) -->
     <main id="tab-imulogs" class="hidden">
+        <!-- ==================================================================== -->
+        <!-- REPLAY-DECK: 3D-ANALYSE, BEREICHS-ZOOM & 0.1X ZEITLUPE                -->
+        <!-- Breadcrumb: 2026-09-14 20:00 - Oscilloscope Region Zoom & 0.1x Slow-Mo -->
+        <!-- ==================================================================== -->
         <section id="imu-replay-deck" class="card p-4 md:p-5 rounded-lg mb-5 bg-white border border-slate-300 shadow-sm hidden">
+            <!-- Header: Dateititel & Schließen -->
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 pb-3 border-b border-slate-200">
                 <div>
                     <div class="flex items-center gap-2">
                         <span class="text-xs font-bold text-stag-green uppercase tracking-wider">Replay-Analyse:</span>
-                        <span id="replay-file-title" class="text-xs font-mono text-slate-900 font-bold truncate max-w-xs">--</span>
+                        <span id="replay-file-title" class="text-xs font-mono text-slate-900 font-bold truncate max-w-xs sm:max-w-md">--</span>
                     </div>
                     <p id="replay-meta-info" class="text-[11px] text-slate-500 font-mono mt-0.5">Lade Datensätze...</p>
                 </div>
@@ -185,7 +190,9 @@
                 </button>
             </div>
 
+            <!-- Hauptbereich: 3D-Viewport (links) & Waveform-Canvas mit Zoom (rechts) -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+                <!-- 3D Canvas -->
                 <div class="lg:col-span-1 rounded-lg border border-slate-300 relative overflow-hidden h-60" style="background-color: #dbe2ea;">
                     <div id="replay-canvas-container" class="w-full h-full"></div>
                     <div id="replay-overlay-hud" class="absolute bottom-2 left-2 bg-white/95 backdrop-blur-sm border border-slate-300 px-2.5 py-1 rounded text-[10px] font-mono text-slate-800 pointer-events-none shadow-sm">
@@ -193,9 +200,10 @@
                     </div>
                 </div>
 
+                <!-- Oszilloskop-Canvas & Zoom-Steuerung -->
                 <div class="lg:col-span-2 flex flex-col justify-between bg-white p-3 rounded-lg border border-slate-300">
                     <div class="flex flex-wrap justify-between items-center gap-2 mb-2 pb-1 border-b border-slate-200">
-                        <div class="flex items-center gap-1.5">
+                        <div class="flex items-center gap-1.5 flex-wrap">
                             <span class="text-[11px] font-bold text-slate-600 font-mono uppercase mr-1">Signal:</span>
                             <button id="btn-replay-mode-acc" onclick="setReplayGraphMode('accel')"
                                     class="px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition">
@@ -206,20 +214,31 @@
                                 Neigungswinkel (° Euler)
                             </button>
                         </div>
-                        <span id="replay-cursor-time" class="text-[11px] font-mono text-green-700 font-bold">00:00.000</span>
+
+                        <!-- Zoom-Reset Button (erscheint dynamisch beim Markieren) & Zeit-Cursor -->
+                        <div class="flex items-center gap-2">
+                            <button id="btn-replay-reset-zoom" onclick="resetReplayZoom()"
+                                    class="hidden px-2.5 py-1 text-[11px] font-bold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition flex items-center gap-1">
+                                🔍 Zoom zurücksetzen (<span id="replay-zoom-span-label">100%</span>)
+                            </button>
+                            <span id="replay-cursor-time" class="text-[11px] font-mono text-green-700 font-bold">00:00.000</span>
+                        </div>
                     </div>
 
+                    <!-- Interaktives Diagramm (Drag to Zoom & Scroll to Pan) -->
                     <div class="relative w-full h-40">
-                        <canvas id="replayGraphCanvas" class="w-full h-full block bg-white"></canvas>
+                        <canvas id="replayGraphCanvas" class="w-full h-full block bg-white select-none"></canvas>
                     </div>
 
-                    <div class="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
+                    <div class="flex justify-between items-center text-[10px] font-mono text-slate-500 mt-1">
                         <span>Start (0.0s)</span>
+                        <span class="text-slate-400 hidden sm:inline">🖱️ Bereich ziehen zum Zoomen &bull; Mausrad zum Verschieben</span>
                         <span id="replay-duration-label">0.0 s</span>
                     </div>
                 </div>
             </div>
 
+            <!-- Transport-Leiste: Scrubber, Playback & 0.1x Zeitlupe -->
             <div class="bg-slate-100 p-3.5 rounded-lg border border-slate-300 flex flex-col gap-3">
                 <div class="flex items-center gap-3">
                     <span id="replay-current-time-label" class="text-xs font-mono text-slate-700 w-14">00:00</span>
@@ -230,21 +249,26 @@
                 </div>
 
                 <div class="flex flex-wrap justify-between items-center gap-3 pt-2 border-t border-slate-200">
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
                         <button id="btn-replay-play" onclick="toggleReplayPlay()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition">
                             ▶ Abspielen
                         </button>
                         <button onclick="resetReplayPlayback()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 border border-slate-300 px-3 py-1.5 rounded text-xs font-bold transition">
                             ⏮ Reset
                         </button>
-                        <select id="replay-speed" onchange="onReplaySpeedChange(this.value)" class="bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 font-mono outline-none">
-                            <option value="0.5">0.5x Speed</option>
-                            <option value="1.0" selected>1.0x Normal</option>
-                            <option value="2.0">2.0x Schnell</option>
-                            <option value="4.0">4.0x Zeitraffer</option>
-                        </select>
+
+                        <!-- Stufenlose Geschwindigkeitsleiste inkl. 0.1x Ultra-Zeitlupe -->
+                        <div class="flex items-center gap-1 bg-white border border-slate-300 rounded-lg p-0.5 shadow-sm ml-1">
+                            <span class="text-[10px] text-slate-500 font-semibold px-1 hidden md:inline">Tempo:</span>
+                            <button type="button" onclick="setReplaySpeedPreset(0.1)" id="btn-spd-0.1" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.1x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(0.25)" id="btn-spd-0.25" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.25x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(0.5)" id="btn-spd-0.5" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.5x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(1.0)" id="btn-spd-1.0" class="px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition">1.0x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(2.0)" id="btn-spd-2.0" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">2.0x</button>
+                        </div>
                     </div>
 
+                    <!-- Zyklus-Auswahl -->
                     <div class="flex items-center gap-2">
                         <label class="text-xs text-slate-600 font-semibold whitespace-nowrap">Aufweckzyklus:</label>
                         <select id="replay-cycle-select" onchange="onReplayCycleSelect(this.value)" class="bg-white border border-slate-300 rounded px-3 py-1.5 text-xs text-green-700 font-mono font-bold outline-none">
