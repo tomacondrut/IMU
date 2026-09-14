@@ -1,31 +1,24 @@
 /*
- * Breadcrumb: 2026-09-13 09:35 - Interactive IMU Storage Browser & Replay Deck
- * [CRITICAL BUGFIX FLAG - MULTI-DEVICE STORAGE & 60 FPS REPLAY]:
- * 1. fetchImuCloudLogs() filters chunks strictly by selectedDeviceId.
- * 2. Dedicated Three.js canvas instance isolated from live viewport to prevent context thrashing.
- * 3. Sub-sample SLERP interpolation across 100ms CSV records with scrubbable timeline.
- * 4. Dual-mode curve visualizer: 3-axis Linear Acceleration vs. 3D Euler Angles (Roll, Pitch, Yaw).
+ * Breadcrumb: 2026-09-14 20:45 - Complete Unified Replay Deck Engine
+ * [CRITICAL BUGFIX FLAG - FULL REPLAY ENGINE RESTORATION]:
+ * 1. Restored missing 3D Viewport engine (initReplay3D, loadReplayGLBModel, setupReplayModelMesh).
+ * 2. Restored CSV file inspector (inspectImuFile) and cycle selector (onReplayCycleSelect).
+ * 3. Restored sub-sample SLERP frame interpolation (renderInterpolatedFrame).
+ * 4. Region Drag-to-Zoom, Wheel Panning & 0.1x Slow-Mo integrated without function duplicates.
+ * 5. Collapsible Daily Log Accordion and bulk controls fully functional.
  */
 
-/*
- * Breadcrumb: 2026-09-14 19:55 - Interactive Oscilloscope Region Zoom, Pan & 0.1x Slow-Motion Replay
- * [CRITICAL BUGFIX FLAG - OSCILLOSCOPE REGION ZOOM & MICRO-ANALYSIS]:
- * 1. Region Drag-to-Zoom: Dragging across canvas selects time window [tMin, tMax]; single click seeks cursor.
- * 2. Wheel Panning: Mouse wheel over canvas smoothly pans the zoomed window left/right without resetting.
- * 3. 0.1x Ultra-Slow Motion: SLERP quaternion & linear acceleration interpolation at 60 FPS across 100ms CSV records.
- * 4. Zoom Boundary Loop: Playback cleanly loops within the selected zoom range for vibration analysis.
- * 5. Full Reset: resetReplayZoom() returns to 100% full duration view instantly.
- */
-
-/*
- * Breadcrumb: 2026-09-14 20:10 - Consolidated Replay Engine: Region Zoom, Pan, 0.1x Slow-Mo & Accordion
- * [CRITICAL BUGFIX FLAG - REMOVE DUPLICATE FUNCTION DECLARATIONS]:
- * 1. Removed duplicate declarations of drawReplayGraph, playLoop and resetReplayPlayback.
- * 2. Unified zoom bounds calculation and canvas interaction pipeline.
- * 3. Daily log accordion and bulk controls fully integrated.
- */
-
+// Globaler Status für Replay-Deck
+let replayDataRaw = [];
+let replayFilteredData = [];
+let replayCurrentTimeSec = 0.0;
+let replayIsPlaying = false;
+let replaySpeed = 1.0;
+let replayAnimId = null;
+let replayLastFrameTime = 0;
 let replayGraphMode = 'accel';
+
+// Zoom- und Interaktionsstatus
 let replayZoomStartSec = 0.0;
 let replayZoomEndSec = 0.0;
 let isReplayZoomed = false;
@@ -34,7 +27,309 @@ let selectStartX = 0;
 let selectCurrentX = 0;
 let canvasListenersAttached = false;
 
-// Zoom- und Koordinatenumrechnung
+// Three.js Replay Instanzen
+let repScene, repCamera, repRenderer, repMesh;
+
+// ============================================================================
+// 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
+// ============================================================================
+
+function initReplay3D() {
+    const container = document.getElementById('replay-canvas-container');
+    if (!container || repRenderer) return;
+
+    const w = container.clientWidth || 300;
+    const h = container.clientHeight || 240;
+
+    repScene = new THREE.Scene();
+    repScene.background = new THREE.Color(0xdbe2ea);
+    repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
+    repCamera.position.set(0, 0, 3.8);
+
+    repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    repRenderer.setSize(w, h);
+    repRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(repRenderer.domElement);
+
+    const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
+    l1.position.set(5, 10, 7);
+    repScene.add(l1);
+
+    const l2 = new THREE.DirectionalLight(0xffffff, 0.6);
+    l2.position.set(-5, -10, -7);
+    repScene.add(l2);
+
+    repScene.add(new THREE.AmbientLight(0xffffff, 0.7));
+
+    createReplayFallbackCube();
+    loadReplayGLBModel();
+
+    window.addEventListener('resize', () => {
+        if (!container || container.clientWidth === 0) return;
+        repCamera.aspect = container.clientWidth / container.clientHeight;
+        repCamera.updateProjectionMatrix();
+        repRenderer.setSize(container.clientWidth, container.clientHeight);
+    });
+}
+
+function createReplayFallbackCube() {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
+    repMesh = new THREE.Mesh(geo, mat);
+    repScene.add(repMesh);
+}
+
+function setupReplayModelMesh(gltfScene) {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    repMesh = gltfScene;
+    const box = new THREE.Box3().setFromObject(repMesh);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) repMesh.scale.set(1.8 / maxDim, 1.8 / maxDim, 1.8 / maxDim);
+    repScene.add(repMesh);
+    if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
+}
+
+function loadReplayGLBModel() {
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createReplayFallbackCube();
+        return;
+    }
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            createReplayFallbackCube();
+            return;
+        }
+        loader.load(
+            candidatePaths[index],
+            (gltf) => { setupReplayModelMesh(gltf.scene); },
+            undefined,
+            () => { tryLoad(index + 1); }
+        );
+    }
+    tryLoad(0);
+}
+
+function closeImuReplayDeck() {
+    if (replayIsPlaying) toggleReplayPlay();
+    const deck = document.getElementById('imu-replay-deck');
+    if (deck) deck.classList.add('hidden');
+}
+
+// ============================================================================
+// 2. MATHEMATIK & REPLAY INSPEKTOR (DATEIEN ÖFFNEN)
+// ============================================================================
+
+function quatToEulerDeg(qw, qx, qy, qz) {
+    const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
+    const w = qw / norm, x = qx / norm, y = qy / norm, z = qz / norm;
+
+    const sinr_cosp = 2 * (w * x + y * z);
+    const cosr_cosp = 1 - 2 * (x * x + y * y);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
+
+    const sinp = 2 * (w * y - z * x);
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(sinp) * (180 / Math.PI);
+
+    const siny_cosp = 2 * (w * z + x * y);
+    const cosy_cosp = 1 - 2 * (y * y + z * z);
+    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
+
+    return { roll, pitch, yaw };
+}
+
+function setReplayGraphMode(mode) {
+    replayGraphMode = mode;
+    const btnAcc = document.getElementById('btn-replay-mode-acc');
+    const btnEuler = document.getElementById('btn-replay-mode-euler');
+
+    const activeClass = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition shadow-sm';
+    const inactiveClass = 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition';
+
+    if (mode === 'accel') {
+        if (btnAcc) btnAcc.className = activeClass;
+        if (btnEuler) btnEuler.className = inactiveClass;
+    } else {
+        if (btnEuler) btnEuler.className = activeClass;
+        if (btnAcc) btnAcc.className = inactiveClass;
+    }
+    drawReplayGraph(replayCurrentTimeSec);
+}
+
+async function inspectImuFile(downloadUrl, fileName) {
+    const deck = document.getElementById('imu-replay-deck');
+    if (!deck) return;
+    deck.classList.remove('hidden');
+    deck.scrollIntoView({ behavior: 'smooth' });
+
+    document.getElementById('replay-file-title').innerText = fileName;
+    document.getElementById('replay-meta-info').innerText = 'Lade Datensätze aus Supabase Storage...';
+
+    initReplay3D();
+
+    try {
+        const res = await fetch(downloadUrl);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+
+        const lines = text.split('\n');
+        replayDataRaw = [];
+        const cyclesMap = new Set();
+
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const parts = line.split(',');
+            if (parts.length >= 8) {
+                const qw = parseFloat(parts[1]) || 1.0;
+                const qx = parseFloat(parts[2]) || 0.0;
+                const qy = parseFloat(parts[3]) || 0.0;
+                const qz = parseFloat(parts[4]) || 0.0;
+                const euler = quatToEulerDeg(qw, qx, qy, qz);
+
+                const item = {
+                    ts: parts[0],
+                    qw, qx, qy, qz,
+                    ax: parseFloat(parts[5]) || 0.0,
+                    ay: parseFloat(parts[6]) || 0.0,
+                    az: parseFloat(parts[7]) || 0.0,
+                    roll: euler.roll,
+                    pitch: euler.pitch,
+                    yaw: euler.yaw,
+                    cycle: parts[8] ? parseInt(parts[8], 10) : 0
+                };
+                replayDataRaw.push(item);
+                if (item.cycle) cyclesMap.add(item.cycle);
+            }
+        }
+
+        if (replayDataRaw.length === 0) {
+            document.getElementById('replay-meta-info').innerText = 'Datei enthält keine gültigen Messzeilen.';
+            return;
+        }
+
+        const select = document.getElementById('replay-cycle-select');
+        select.innerHTML = '<option value="ALL">Alle Zyklen der Datei (' + replayDataRaw.length + ' Pkt)</option>';
+
+        Array.from(cyclesMap).sort((a, b) => a - b).forEach(c => {
+            const count = replayDataRaw.filter(d => d.cycle === c).length;
+            select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${count} Samples)</option>`;
+        });
+
+        onReplayCycleSelect('ALL');
+    } catch (err) {
+        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
+    }
+}
+
+function onReplayCycleSelect(cycleVal) {
+    const select = document.getElementById('replay-cycle-select');
+    if (select) select.value = cycleVal;
+
+    if (cycleVal === 'ALL') {
+        replayFilteredData = replayDataRaw;
+    } else {
+        const cNum = parseInt(cycleVal, 10);
+        replayFilteredData = replayDataRaw.filter(d => d.cycle === cNum);
+    }
+
+    const total = replayFilteredData.length;
+    const durSec = ((total - 1) * 0.1).toFixed(1);
+
+    document.getElementById('replay-meta-info').innerText =
+        `${total} Messpunkte geladen | Dauer: ${durSec} s | 100 ms Raster`;
+
+    const durLabel = document.getElementById('replay-duration-label');
+    if (durLabel) durLabel.innerText = durSec + ' s';
+    const totalTimeLabel = document.getElementById('replay-total-time-label');
+    if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
+
+    resetReplayZoom();
+}
+
+// ============================================================================
+// 3. FRAME-INTERPOLATION & 3D RENDERING
+// ============================================================================
+
+function renderInterpolatedFrame(tSec) {
+    const total = replayFilteredData.length;
+    if (total === 0) return;
+
+    const sampleInterval = 0.1;
+    const exactIndex = tSec / sampleInterval;
+    const iA = Math.min(Math.floor(exactIndex), total - 1);
+    const iB = Math.min(iA + 1, total - 1);
+    const alpha = (iA === iB) ? 0 : (exactIndex - iA);
+
+    const ptA = replayFilteredData[iA];
+    const ptB = replayFilteredData[iB];
+
+    if (repMesh && repScene && repCamera) {
+        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
+        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
+
+        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
+        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
+
+        if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
+        qA.slerp(qB, alpha);
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+        repMesh.quaternion.copy(qA);
+
+        const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
+        const ay = ptA.ay + (ptB.ay - ptA.ay) * alpha;
+        const az = ptA.az + (ptB.az - ptA.az) * alpha;
+
+        const aLen = Math.hypot(ax, ay, az);
+        const axF = (aLen > 0.20) ? ax : 0;
+        const ayF = (aLen > 0.20) ? ay : 0;
+        const azF = (aLen > 0.20) ? az : 0;
+
+        const aVec = new THREE.Vector3(ayF, -axF, azF);
+        aVec.applyQuaternion(repMesh.quaternion);
+
+        const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
+        const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
+        const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
+        repMesh.position.set(tx, ty, tz);
+
+        repRenderer.render(repScene, repCamera);
+    }
+
+    const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
+    const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
+    const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
+    const axD = ptA.ax + (ptB.ax - ptA.ax) * alpha;
+    const ayD = ptA.ay + (ptB.ay - ptA.ay) * alpha;
+    const azD = ptA.az + (ptB.az - ptA.az) * alpha;
+
+    const hud = document.getElementById('replay-overlay-hud');
+    if (hud) {
+        hud.innerHTML =
+            `ANG: R:${roll.toFixed(1)}° P:${pitch.toFixed(1)}° Y:${yaw.toFixed(1)}°<br>` +
+            `ACC: X:${axD.toFixed(2)} Y:${ayD.toFixed(2)} Z:${azD.toFixed(2)} m/s² | Zyklus #${ptA.cycle}`;
+    }
+
+    const curTimeEl = document.getElementById('replay-cursor-time');
+    if (curTimeEl) curTimeEl.innerText = `+${tSec.toFixed(2)}s (${ptA.ts})`;
+
+    const curTimeLbl = document.getElementById('replay-current-time-label');
+    if (curTimeLbl) curTimeLbl.innerText = tSec.toFixed(1) + 's';
+
+    const scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) scrubber.value = Math.round(exactIndex);
+
+    drawReplayGraph(tSec);
+}
+
+// ============================================================================
+// 4. BEREICHS-ZOOM, PAN & INTERAKTIVES OSZILLOSKOP
+// ============================================================================
+
 function getTimeBounds() {
     const maxDur = Math.max((replayFilteredData.length - 1) * 0.1, 0.001);
     const tStart = isReplayZoomed ? replayZoomStartSec : 0.0;
@@ -62,8 +357,8 @@ function setReplaySpeedPreset(spd) {
         const btn = document.getElementById(`btn-spd-${s}`);
         if (btn) {
             btn.className = (s === replaySpeed)
-                ? 'px-2 py-0.5 text-xs font-bold rounded bg-stag-green text-white shadow-sm transition'
-                : 'px-2 py-0.5 text-xs font-bold rounded bg-slate-200 text-slate-700 hover:bg-slate-300 transition';
+                ? 'px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition'
+                : 'px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition';
         }
     });
 }
@@ -345,6 +640,10 @@ function drawReplayGraph(curTimeSec) {
     }
 }
 
+// ============================================================================
+// 5. PLAYBACK CONTROLS (PLAY, PAUSE, RESET, SCRUB)
+// ============================================================================
+
 function onReplayScrub(val) {
     if (replayIsPlaying) toggleReplayPlay();
     replayCurrentTimeSec = parseInt(val, 10) * 0.1;
@@ -366,7 +665,7 @@ function toggleReplayPlay() {
         replayAnimId = requestAnimationFrame(playLoop);
     } else {
         btn.innerText = '▶ Abspielen';
-        btn.className = 'bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 transition';
+        btn.className = 'bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition';
         if (replayAnimId) cancelAnimationFrame(replayAnimId);
     }
 }
@@ -397,6 +696,10 @@ function resetReplayPlayback() {
 function onReplaySpeedChange(spd) {
     replaySpeed = parseFloat(spd);
 }
+
+// ============================================================================
+// 6. DATEI-LÖSCHUNG & TAGES-AKKORDEON FÜR CLOUD IMU
+// ============================================================================
 
 async function deleteImuCloudFile(filePath, fileName) {
     if (!confirm(`Möchtest du "${fileName}" (${selectedDeviceId}) wirklich aus Supabase löschen?\n\nHinweis: Die Originaldatei bleibt auf der SD-Karte des Boards erhalten.`)) {
@@ -560,7 +863,16 @@ async function fetchImuCloudLogs() {
 
 // Window-Exporte
 window.fetchImuCloudLogs = fetchImuCloudLogs;
-window.toggleDayCollapse = toggleDayCollapse;
-window.setAllDaysCollapse = setAllDaysCollapse;
+window.inspectImuFile = inspectImuFile;
+window.closeImuReplayDeck = closeImuReplayDeck;
+window.onReplayCycleSelect = onReplayCycleSelect;
+window.onReplayScrub = onReplayScrub;
+window.toggleReplayPlay = toggleReplayPlay;
+window.resetReplayPlayback = resetReplayPlayback;
+window.onReplaySpeedChange = onReplaySpeedChange;
 window.setReplaySpeedPreset = setReplaySpeedPreset;
 window.resetReplayZoom = resetReplayZoom;
+window.setReplayGraphMode = setReplayGraphMode;
+window.deleteImuCloudFile = deleteImuCloudFile;
+window.toggleDayCollapse = toggleDayCollapse;
+window.setAllDaysCollapse = setAllDaysCollapse;
