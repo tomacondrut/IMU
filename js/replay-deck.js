@@ -17,6 +17,14 @@
  * 5. Full Reset: resetReplayZoom() returns to 100% full duration view instantly.
  */
 
+/*
+ * Breadcrumb: 2026-09-14 20:10 - Consolidated Replay Engine: Region Zoom, Pan, 0.1x Slow-Mo & Accordion
+ * [CRITICAL BUGFIX FLAG - REMOVE DUPLICATE FUNCTION DECLARATIONS]:
+ * 1. Removed duplicate declarations of drawReplayGraph, playLoop and resetReplayPlayback.
+ * 2. Unified zoom bounds calculation and canvas interaction pipeline.
+ * 3. Daily log accordion and bulk controls fully integrated.
+ */
+
 let replayGraphMode = 'accel';
 let replayZoomStartSec = 0.0;
 let replayZoomEndSec = 0.0;
@@ -116,7 +124,6 @@ function attachCanvasInteraction() {
         const w = cvNow.clientWidth;
 
         if (dx >= 15) {
-            // Bereichsauswahl -> Zoom aktivieren
             const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
             const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
 
@@ -131,7 +138,6 @@ function attachCanvasInteraction() {
                 if (btnReset) btnReset.classList.remove('hidden');
                 if (spanLbl) spanLbl.innerText = `${(t2 - t1).toFixed(2)}s`;
 
-                // Scrubber-Bereich auf gezoomtes Fenster begrenzen
                 const scrubber = document.getElementById('replay-scrubber');
                 if (scrubber) {
                     scrubber.min = Math.floor(t1 / 0.1);
@@ -142,14 +148,12 @@ function attachCanvasInteraction() {
                 renderInterpolatedFrame(replayCurrentTimeSec);
             }
         } else {
-            // Klick ohne Ziehen -> Cursor direkt an Position setzen
             const targetTime = xToTime(selectStartX, w, leftMargin);
             replayCurrentTimeSec = targetTime;
             renderInterpolatedFrame(replayCurrentTimeSec);
         }
     });
 
-    // Mausrad zum horizontalen Scrollen (Pan) im Zoom
     cv.addEventListener('wheel', (e) => {
         if (!isReplayZoomed) return;
         e.preventDefault();
@@ -202,7 +206,6 @@ function drawReplayGraph(curTimeSec) {
 
     const { tStart, tEnd, tSpan } = getTimeBounds();
 
-    // Dynamische Y-Skalierung
     let maxScale = 2.0;
     const isEuler = (replayGraphMode === 'euler');
 
@@ -228,7 +231,6 @@ function drawReplayGraph(curTimeSec) {
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // Horizontale Amplitudengitter
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
@@ -243,7 +245,6 @@ function drawReplayGraph(curTimeSec) {
     });
     ctx.setLineDash([]);
 
-    // Vertikale Zeitgitterlinien für den sichtbaren Bereich
     let timeStep = 1.0;
     if (tSpan <= 0.5) timeStep = 0.05;
     else if (tSpan <= 2.0) timeStep = 0.2;
@@ -264,7 +265,6 @@ function drawReplayGraph(curTimeSec) {
         }
     }
 
-    // Kurvenverlauf zeichnen (mit Clipping auf Plotbereich)
     const drawCurve = (key, colorHex) => {
         ctx.save();
         ctx.beginPath();
@@ -296,7 +296,6 @@ function drawReplayGraph(curTimeSec) {
         drawCurve('yaw', '#7c3aed');
     }
 
-    // Legende
     ctx.font = 'bold 9px monospace';
     const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
     const legendWidth = ctx.measureText(legendText).width;
@@ -315,7 +314,6 @@ function drawReplayGraph(curTimeSec) {
         ctx.fillStyle = '#7c3aed'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
     }
 
-    // Halbtransparente Box während des Ziehens
     if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
         const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
         const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
@@ -334,7 +332,6 @@ function drawReplayGraph(curTimeSec) {
         ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, 18);
     }
 
-    // Aktueller Cursor (Orange Linie)
     const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
     const curX = timeToX(curTime, w, leftMargin);
 
@@ -348,149 +345,6 @@ function drawReplayGraph(curTimeSec) {
     }
 }
 
-function playLoop(timestamp) {
-    if (!replayIsPlaying) return;
-    const dt = (timestamp - replayLastFrameTime) / 1000.0;
-    replayLastFrameTime = timestamp;
-
-    const { tStart, tEnd } = getTimeBounds();
-
-    replayCurrentTimeSec += dt * replaySpeed;
-
-    // Loop innerhalb des aktiven Zoom-Bereichs
-    if (replayCurrentTimeSec >= tEnd) {
-        replayCurrentTimeSec = tStart;
-    }
-
-    renderInterpolatedFrame(replayCurrentTimeSec);
-    replayAnimId = requestAnimationFrame(playLoop);
-}
-
-function resetReplayPlayback() {
-    if (replayIsPlaying) toggleReplayPlay();
-    const { tStart } = getTimeBounds();
-    replayCurrentTimeSec = tStart;
-    renderInterpolatedFrame(replayCurrentTimeSec);
-}
-
-/*
- * Breadcrumb: 2026-09-13 10:00 - Light Theme Replay Graph & Storage Browser
- * [CRITICAL BUGFIX FLAG - REPLAY CANVAS & FILE LIST]:
- * 1. Gridlines rendered in subtle dark alpha on white canvas.
- * 2. Legend and time markers adapted for bright backgrounds.
- * 3. File browser items rendered in clean slate-100 with distinct border lines.
- */
-
-function drawReplayGraph(curTimeSec) {
-    const cv = document.getElementById('replayGraphCanvas');
-    if (!cv || replayFilteredData.length === 0) return;
-
-    const w = cv.width = cv.clientWidth;
-    const h = cv.height = cv.clientHeight;
-    if (w === 0 || h === 0) return;
-
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, w, h);
-
-    const count = replayFilteredData.length;
-    const midY = h / 2;
-    const leftMargin = 38;
-
-    if (count < 2) return;
-
-    let maxScale = 2.0;
-    const isEuler = (replayGraphMode === 'euler');
-
-    if (!isEuler) {
-        for (let i = 0; i < count; i++) {
-            const d = replayFilteredData[i];
-            if (Math.abs(d.ax) > maxScale) maxScale = Math.abs(d.ax);
-            if (Math.abs(d.ay) > maxScale) maxScale = Math.abs(d.ay);
-            if (Math.abs(d.az) > maxScale) maxScale = Math.abs(d.az);
-        }
-        maxScale = Math.ceil(maxScale * 1.15 * 10) / 10;
-    } else {
-        maxScale = 45.0;
-        for (let i = 0; i < count; i++) {
-            const d = replayFilteredData[i];
-            if (Math.abs(d.roll) > maxScale) maxScale = Math.abs(d.roll);
-            if (Math.abs(d.pitch) > maxScale) maxScale = Math.abs(d.pitch);
-            if (Math.abs(d.yaw) > maxScale) maxScale = Math.abs(d.yaw);
-        }
-        maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
-    }
-
-    const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
-    ctx.font = '9px monospace';
-    gridPoints.forEach(ratio => {
-        const y = midY - ratio * (midY - 8);
-        ctx.strokeStyle = ratio === 0 ? 'rgba(15, 23, 42, 0.25)' : 'rgba(15, 23, 42, 0.07)';
-        ctx.lineWidth = 1;
-        if (ratio === 0) ctx.setLineDash([3, 3]); else ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(leftMargin, y); ctx.lineTo(w, y); ctx.stroke();
-        ctx.fillStyle = '#64748b';
-        ctx.fillText((ratio > 0 ? '+' : '') + (ratio * maxScale).toFixed(isEuler ? 0 : 1), 2, y + 3);
-    });
-    ctx.setLineDash([]);
-
-    const drawCurve = (key, colorHex) => {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(leftMargin, 0, w - leftMargin, h);
-        ctx.clip();
-        ctx.strokeStyle = colorHex;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        for (let i = 0; i < count; i++) {
-            const px = leftMargin + (i / (count - 1)) * (w - leftMargin);
-            const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
-            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-        ctx.restore();
-    };
-
-    if (!isEuler) {
-        drawCurve('ax', '#dc2626');
-        drawCurve('ay', '#009B4C');
-        drawCurve('az', '#2563eb');
-    } else {
-        drawCurve('roll', '#dc2626');
-        drawCurve('pitch', '#009B4C');
-        drawCurve('yaw', '#7c3aed');
-    }
-
-    ctx.font = 'bold 9px monospace';
-    const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
-    const legendWidth = ctx.measureText(legendText).width;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    ctx.fillRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.strokeRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
-
-    if (!isEuler) {
-        ctx.fillStyle = '#dc2626'; ctx.fillText('● ACC X', w - legendWidth - 9, 14);
-        ctx.fillStyle = '#009B4C'; ctx.fillText('● ACC Y', w - legendWidth + 37, 14);
-        ctx.fillStyle = '#2563eb'; ctx.fillText('● ACC Z', w - legendWidth + 83, 14);
-    } else {
-        ctx.fillStyle = '#dc2626'; ctx.fillText('● Roll', w - legendWidth - 9, 14);
-        ctx.fillStyle = '#009B4C'; ctx.fillText('● Pitch', w - legendWidth + 31, 14);
-        ctx.fillStyle = '#7c3aed'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
-    }
-
-    const maxDur = Math.max((count - 1) * 0.1, 0.001);
-    const progress = Math.min(Math.max((curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec) / maxDur, 0), 1);
-    const curX = leftMargin + progress * (w - leftMargin);
-
-    ctx.strokeStyle = '#d97706';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(curX, 0); ctx.lineTo(curX, h); ctx.stroke();
-    ctx.fillStyle = '#d97706';
-    ctx.beginPath(); ctx.arc(curX, 6, 4, 0, Math.PI * 2); ctx.fill();
-}
-
 function onReplayScrub(val) {
     if (replayIsPlaying) toggleReplayPlay();
     replayCurrentTimeSec = parseInt(val, 10) * 0.1;
@@ -500,11 +354,11 @@ function onReplayScrub(val) {
 function toggleReplayPlay() {
     replayIsPlaying = !replayIsPlaying;
     const btn = document.getElementById('btn-replay-play');
-    const maxDur = (replayFilteredData.length - 1) * 0.1;
+    const { tStart, tEnd } = getTimeBounds();
 
     if (replayIsPlaying) {
-        if (replayCurrentTimeSec >= maxDur) {
-            replayCurrentTimeSec = 0.0;
+        if (replayCurrentTimeSec >= tEnd) {
+            replayCurrentTimeSec = tStart;
         }
         btn.innerText = '⏸ Pause';
         btn.className = 'bg-yellow-600 text-white px-4 py-1.5 rounded text-xs font-bold transition';
@@ -522,14 +376,11 @@ function playLoop(timestamp) {
     const dt = (timestamp - replayLastFrameTime) / 1000.0;
     replayLastFrameTime = timestamp;
 
-    const maxDur = (replayFilteredData.length - 1) * 0.1;
+    const { tStart, tEnd } = getTimeBounds();
     replayCurrentTimeSec += dt * replaySpeed;
 
-    if (replayCurrentTimeSec >= maxDur) {
-        replayCurrentTimeSec = maxDur;
-        renderInterpolatedFrame(replayCurrentTimeSec);
-        toggleReplayPlay();
-        return;
+    if (replayCurrentTimeSec >= tEnd) {
+        replayCurrentTimeSec = tStart;
     }
 
     renderInterpolatedFrame(replayCurrentTimeSec);
@@ -538,8 +389,9 @@ function playLoop(timestamp) {
 
 function resetReplayPlayback() {
     if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
-    renderInterpolatedFrame(0.0);
+    const { tStart } = getTimeBounds();
+    replayCurrentTimeSec = tStart;
+    renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
 function onReplaySpeedChange(spd) {
@@ -567,15 +419,6 @@ async function deleteImuCloudFile(filePath, fileName) {
         alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
     }
 }
-
-/*
- * Breadcrumb: 2026-09-14 19:50 - Collapsible Daily Log Accordion & Mobile-Optimized Bulk Controls
- * [CRITICAL BUGFIX FLAG - ACCORDION DAY COLLAPSE]:
- * 1. Groups logs by day and renders an interactive accordion (latest day expanded by default, older days collapsed).
- * 2. Provides setAllDaysCollapse() for bulk expand/collapse actions.
- * 3. Mobile-optimized touch header (min. 44px tap target, tap-highlight-transparent, flex truncation).
- * 4. Smooth 90-degree chevron transition for visual state clarity.
- */
 
 function toggleDayCollapse(dayId) {
     const content = document.getElementById(`day-content-${dayId}`);
@@ -629,7 +472,6 @@ async function fetchImuCloudLogs() {
 
     const dayKeys = Object.keys(groupedByDay);
 
-    // Globale Aktionsleiste oberhalb der Tagesliste
     let html = `
         <div class="flex justify-between items-center mb-3 pb-2 px-1 border-b border-slate-200">
             <span class="text-xs font-bold text-slate-700 font-mono">
@@ -654,13 +496,10 @@ async function fetchImuCloudLogs() {
         const totalBytes = files.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
         const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
         const dayId = 'day_' + day.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-        // Der neueste Tag (Index 0) ist standardmäßig ausgeklappt, ältere eingeklappt
         const isDefaultOpen = (idx === 0);
 
         html += `
         <div class="bg-slate-50 border border-slate-300 rounded-lg p-3 shadow-sm transition">
-            <!-- Klickbarer Tages-Header -->
             <div onclick="toggleDayCollapse('${dayId}')"
                  class="flex justify-between items-center cursor-pointer select-none py-1 px-1 rounded hover:bg-slate-100 transition"
                  role="button" aria-expanded="${isDefaultOpen}">
@@ -676,7 +515,6 @@ async function fetchImuCloudLogs() {
                 <span class="text-[10px] text-slate-400 font-mono hidden sm:inline ml-2">Umschalten ⇄</span>
             </div>
 
-            <!-- Auf-/zuklappbarer Inhaltscontainer -->
             <div id="day-content-${dayId}" class="space-y-1.5 mt-2.5 pt-2 border-t border-slate-200 ${isDefaultOpen ? '' : 'hidden'}">
         `;
 
@@ -694,7 +532,7 @@ async function fetchImuCloudLogs() {
                     <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                         <span class="text-[10px] text-slate-500 hidden md:inline mr-1">${uploadTime}</span>
                         <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
-                                class="bg-slate-100 hover:bg-slate-200 text-green-700 border border-slate-300 px-2 py-1 rounded text-xs font-bold transition">
+                                class="bg-slate-100 hover:bg-slate-200 text-green-700 border border-slate-300 px-2.5 py-1 rounded text-xs font-bold transition">
                             📊 Visualisieren
                         </button>
                         <a href="${downloadUrl}" download="${f.file_name}" target="_blank"
@@ -720,9 +558,9 @@ async function fetchImuCloudLogs() {
     container.innerHTML = html;
 }
 
-// Window-Exporte für Inline-Event-Handler
+// Window-Exporte
 window.fetchImuCloudLogs = fetchImuCloudLogs;
 window.toggleDayCollapse = toggleDayCollapse;
 window.setAllDaysCollapse = setAllDaysCollapse;
-
-window.fetchImuCloudLogs = fetchImuCloudLogs;
+window.setReplaySpeedPreset = setReplaySpeedPreset;
+window.resetReplayZoom = resetReplayZoom;
