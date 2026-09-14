@@ -255,7 +255,7 @@ window.init3D = function () {
             const slerpFactor = 1.0 - Math.exp(-8.5 * dt);
             modelMesh.quaternion.slerp(targetQuaternion, slerpFactor);
 
-            // Dynamische Beschleunigungsauslenkung
+            // Korrigierte Beschleunigungsauslenkung (Achsen-Mapping analog zum Captive Portal)
             const ax = window.curAx || 0;
             const ay = window.curAy || 0;
             const az = window.curAz || 0;
@@ -265,12 +265,14 @@ window.init3D = function () {
             const ayF = (aLen > 0.20) ? ay : 0;
             const azF = (aLen > 0.20) ? az : 0;
 
-            const aVec = new THREE.Vector3(axF, azF, -ayF);
+            // Achsen-Mapping exakt an das Captive Portal angepasst:
+            // Captive Portal nutzt: rotateVecQuat([ayF, -axF, azF], uq)
+            const aVec = new THREE.Vector3(ayF, -axF, azF);
             aVec.applyQuaternion(modelMesh.quaternion);
 
-            const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.04));
-            const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.04));
-            const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.04));
+            const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
+            const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
+            const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
 
             const posDamping = 1.0 - Math.exp(-8.0 * dt);
             posX += (tx - posX) * posDamping;
