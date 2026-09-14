@@ -750,10 +750,10 @@ async function fetchImuCloudLogs() {
 
     container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId}...</div>`;
 
-    const { data, error } = await sbClient
+    // 1. Alle Chunks abrufen, um die Gesamtbelegung des 1-GB-Buckets zu ermitteln
+    const { data: allFiles, error } = await sbClient
         .from('imu_log_files')
         .select('*')
-        .eq('device_id', selectedDeviceId)
         .order('uploaded_at', { ascending: false });
 
     if (error) {
@@ -761,13 +761,47 @@ async function fetchImuCloudLogs() {
         return;
     }
 
-    if (!data || data.length === 0) {
+    // 2. Speicher-Auswertung berechnen (Free Tier: 1024 MB)
+    const FREE_TIER_LIMIT_MB = 1024;
+    const totalBytesAll = (allFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+    const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
+    const pctAll = Math.min(Math.max(((totalMbAll / FREE_TIER_LIMIT_MB) * 100), 0), 100).toFixed(1);
+
+    const deviceFiles = (allFiles || []).filter(f => f.device_id === selectedDeviceId);
+    const deviceBytes = deviceFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+    const deviceMb = (deviceBytes / (1024 * 1024)).toFixed(1);
+    const freeMb = Math.max(0, (FREE_TIER_LIMIT_MB - totalMbAll)).toFixed(1);
+    const estChunksLeft = Math.floor(freeMb); // 1 Chunk ca. 1 MB
+
+    // 3. UI-Elemente der Speicher-Card aktualisieren
+    const sumEl = document.getElementById('storage-used-summary');
+    const barEl = document.getElementById('storage-progress-bar');
+    const shareEl = document.getElementById('storage-device-share');
+    const freeEl = document.getElementById('storage-free-capacity');
+
+    if (sumEl) sumEl.innerText = `${totalMbAll} MB von ${FREE_TIER_LIMIT_MB} MB (${pctAll}%)`;
+    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${deviceFiles.length} Chunks)`;
+    if (freeEl) freeEl.innerText = `Noch ca. ${estChunksLeft} Chunks frei (${freeMb} MB)`;
+
+    if (barEl) {
+        barEl.style.width = `${pctAll}%`;
+        if (pctAll >= 90) {
+            barEl.className = 'h-full bg-red-500 transition-all duration-500';
+        } else if (pctAll >= 75) {
+            barEl.className = 'h-full bg-amber-500 transition-all duration-500';
+        } else {
+            barEl.className = 'h-full bg-green-600 transition-all duration-500';
+        }
+    }
+
+    // 4. Anzeige der Dateiliste für das aktuell gewählte Gerät
+    if (!deviceFiles || deviceFiles.length === 0) {
         container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Keine IMU-Dateiblöcke für ${selectedDeviceId} vorhanden.</div>`;
         return;
     }
 
     const groupedByDay = {};
-    data.forEach(item => {
+    deviceFiles.forEach(item => {
         const folder = item.day_folder || 'Unbekanntes Datum';
         if (!groupedByDay[folder]) groupedByDay[folder] = [];
         groupedByDay[folder].push(item);
@@ -778,7 +812,7 @@ async function fetchImuCloudLogs() {
     let html = `
         <div class="flex justify-between items-center mb-3 pb-2 px-1 border-b border-slate-200">
             <span class="text-xs font-bold text-slate-700 font-mono">
-                📅 ${dayKeys.length} ${dayKeys.length === 1 ? 'Tag erfasst' : 'Tage erfasst'} (${data.length} Chunks)
+                📅 ${dayKeys.length} ${dayKeys.length === 1 ? 'Tag erfasst' : 'Tage erfasst'} (${deviceFiles.length} Chunks)
             </span>
             <div class="flex items-center gap-1.5">
                 <button onclick="setAllDaysCollapse(true)" 
