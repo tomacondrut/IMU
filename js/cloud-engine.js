@@ -13,13 +13,20 @@
  * 2. Listens for 'cmd_res' to update UI in <50ms without waiting for REST table polling.
  * 3. Still inserts into sd_cloud_commands for persistent history.
  */
+/*
+ * Breadcrumb: 2026-09-14 23:58 - Flexible Device ID & Legacy Topic Normalization
+ * [CRITICAL BUGFIX FLAG - MULTI-DEVICE TOPIC COMPATIBILITY]:
+ * Normalizes 'STAG-IMU-1' and 'STAG-IMU-01' to the identical Phoenix channel 'imu_live'.
+ */
 function initRealtimeChannel() {
     if (liveChannel) {
         sbClient.removeChannel(liveChannel);
         liveChannel = null;
     }
 
-    const topic = (selectedDeviceId === 'STAG-IMU-01') ? 'imu_live' : `imu_live_${selectedDeviceId}`;
+    // Normalisierung: Beide Schreibweisen (mit/ohne führende 0) verbinden auf denselben Kanal
+    const isImu1 = (selectedDeviceId === 'STAG-IMU-01' || selectedDeviceId === 'STAG-IMU-1');
+    const topic = isImu1 ? 'imu_live' : `imu_live_${selectedDeviceId}`;
 
     liveChannel = sbClient.channel(topic, {
         config: { broadcast: { ack: false } }
@@ -67,21 +74,6 @@ function initRealtimeChannel() {
         }
     });
 
-    // Sofort-Rückmeldung von Befehlen über WebSocket empfangen
-    /*
- * Breadcrumb: 2026-09-14 00:15 - Instant WebSocket UI Handshake & Background DB Sync
- * [CRITICAL BUGFIX FLAG - ZERO LATENCY COMMAND RESOLUTION]:
- * 1. Consumes 'cmd_res' via WSS in <50ms and updates file manager/GPS UI immediately.
- * 2. Browser background-updates public.sd_cloud_commands to DONE/ERROR via Supabase JS,
- *    relieving the ESP32 from having to perform HTTPS PATCH requests.
- */
-    // Sofort-Rückmeldung von Befehlen über WebSocket empfangen
-    /*
-     * Breadcrumb: 2026-09-14 00:30 - Safe WSS Command Unwrapper & Browser DB Sync
-     * [CRITICAL BUGFIX FLAG - COMMAND PAYLOAD UNWRAPPING]:
-     * 1. Evaluates row.id safely: avoids assigning row = event.payload.payload (which stripped id and command).
-     * 2. Unlocks activeCommandId, renders file list, and updates Supabase DB record to DONE.
-     */
     liveChannel.on('broadcast', { event: 'cmd_res' }, (event) => {
         const row = (event.payload && event.payload.id !== undefined) ? event.payload : event;
         if (!row) return;
@@ -89,7 +81,6 @@ function initRealtimeChannel() {
             appendTerminalLog(`[CLOUD CMD] Sofort-Antwort via WSS erhalten (#${row.id}: ${row.status})`);
             handleCommandResult(row);
 
-            // Browser aktualisiert die Datenbank im Hintergrund (spart dem ESP32 den HTTPS-PATCH)
             sbClient.from('sd_cloud_commands').update({
                 status: row.status,
                 payload: row.payload,
@@ -288,6 +279,18 @@ async function sendCloudCommand(command, path, statusPrompt) {
     }, 1500);
 }
 
+/*
+ * Breadcrumb: 2026-09-15 00:05 - Storage Fallback Directory Loader
+ * [CRITICAL BUGFIX FLAG - OFFLINE BOARD STORAGE RENDERING]:
+ * If board does not respond or is in deep sleep, directly lists synced files
+ * from Supabase Storage bucket 'imu-logs' for the active device.
+ */
+/*
+ * Breadcrumb: 2026-09-15 00:05 - Storage Fallback Directory Loader
+ * [CRITICAL BUGFIX FLAG - OFFLINE BOARD STORAGE RENDERING]:
+ * If board does not respond or is in deep sleep, directly lists synced files
+ * from Supabase Storage bucket 'imu-logs' for the active device.
+ */
 async function loadCloudSdDirectory(dir) {
     let cleanDir = dir || '/';
     while (cleanDir.includes('//')) cleanDir = cleanDir.replace('//', '/');
@@ -300,12 +303,115 @@ async function loadCloudSdDirectory(dir) {
 
     document.getElementById('sd-file-list').innerHTML = `
       <div class="text-xs text-green-700 py-4 text-center space-y-2">
-        <div class="animate-pulse">⏳ Öffne "${currentCloudSdDir}" auf ${selectedDeviceId}...</div>
-        <p class="text-[11px] text-slate-500">Board liest Dateisystem ein...</p>
+        <div class="animate-pulse">⏳ Frage ${selectedDeviceId} an...</div>
+        <p class="text-[11px] text-slate-500">Falls Board offline ist, wird Supabase Storage geladen...</p>
       </div>
     `;
 
+    // 1. Primär: Direkte Abfrage an das Board senden
     await sendCloudCommand('LIST', currentCloudSdDir, 'Lade Ordner...');
+
+    // 2. Fallback-Timer: Antwortet das Board nach 3 Sekunden nicht (Deep Sleep), lade Storage-Bucket
+    setTimeout(async () => {
+        if (activeCommandId) {
+            appendTerminalLog(`[CLOUD SD] Board ${selectedDeviceId} antwortet nicht (Schlafmodus). Lade Cloud-Storage...`);
+            clearInterval(activeCommandPollTimer);
+            activeCommandId = null;
+            await loadFromSupabaseStorageDirect();
+        }
+    }, 3500);
+}
+
+async function loadFromSupabaseStorageDirect() {
+    const stat = document.getElementById('sd-cloud-status-badge');
+    if (stat) stat.innerHTML = '<span class="text-emerald-700 font-bold">☁ Supabase Cloud</span>';
+
+    // Geräte-ID für Storage-Pfad angleichen (STAG-IMU-01 und STAG-IMU-1 prüfen)
+    const candidates = [selectedDeviceId, selectedDeviceId.replace('-01', '-1'), selectedDeviceId.replace('-1', '-01')];
+    let storageItems = [];
+    let usedId = selectedDeviceId;
+
+    for (const devId of candidates) {
+        const { data, error } = await sbClient.storage.from('imu-logs').list(devId, {
+            limit: 100,
+            sortBy: { column: 'name', order: 'desc' }
+        });
+        if (data && data.length > 0) {
+            storageItems = data;
+            usedId = devId;
+            break;
+        }
+    }
+
+    if (!storageItems || storageItems.length === 0) {
+        document.getElementById('sd-file-list').innerHTML =
+            `<div class="text-xs text-slate-500 py-4 text-center">Keine synchronisierten Dateien in Supabase Storage für ${selectedDeviceId} gefunden.</div>`;
+        return;
+    }
+
+    // Darstellung der Dateien mit direktem Cloud-Download-Link
+    const listEl = document.getElementById('sd-file-list');
+    listEl.innerHTML = storageItems.map(folderOrFile => {
+        // Handelt es sich um Tagesordner oder direkte Dateien
+        const isFolder = !folderOrFile.id && !folderOrFile.metadata;
+        if (isFolder) {
+            return `
+              <div class="flex justify-between items-center p-2.5 rounded bg-emerald-50 border border-emerald-200 cursor-pointer hover:bg-emerald-100 transition shadow-sm"
+                   onclick="loadCloudStorageFolder('${usedId}', '${folderOrFile.name}')">
+                <span class="text-xs font-bold text-emerald-800">📁 ${folderOrFile.name} (Cloud)</span>
+                <span class="text-xs text-emerald-600 font-semibold">Öffnen ➔</span>
+              </div>
+            `;
+        }
+
+        const sizeKb = folderOrFile.metadata?.size ? (folderOrFile.metadata.size / 1024).toFixed(1) : '--';
+        const fileUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${usedId}/${folderOrFile.name}`;
+
+        return `
+          <div class="flex justify-between items-center p-2.5 rounded bg-white border border-slate-200 text-xs font-mono hover:border-slate-400 transition shadow-sm">
+            <span class="text-slate-800 truncate mr-2">📄 ${folderOrFile.name} <span class="text-slate-500 text-[10px]">(${sizeKb} KB)</span></span>
+            <a href="${fileUrl}" download target="_blank"
+               class="bg-slate-100 hover:bg-slate-200 text-green-700 border border-slate-300 px-2.5 py-1 rounded text-xs font-bold transition">
+              ⬇ Download
+            </a>
+          </div>
+        `;
+    }).join('');
+}
+
+async function loadCloudStorageFolder(devId, folderName) {
+    const pathEl = document.getElementById('sd-current-path');
+    if (pathEl) pathEl.innerText = `/Logs/${folderName}`;
+
+    const { data, error } = await sbClient.storage.from('imu-logs').list(`${devId}/${folderName}`, {
+        limit: 100,
+        sortBy: { column: 'name', order: 'desc' }
+    });
+
+    const listEl = document.getElementById('sd-file-list');
+    if (!data || data.length === 0) {
+        listEl.innerHTML = '<div class="text-xs text-slate-500 py-4 text-center">Ordner ist leer.</div>';
+        return;
+    }
+
+    listEl.innerHTML = `
+      <div class="mb-2">
+        <button onclick="loadFromSupabaseStorageDirect()" class="text-xs text-green-700 font-bold hover:underline">⬆ Zurück zur Cloud-Übersicht</button>
+      </div>
+    ` + data.map(item => {
+        const sizeKb = item.metadata?.size ? (item.metadata.size / 1024).toFixed(1) : '--';
+        const fileUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${devId}/${folderName}/${item.name}`;
+
+        return `
+          <div class="flex justify-between items-center p-2.5 rounded bg-white border border-slate-200 text-xs font-mono hover:border-slate-400 transition shadow-sm">
+            <span class="text-slate-800 truncate mr-2">📄 ${item.name} <span class="text-slate-500 text-[10px]">(${sizeKb} KB)</span></span>
+            <a href="${fileUrl}" download target="_blank"
+               class="bg-slate-100 hover:bg-slate-200 text-green-700 border border-slate-300 px-2.5 py-1 rounded text-xs font-bold transition">
+              ⬇ Download
+            </a>
+          </div>
+        `;
+    }).join('');
 }
 
 function renderCloudFileList(items) {
