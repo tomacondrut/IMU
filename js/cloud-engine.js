@@ -48,6 +48,9 @@ function initRealtimeChannel() {
             window.updateTargetOrientation(qw, qx, qy, qz);
         }
 
+        // NEU: Zeitstempel des letzten Live-Pakets für den Watchdog erfassen
+        window.lastLiveTelemetryTime = Date.now();
+
         if (d.ax !== undefined) {
             curAx = d.ax; curAy = d.ay; curAz = d.az;
             window.curAx = curAx;
@@ -517,11 +520,7 @@ async function fetchConfig() {
     if (data.sim_apn) document.getElementById('cfg-sim-apn').value = data.sim_apn;
 
     liveModeActive = data.continuous_mode || false;
-    const btn = document.getElementById('btn-toggle-live');
-    btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
-    btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
+    updateStreamUI(liveModeActive);
 }
 
 async function saveConfigToCloud() {
@@ -566,14 +565,104 @@ async function saveConfigToCloud() {
     }
 }
 
-function toggleLiveModeUI() {
-    liveModeActive = !liveModeActive;
-    const btn = document.getElementById('btn-toggle-live');
-    btn.innerText = liveModeActive ? 'AKTIV' : 'AUS';
-    btn.className = liveModeActive
-        ? "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"
-        : "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition";
+// ============================================================================
+// LTE LIVE-STREAM STEUERUNG & CLOUD-PARAMETER
+// ============================================================================
+
+async function toggleLteLiveStreaming() {
+    const newState = !liveModeActive;
+    updateStreamUI(newState, true); // Optisch sofort Feedback geben (Ladezustand)
+
+    try {
+        const { error } = await sbClient
+            .from('device_config')
+            .update({
+                continuous_mode: newState,
+                updated_at: new Date().toISOString()
+            })
+            .eq('device_id', selectedDeviceId);
+
+        if (error) throw error;
+
+        liveModeActive = newState;
+        updateStreamUI(newState, false);
+        appendTerminalLog(`\n[CLOUD] LTE Live-Stream für ${selectedDeviceId} auf ${newState ? 'AKTIV' : 'AUS'} gesetzt.`);
+    } catch (err) {
+        console.error("Fehler beim Schalten des Live-Modus:", err);
+        alert("Cloud-Fehler: Konnte Streaming-Status nicht aktualisieren.");
+        updateStreamUI(liveModeActive, false); // Zustand zurückrollen
+    }
 }
+
+function updateStreamUI(isActive, isPending = false) {
+    const hdrBtn = document.getElementById('header-lte-stream-btn');
+    const hdrTxt = document.getElementById('header-stream-txt');
+    const hdrDot = document.getElementById('header-stream-dot');
+    const tabBtn = document.getElementById('btn-toggle-live'); // Button im Parameter-Tab
+
+    if (isPending) {
+        if (hdrTxt) hdrTxt.innerText = "Schalte...";
+        return;
+    }
+
+    if (isActive) {
+        if (hdrBtn) hdrBtn.className = "flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2.5 py-1.5 rounded-lg cursor-pointer transition select-none shadow-sm group";
+        if (hdrDot) hdrDot.className = "w-2 h-2 rounded-full bg-emerald-500 animate-pulse";
+        if (hdrTxt) { hdrTxt.innerText = "Stream: AN"; hdrTxt.className = "text-xs font-mono font-bold text-emerald-800"; }
+        if (tabBtn) { tabBtn.innerText = "AKTIV"; tabBtn.className = "px-3 py-1.5 rounded text-xs font-bold bg-stag-green text-white shadow-sm transition"; }
+    } else {
+        if (hdrBtn) hdrBtn.className = "flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-2.5 py-1.5 rounded-lg cursor-pointer transition select-none shadow-sm group";
+        if (hdrDot) hdrDot.className = "w-2 h-2 rounded-full bg-slate-400";
+        if (hdrTxt) { hdrTxt.innerText = "Stream: AUS"; hdrTxt.className = "text-xs font-mono font-bold text-slate-700"; }
+        if (tabBtn) { tabBtn.innerText = "AUS"; tabBtn.className = "px-3 py-1.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-300 transition"; }
+    }
+}
+
+// Alias, damit der alte Button im Parameter-Tab weiterhin funktioniert
+window.toggleLiveModeUI = toggleLteLiveStreaming;
+window.toggleLteLiveStreaming = toggleLteLiveStreaming;
+
+// ============================================================================
+// REALTIME LISTENER: LTE TELEMETRIE & AKKU
+// ============================================================================
+let batteryLogsSubscription = null;
+
+function subscribeToBatteryLogs() {
+    if (batteryLogsSubscription) {
+        sbClient.removeChannel(batteryLogsSubscription);
+    }
+
+    batteryLogsSubscription = sbClient
+        .channel(`battery_logs_${selectedDeviceId}`)
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'battery_logs',
+            filter: `device_id=eq.${selectedDeviceId}`
+        }, payload => {
+            const row = payload.new;
+
+            // 1. Akku-UI und Graphen sofort aktualisieren
+            if (window.fetchLatestBatteryData) {
+                window.fetchLatestBatteryData();
+            }
+
+            // 2. Erkennung aktiver LTE-Streams (alle 2 Sekunden)
+            if (row.charging_status === "LTE Live Stream") {
+                const overlay = document.getElementById('overlay-status');
+                if (overlay) {
+                    overlay.innerHTML = `[${selectedDeviceId}] LTE-Stream aktiv (${Number(row.battery_voltage).toFixed(2)} V)`;
+                }
+                appendTerminalLog(`[LTE STREAM IN] ${new Date(row.recorded_at).toLocaleTimeString()} | ${Number(row.battery_voltage).toFixed(2)}V | Akku: ${row.battery_percent}%`);
+
+                // Der Watchdog aus main.js wird dadurch am Leben gehalten
+                window.lastLiveTelemetryTime = Date.now();
+            }
+        })
+        .subscribe();
+}
+
+window.subscribeToBatteryLogs = subscribeToBatteryLogs;
 
 /*
 * Breadcrumb: 2026-09-13 10:15 - Cloud-Triggered LTE Diagnostic Test Dispatcher
@@ -587,3 +676,278 @@ async function triggerLteDiagnosticTest() {
 }
 
 window.triggerLteDiagnosticTest = triggerLteDiagnosticTest;
+
+// ============================================================================
+// KALENDER & ZEITLEISTE FÜR CLOUD IMU LOGS
+// ============================================================================
+let currentDeviceFiles = [];
+let calendarDate = new Date();
+let calendarViewMode = 'month'; // 'month' oder 'week'
+
+async function fetchImuCloudLogs() {
+    const container = document.getElementById('imu-logs-container');
+    if (!container) return;
+
+    container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId}...</div>`;
+
+    const { data: allFiles, error } = await sbClient
+        .from('imu_log_files')
+        .select('*')
+        .order('uploaded_at', { ascending: false });
+
+    if (error) {
+        container.innerHTML = `<div class="p-3 bg-red-50 border border-red-300 rounded text-xs text-red-700">Fehler beim Laden: ${error.message}</div>`;
+        return;
+    }
+
+    // Storage-Auslastung aktualisieren (Free Tier)
+    const FREE_TIER_LIMIT_MB = 1024;
+    const totalBytesAll = (allFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+    const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
+    const pctAll = Math.min(Math.max(((totalMbAll / FREE_TIER_LIMIT_MB) * 100), 0), 100).toFixed(1);
+
+    currentDeviceFiles = (allFiles || []).filter(f => f.device_id === selectedDeviceId);
+    const deviceBytes = currentDeviceFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+    const deviceMb = (deviceBytes / (1024 * 1024)).toFixed(1);
+    const freeMb = Math.max(0, (FREE_TIER_LIMIT_MB - totalMbAll)).toFixed(1);
+
+    const sumEl = document.getElementById('storage-used-summary');
+    const barEl = document.getElementById('storage-progress-bar');
+    const shareEl = document.getElementById('storage-device-share');
+    const freeEl = document.getElementById('storage-free-capacity');
+
+    if (sumEl) sumEl.innerText = `${totalMbAll} MB von ${FREE_TIER_LIMIT_MB} MB (${pctAll}%)`;
+    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${currentDeviceFiles.length} Chunks)`;
+    if (freeEl) freeEl.innerText = `Verbleibend: ${freeMb} MB frei`;
+
+    if (barEl) {
+        barEl.style.width = `${pctAll}%`;
+        barEl.className = pctAll >= 90 ? 'h-full bg-red-500 transition-all' : (pctAll >= 75 ? 'h-full bg-amber-500 transition-all' : 'h-full bg-green-600 transition-all');
+    }
+
+    renderCalendarUI();
+}
+
+function changeCalendarMonth(offset) {
+    if (calendarViewMode === 'month') {
+        calendarDate.setMonth(calendarDate.getMonth() + offset);
+    } else {
+        calendarDate.setDate(calendarDate.getDate() + (offset * 7));
+    }
+    renderCalendarUI();
+}
+
+function setCalendarViewMode(mode) {
+    calendarViewMode = mode;
+    renderCalendarUI();
+}
+
+function renderCalendarUI() {
+    const container = document.getElementById('imu-logs-container');
+    if (!container) return;
+
+    // Lokale Gruppierung der Dateien nach Datum
+    const filesByDate = {};
+    currentDeviceFiles.forEach(f => {
+        const d = new Date(f.uploaded_at);
+        const dayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (!filesByDate[dayKey]) filesByDate[dayKey] = [];
+        filesByDate[dayKey].push(f);
+    });
+
+    const monthNames = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+    const currentMonthLabel = `${monthNames[calendarDate.getMonth()]} ${calendarDate.getFullYear()}`;
+
+    let html = `
+        <div id="calendar-wrapper">
+            <!-- Kalender Header -->
+            <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
+                <div class="flex items-center gap-1 sm:gap-2">
+                    <button onclick="changeCalendarMonth(-1)" class="px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700 font-bold transition">◀</button>
+                    <h3 class="text-sm font-bold text-slate-800 w-32 text-center select-none">${currentMonthLabel}</h3>
+                    <button onclick="changeCalendarMonth(1)" class="px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700 font-bold transition">▶</button>
+                </div>
+                <div class="flex items-center gap-1 bg-slate-100 border border-slate-300 p-1 rounded-lg">
+                    <button onclick="setCalendarViewMode('month')" class="px-3 py-1 text-[11px] font-bold rounded transition ${calendarViewMode === 'month' ? 'bg-white shadow-sm text-stag-green' : 'text-slate-500 hover:text-slate-700'}">Monat</button>
+                    <button onclick="setCalendarViewMode('week')" class="px-3 py-1 text-[11px] font-bold rounded transition ${calendarViewMode === 'week' ? 'bg-white shadow-sm text-stag-green' : 'text-slate-500 hover:text-slate-700'}">Woche</button>
+                </div>
+            </div>
+
+            <!-- Kalender Raster -->
+            <div class="grid grid-cols-7 gap-1 sm:gap-2 mb-2">
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Mo</div>
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Di</div>
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Mi</div>
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Do</div>
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Fr</div>
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Sa</div>
+                <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">So</div>
+    `;
+
+    // Datumsberechnung für Raster (Montag = erster Tag)
+    const year = calendarDate.getFullYear();
+    const month = calendarDate.getMonth();
+
+    let startDate = new Date(year, month, 1);
+    let endDate = new Date(year, month + 1, 0);
+
+    if (calendarViewMode === 'week') {
+        const dayOfWeek = calendarDate.getDay() === 0 ? 6 : calendarDate.getDay() - 1;
+        startDate = new Date(calendarDate);
+        startDate.setDate(calendarDate.getDate() - dayOfWeek);
+        endDate = new Date(startDate);
+        endDate.setDate(startDate.getDate() + 6);
+    }
+
+    const firstDayIndex = startDate.getDay() === 0 ? 6 : startDate.getDay() - 1;
+    const lastDate = endDate.getDate();
+
+    // Leere Zellen am Anfang
+    if (calendarViewMode === 'month') {
+        for (let i = 0; i < firstDayIndex; i++) {
+            html += `<div class="p-2 rounded bg-slate-50/50 border border-slate-100/50"></div>`;
+        }
+    }
+
+    // Tage ausfüllen
+    const daysToRender = calendarViewMode === 'month' ? lastDate : 7;
+    let currentRenderDate = new Date(startDate);
+
+    for (let i = 1; i <= daysToRender; i++) {
+        const dayKey = `${currentRenderDate.getFullYear()}-${String(currentRenderDate.getMonth() + 1).padStart(2, '0')}-${String(currentRenderDate.getDate()).padStart(2, '0')}`;
+        const dayFiles = filesByDate[dayKey] || [];
+
+        const todayStr = new Date().toISOString().split('T')[0];
+        const isToday = (dayKey === todayStr);
+
+        let cellClass = "p-1.5 sm:p-2 rounded-lg border flex flex-col h-16 sm:h-20 transition ";
+        let contentHtml = `<span class="text-xs font-bold ${isToday ? 'text-blue-600' : 'text-slate-600'}">${currentRenderDate.getDate()}</span>`;
+
+        if (dayFiles.length > 0) {
+            // Ungefähre Dauer schätzen (100KB ≈ 1 Min)
+            const totalBytes = dayFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+            const estMinutes = Math.round(totalBytes / 102400);
+
+            cellClass += "bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-sm";
+            contentHtml += `
+                <div class="mt-auto">
+                    <div class="text-[9px] sm:text-[10px] font-bold text-emerald-800 bg-emerald-200/50 rounded px-1 mb-0.5 w-fit">${dayFiles.length} Logs</div>
+                    <div class="text-[9px] sm:text-[10px] font-mono text-emerald-700 w-fit">~${estMinutes} Min</div>
+                </div>
+            `;
+            html += `<div class="${cellClass}" onclick="openDailyTimeline('${dayKey}')">${contentHtml}</div>`;
+        } else {
+            cellClass += "bg-slate-50 border-slate-200";
+            html += `<div class="${cellClass}">${contentHtml}</div>`;
+        }
+
+        currentRenderDate.setDate(currentRenderDate.getDate() + 1);
+    }
+
+    html += `</div></div><div id="daily-timeline-wrapper" class="hidden"></div>`;
+    container.innerHTML = html;
+}
+
+function openDailyTimeline(dateStr) {
+    document.getElementById('calendar-wrapper').classList.add('hidden');
+    const timelineWrapper = document.getElementById('daily-timeline-wrapper');
+    timelineWrapper.classList.remove('hidden');
+
+    const displayDate = new Date(dateStr).toLocaleDateString('de-CH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    // Dateien filtern und nach lokaler Uhrzeit sortieren
+    const dayFiles = currentDeviceFiles.filter(f => {
+        const d = new Date(f.uploaded_at);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === dateStr;
+    }).sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+
+    let html = `
+        <div class="bg-white border border-slate-300 rounded-lg p-3 sm:p-4 mt-2 shadow-sm">
+            <div class="flex justify-between items-center mb-6 pb-2 border-b border-slate-200">
+                <h4 class="text-sm font-bold text-stag-green">📅 ${displayDate}</h4>
+                <button onclick="closeDailyTimeline()" class="text-xs text-slate-600 hover:text-slate-900 font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-1.5 rounded transition">
+                    ◀ Zurück zum Kalender
+                </button>
+            </div>
+            
+            <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 tracking-wider">Aktivitäts-Zeitleiste (24 Stunden)</p>
+            <div class="relative w-full h-8 bg-slate-100 border border-slate-300 rounded-md mb-8">
+                <!-- Zeitleisten-Achse -->
+                <div class="absolute top-full left-0 text-[9px] text-slate-400 mt-1 -ml-2 font-mono">00:00</div>
+                <div class="absolute top-full left-1/4 text-[9px] text-slate-400 mt-1 -ml-3 font-mono">06:00</div>
+                <div class="absolute top-full left-2/4 text-[9px] text-slate-400 mt-1 -ml-3 font-mono">12:00</div>
+                <div class="absolute top-full left-3/4 text-[9px] text-slate-400 mt-1 -ml-3 font-mono">18:00</div>
+                <div class="absolute top-full right-0 text-[9px] text-slate-400 mt-1 -mr-2 font-mono">24:00</div>
+                <div class="absolute inset-0">
+    `;
+
+    // Balken für jedes File in der 24h-Ansicht positionieren
+    dayFiles.forEach(f => {
+        const d = new Date(f.uploaded_at);
+        const minutesFromMidnight = d.getHours() * 60 + d.getMinutes();
+        const leftPercent = (minutesFromMidnight / 1440) * 100;
+
+        // Breite basierend auf Dateigröße (100KB = ca. 1 Minute = ~0.07% von 24h)
+        // Wir setzen eine Mindestbreite von 0.5% damit es sichtbar bleibt
+        let widthPercent = ((f.file_size_bytes / 102400) * 1) / 1440 * 100;
+        if (widthPercent < 0.8) widthPercent = 0.8;
+
+        const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
+        const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+
+        html += `
+            <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
+                 class="absolute h-full bg-stag-green/80 hover:bg-emerald-500 cursor-pointer border-r border-white transition group"
+                 style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 2px;"
+                 title="${tipTime} - ${(f.file_size_bytes / 1024).toFixed(0)} KB">
+            </div>
+        `;
+    });
+
+    html += `
+                </div>
+            </div>
+
+            <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 border-b border-slate-200 pb-1 tracking-wider">Mess-Protokolle (${dayFiles.length})</p>
+            <div class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+    `;
+
+    dayFiles.forEach(f => {
+        const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
+        const uploadTime = new Date(f.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
+
+        html += `
+            <div class="flex justify-between items-center p-2 rounded bg-slate-50 hover:bg-white border border-slate-200 hover:border-emerald-300 text-xs font-mono transition shadow-sm">
+                <div class="flex items-center gap-2 truncate mr-3">
+                    <span class="text-slate-800 font-semibold truncate">📄 ${f.file_name}</span>
+                    <span class="text-[10px] text-slate-500 shrink-0">(${kb} KB)</span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden md:inline mr-1">${uploadTime}</span>
+                    <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition">
+                        📊 Visualisieren
+                    </button>
+                    <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" class="text-red-600 hover:text-red-700 hover:bg-red-50 border border-slate-200 px-2 py-1 rounded transition text-xs" title="Aus Cloud löschen">
+                        🗑️
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `</div></div>`;
+    timelineWrapper.innerHTML = html;
+}
+
+function closeDailyTimeline() {
+    document.getElementById('daily-timeline-wrapper').classList.add('hidden');
+    document.getElementById('calendar-wrapper').classList.remove('hidden');
+}
+
+// Window Exporte sicherstellen
+window.fetchImuCloudLogs = fetchImuCloudLogs;
+window.changeCalendarMonth = changeCalendarMonth;
+window.setCalendarViewMode = setCalendarViewMode;
+window.openDailyTimeline = openDailyTimeline;
+window.closeDailyTimeline = closeDailyTimeline;

@@ -6,9 +6,12 @@
  * 3. Centralized fetchAllData() coordinating across all active modules.
  */
 
-function onDeviceSelectChange(newId) {
-    selectedDeviceId = newId;
-    appendTerminalLog(`\n[PORTAL] Aktives Gerät gewechselt auf: ${selectedDeviceId}`);
+selectedDeviceId = newId;
+appendTerminalLog(`\n[PORTAL] Aktives Gerät gewechselt auf: ${selectedDeviceId}`);
+
+// Bestehende Realtime- und Postgres-Channels trennen & auf neue ID binden
+initRealtimeChannel();
+if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs(); // <--- NE
 
     // Bestehende Realtime- und Postgres-Channels trennen & auf neue ID binden
     initRealtimeChannel();
@@ -71,7 +74,9 @@ function fetchAllData() {
 window.onload = () => {
     if (window.init3D) window.init3D();
     initRealtimeChannel();
+    if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs(); // <--- NEU
     fetchAllData();
+
 
     // [BUGFIX]: Zeichnet das Koordinatengitter sofort beim Laden,
     // noch bevor das erste Sensorpaket aus der Cloud eintrifft.
@@ -82,4 +87,30 @@ window.onload = () => {
     setInterval(() => {
         if (window.fetchLatestBatteryData) window.fetchLatestBatteryData();
     }, 30000);
+
+    // ========================================================================
+    // NEU: STREAM WATCHDOG - Steuert Sichtbarkeit des 3D-Tabs
+    // ========================================================================
+    let wasStreaming = false;
+    setInterval(() => {
+        // Stream gilt als aktiv, wenn das letzte Paket jünger als 6 Sekunden ist
+        const isStreaming = (Date.now() - (window.lastLiveTelemetryTime || 0)) < 6000;
+        const btn3d = document.getElementById('btn-tab-3d');
+        const tab3d = document.getElementById('tab-3d');
+
+        if (isStreaming && !wasStreaming) {
+            wasStreaming = true;
+            if (btn3d) btn3d.style.display = 'flex'; // Tab-Button einblenden
+            switchTab('3d'); // Automatisch zum startenden 3D-Stream wechseln
+        }
+        else if (!isStreaming && wasStreaming) {
+            wasStreaming = false;
+            if (btn3d) btn3d.style.display = 'none'; // Tab-Button ausblenden
+
+            // Wenn der User gerade im 3D-Tab war und der Stream abbricht, wegschalten
+            if (tab3d && !tab3d.classList.contains('hidden')) {
+                switchTab('imulogs');
+            }
+        }
+    }, 1000); // Prüft jede Sekunde
 };

@@ -315,7 +315,17 @@ function renderInterpolatedFrame(tSec) {
     }
 
     const curTimeEl = document.getElementById('replay-cursor-time');
-    if (curTimeEl) curTimeEl.innerText = `+${tSec.toFixed(2)}s (${ptA.ts})`;
+    if (curTimeEl) {
+        let localTime = ptA.ts;
+        if (ptA.ts && ptA.ts.includes('T') && ptA.ts.endsWith('Z')) {
+            const d = new Date(ptA.ts);
+            if (!isNaN(d)) {
+                // Konvertiert UTC zu lokaler Schweizer Zeit (HH:MM:SS.mmm)
+                localTime = d.toLocaleTimeString('de-CH', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+            }
+        }
+        curTimeEl.innerText = `+${tSec.toFixed(2)}s (${localTime})`;
+    }
 
     const curTimeLbl = document.getElementById('replay-current-time-label');
     if (curTimeLbl) curTimeLbl.innerText = tSec.toFixed(1) + 's';
@@ -702,7 +712,11 @@ function onReplaySpeedChange(spd) {
 // ============================================================================
 
 async function deleteImuCloudFile(filePath, fileName) {
-    if (!confirm(`Möchtest du "${fileName}" (${selectedDeviceId}) wirklich aus Supabase löschen?\n\nHinweis: Die Originaldatei bleibt auf der SD-Karte des Boards erhalten.`)) {
+    // Passwort-Abfrage einbauen
+    const pwd = prompt(`Sicherheitsabfrage: Bitte Admin-Passwort eingeben, um "${fileName}" endgültig zu löschen:`);
+
+    if (pwd !== 'stag2026') {
+        if (pwd !== null) alert("Falsches Passwort! Vorgang abgebrochen.");
         return;
     }
 
@@ -713,11 +727,20 @@ async function deleteImuCloudFile(filePath, fileName) {
         const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
         if (dbErr) throw dbErr;
 
-        if (document.getElementById('replay-file-title').innerText === fileName) {
+        const titleEl = document.getElementById('replay-file-title');
+        if (titleEl && titleEl.innerText === fileName) {
             closeImuReplayDeck();
         }
 
-        fetchImuCloudLogs();
+        // Aktualisiert die Dateiliste in der Timeline
+        const activeDateStr = filePath.split('/')[1]; // Ordnername (YYYY-MM-DD)
+        if (activeDateStr && typeof currentDeviceFiles !== 'undefined') {
+            currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
+            openDailyTimeline(activeDateStr);
+        } else {
+            fetchImuCloudLogs();
+        }
+
     } catch (err) {
         alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
     }
