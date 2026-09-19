@@ -38,10 +38,18 @@
         </div>
 
         <div class="flex items-center gap-2 sm:gap-3">
-            <!-- Realtime Status Badge -->
+          <!-- Realtime Status Badge -->
             <span id="realtime-indicator" class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300">
                 <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Realtime...
             </span>
+
+            <!-- NEU: Direkter LTE Live-Streaming Schalter -->
+            <button id="header-lte-stream-btn" onclick="toggleLteLiveStreaming()"
+                    class="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-2.5 py-1.5 rounded-lg cursor-pointer transition select-none shadow-sm group"
+                    title="LTE-Dauerbetrieb und 2s-Intervall in der Cloud schalten">
+                <span id="header-stream-dot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+                <span id="header-stream-txt" class="text-xs font-mono font-bold text-slate-700">Stream: AUS</span>
+            </button>
 
             <!-- LTE Diagnose Test Button -->
             <button onclick="triggerLteDiagnosticTest()"
@@ -85,12 +93,14 @@
 
     <!-- Navigation Tabs -->
     <div class="flex gap-2 mb-4 overflow-x-auto pb-1">
-        <button id="btn-tab-3d" onclick="switchTab('3d')" class="bg-stag-green text-white px-3.5 py-2 rounded-lg text-xs font-bold uppercase whitespace-nowrap shadow-sm transition flex items-center gap-1.5">
+        <!-- NEU: style="display: none;" hinzugefügt und Standard-Klassen für inaktiven Tab gesetzt -->
+        <button id="btn-tab-3d" style="display: none;" onclick="switchTab('3d')" class="bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 px-3.5 py-2 rounded-lg text-xs font-bold uppercase whitespace-nowrap transition flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5 fill-current shrink-0" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             <span>3D Live-Stream</span>
         </button>
 
-        <button id="btn-tab-imulogs" onclick="switchTab('imulogs')" class="bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 px-3.5 py-2 rounded-lg text-xs font-bold uppercase whitespace-nowrap transition flex items-center gap-1.5">
+        <!-- NEU: Standardmäßig aktiven Zustand (Grün) für diesen Button gesetzt -->
+        <button id="btn-tab-imulogs" onclick="switchTab('imulogs')" class="bg-stag-green text-white px-3.5 py-2 rounded-lg text-xs font-bold uppercase whitespace-nowrap shadow-sm transition flex items-center gap-1.5">
             <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z" /></svg>
             <span>Cloud IMU</span>
         </button>
@@ -113,7 +123,8 @@
 
 
     <!-- TAB 0: 3D LIVE-STREAM & ACCELERATION WAVEFORMS -->
-    <main id="tab-3d">
+    <main id="tab-3d" class="hidden">
+        <!-- NEU: class="hidden" hinzugefügt -->
         <!-- 3D Viewport: Hellgrauer Studio-Look -->
         <!-- Breadcrumb: 2026-09-13 17:10 - 3D Isometric Viewport with Camera Controls & Quick Presets -->
         <div class="card rounded-lg p-3 mb-4">
@@ -178,7 +189,8 @@
     </main>
 
     <!-- TAB 1: IMU CLOUD-LOGS (1-MB-CHUNKS) -->
-    <main id="tab-imulogs" class="hidden">
+    <main id="tab-imulogs">
+        <!-- NEU: class="hidden" entfernt -->
         <!-- ==================================================================== -->
         <!-- REPLAY-DECK: 3D-ANALYSE, BEREICHS-ZOOM & 0.1X ZEITLUPE                -->
         <!-- Breadcrumb: 2026-09-14 20:00 - Oscilloscope Region Zoom & 0.1x Slow-Mo -->
@@ -311,19 +323,20 @@
             </div>
         </div>
 
-        <!-- Dateiübersicht -->
-        <div class="card p-5 rounded-lg mb-5 bg-white border border-slate-300 shadow-sm">
+        <!-- Dateiübersicht: Kalender & Timeline -->
+        <div class="card p-4 sm:p-5 rounded-lg mb-5 bg-white border border-slate-300 shadow-sm">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 pb-3 border-b border-slate-200">
                 <div>
-                    <h2 class="text-sm font-bold uppercase text-slate-800">Indexierte IMU-Messdaten (Cloud-Storage)</h2>
-                    <p class="text-xs text-slate-500">10–30 Hz Rohdaten (Quaternione & Beschleunigung), gruppiert nach Kalendertag in 1-MB-Blöcken.</p>
+                    <h2 class="text-sm font-bold uppercase text-slate-800">IMU-Datenarchiv (Kalender)</h2>
+                    <p class="text-[11px] text-slate-500">Klicken Sie auf einen Tag, um die 24-Stunden-Zeitleiste der Messungen zu öffnen.</p>
                 </div>
                 <button onclick="fetchImuCloudLogs()" class="bg-stag-green text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition whitespace-nowrap">
-                    Liste aktualisieren
+                    🔄 Aktualisieren
                 </button>
             </div>
 
-            <div id="imu-logs-container" class="space-y-4 min-h-[120px]">
+            <!-- Hier rendert cloud-engine.js den Kalender und die Timeline -->
+            <div id="imu-logs-container" class="min-h-[250px] relative">
                 <div class="text-xs text-slate-400 py-6 text-center">Lade IMU-Archive aus Supabase...</div>
             </div>
         </div>
