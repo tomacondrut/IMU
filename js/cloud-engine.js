@@ -969,12 +969,82 @@ function closeDailyTimeline() {
     if (timelineWrapper) timelineWrapper.classList.add('hidden');
 }
 
-// Passwortgeschütztes Löschen
-async function deleteImuCloudFile(filePath, fileName) {
-    const pwd = prompt(`Sicherheitsabfrage: Bitte Admin-Passwort eingeben, um "${fileName}" endgültig zu löschen:`);
+// ============================================================================
+// SESSION-WEITES SCHLOSS & LÖSCHBERECHTIGUNG
+// ============================================================================
 
-    if (pwd !== 'stag2026') {
-        if (pwd !== null) alert("Falsches Passwort! Vorgang abgebrochen.");
+function isSessionUnlocked() {
+    return sessionStorage.getItem('stag_admin_unlocked') === 'true';
+}
+
+function updateLockUI() {
+    const btn = document.getElementById('header-lock-btn');
+    const unlocked = isSessionUnlocked();
+    if (!btn) return;
+
+    if (unlocked) {
+        btn.innerHTML = `<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>`;
+        btn.className = "flex items-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg cursor-pointer transition select-none shadow-sm";
+        btn.title = "Löschfunktion aktiv (Klicken zum Sperren)";
+    } else {
+        btn.innerHTML = `<svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>`;
+        btn.className = "flex items-center bg-slate-100 hover:bg-slate-200 border border-slate-300 p-2 rounded-lg cursor-pointer transition select-none shadow-sm";
+        btn.title = "Löschfunktion gesperrt (Klicken zum Entsperren)";
+    }
+
+    // Lösch-Buttons in der Zeitleiste dynamisch ein-/ausblenden
+    document.querySelectorAll('.btn-delete-log').forEach(el => {
+        el.style.display = unlocked ? 'inline-flex' : 'none';
+    });
+}
+
+function toggleSessionLock() {
+    if (isSessionUnlocked()) {
+        sessionStorage.removeItem('stag_admin_unlocked');
+        updateLockUI();
+        appendTerminalLog('[AUTH] Sitzung gesperrt. Löschfunktionen ausgeblendet.');
+    } else {
+        openSessionAuthModal();
+    }
+}
+
+function openSessionAuthModal() {
+    const modal = document.getElementById('session-auth-modal');
+    const input = document.getElementById('session-pass-input');
+    const err = document.getElementById('session-auth-err');
+    if (modal) modal.classList.remove('hidden');
+    if (input) { input.value = ''; input.focus(); }
+    if (err) err.classList.add('hidden');
+}
+
+function closeSessionAuthModal() {
+    const modal = document.getElementById('session-auth-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function handleSessionAuthSubmit(e) {
+    if (e) e.preventDefault();
+    const input = document.getElementById('session-pass-input');
+    const err = document.getElementById('session-auth-err');
+    if (input && input.value === 'stag2026') {
+        sessionStorage.setItem('stag_admin_unlocked', 'true');
+        closeSessionAuthModal();
+        updateLockUI();
+        appendTerminalLog('[AUTH] Sitzung erfolgreich entsperrt. Löschfunktionen freigegeben.');
+    } else {
+        if (err) err.classList.remove('hidden');
+        if (input) input.select();
+    }
+}
+
+// Bereinigtes Löschen: Kein prompt() mehr, sondern einfaches confirm() bei entsperrtem Schloss
+async function deleteImuCloudFile(filePath, fileName) {
+    if (!isSessionUnlocked()) {
+        openSessionAuthModal();
+        return;
+    }
+
+    if (!confirm(`Möchten Sie "${fileName}" unwiderruflich aus der Cloud löschen?`)) {
         return;
     }
 
@@ -1003,6 +1073,7 @@ async function deleteImuCloudFile(filePath, fileName) {
             closeDailyTimeline();
             fetchImuCloudLogs();
         }
+        appendTerminalLog(`[STORAGE] Datei gelöscht: ${fileName}`);
     } catch (err) {
         alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
     }
@@ -1015,3 +1086,9 @@ window.setCalendarViewMode = setCalendarViewMode;
 window.openDailyTimeline = openDailyTimeline;
 window.closeDailyTimeline = closeDailyTimeline;
 window.deleteImuCloudFile = deleteImuCloudFile;
+window.toggleSessionLock = toggleSessionLock;
+window.openSessionAuthModal = openSessionAuthModal;
+window.closeSessionAuthModal = closeSessionAuthModal;
+window.handleSessionAuthSubmit = handleSessionAuthSubmit;
+window.updateLockUI = updateLockUI;
+window.isSessionUnlocked = isSessionUnlocked;

@@ -96,28 +96,39 @@ window.onload = () => {
     }, 30000);
 
     // ========================================================================
-    // NEU: STREAM WATCHDOG - Steuert Sichtbarkeit des 3D-Tabs
+    // STREAM WATCHDOG: Steuert 3D-Tab UND das Status-Badge (STANDBY <-> LIVE)
     // ========================================================================
     let wasStreaming = false;
     setInterval(() => {
-        // Stream gilt als aktiv, wenn das letzte Paket jünger als 6 Sekunden ist
         const isStreaming = (Date.now() - (window.lastLiveTelemetryTime || 0)) < 6000;
         const btn3d = document.getElementById('btn-tab-3d');
         const tab3d = document.getElementById('tab-3d');
+        const ind = document.getElementById('realtime-indicator');
 
+        // 1. Status-Badge synchron mit Datenfluss umschalten
+        if (ind) {
+            if (isStreaming) {
+                ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ${selectedDeviceId} LIVE`;
+                ind.className = 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300';
+            } else {
+                ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> ${selectedDeviceId} STANDBY`;
+                ind.className = 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-300';
+            }
+        }
+
+        // 2. 3D-Tab ein- / ausblenden
         if (isStreaming && !wasStreaming) {
             wasStreaming = true;
-            if (btn3d) btn3d.style.display = 'flex'; // Tab-Button einblenden
-            switchTab('3d'); // Automatisch zum startenden 3D-Stream wechseln
+            if (btn3d) btn3d.style.display = 'flex';
+            switchTab('3d');
         }
         else if (!isStreaming && wasStreaming) {
             wasStreaming = false;
-            if (btn3d) btn3d.style.display = 'none'; // Tab-Button ausblenden
+            if (btn3d) btn3d.style.display = 'none';
 
-            // Wenn der User gerade im 3D-Tab war und der Stream abbricht, wegschalten
             if (tab3d && !tab3d.classList.contains('hidden')) {
                 switchTab('imulogs');
             }
         }
-    }, 1000); // Prüft jede Sekunde
+    }, 1000);
 };
