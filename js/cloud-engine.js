@@ -678,7 +678,7 @@ async function triggerLteDiagnosticTest() {
 window.triggerLteDiagnosticTest = triggerLteDiagnosticTest;
 
 // ============================================================================
-// KALENDER & ZEITLEISTE FÜR CLOUD IMU LOGS
+// KALENDER & 24H-ZEITLEISTE FÜR CLOUD IMU LOGS
 // ============================================================================
 let currentDeviceFiles = [];
 let calendarDate = new Date();
@@ -700,7 +700,7 @@ async function fetchImuCloudLogs() {
         return;
     }
 
-    // Storage-Auslastung aktualisieren (Free Tier)
+    // Storage-Auslastung aktualisieren
     const FREE_TIER_LIMIT_MB = 1024;
     const totalBytesAll = (allFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
     const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
@@ -717,7 +717,7 @@ async function fetchImuCloudLogs() {
     const freeEl = document.getElementById('storage-free-capacity');
 
     if (sumEl) sumEl.innerText = `${totalMbAll} MB von ${FREE_TIER_LIMIT_MB} MB (${pctAll}%)`;
-    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${currentDeviceFiles.length} Chunks)`;
+    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${currentDeviceFiles.length} Dateien)`;
     if (freeEl) freeEl.innerText = `Verbleibend: ${freeMb} MB frei`;
 
     if (barEl) {
@@ -746,7 +746,7 @@ function renderCalendarUI() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
 
-    // Lokale Gruppierung der Dateien nach Datum
+    // Dateien nach lokalem Datum gruppieren
     const filesByDate = {};
     currentDeviceFiles.forEach(f => {
         const d = new Date(f.uploaded_at);
@@ -759,6 +759,9 @@ function renderCalendarUI() {
     const currentMonthLabel = `${monthNames[calendarDate.getMonth()]} ${calendarDate.getFullYear()}`;
 
     let html = `
+        <!-- Zeitleiste wird HIER über dem Kalender eingeblendet -->
+        <div id="daily-timeline-wrapper" class="hidden mb-6"></div>
+
         <div id="calendar-wrapper">
             <!-- Kalender Header -->
             <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
@@ -784,10 +787,9 @@ function renderCalendarUI() {
                 <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">So</div>
     `;
 
-    // Datumsberechnung für Raster (Montag = erster Tag)
+    // Kalender-Logik (Montag = erster Tag)
     const year = calendarDate.getFullYear();
     const month = calendarDate.getMonth();
-
     let startDate = new Date(year, month, 1);
     let endDate = new Date(year, month + 1, 0);
 
@@ -802,14 +804,12 @@ function renderCalendarUI() {
     const firstDayIndex = startDate.getDay() === 0 ? 6 : startDate.getDay() - 1;
     const lastDate = endDate.getDate();
 
-    // Leere Zellen am Anfang
     if (calendarViewMode === 'month') {
         for (let i = 0; i < firstDayIndex; i++) {
             html += `<div class="p-2 rounded bg-slate-50/50 border border-slate-100/50"></div>`;
         }
     }
 
-    // Tage ausfüllen
     const daysToRender = calendarViewMode === 'month' ? lastDate : 7;
     let currentRenderDate = new Date(startDate);
 
@@ -824,18 +824,18 @@ function renderCalendarUI() {
         let contentHtml = `<span class="text-xs font-bold ${isToday ? 'text-blue-600' : 'text-slate-600'}">${currentRenderDate.getDate()}</span>`;
 
         if (dayFiles.length > 0) {
-            // Ungefähre Dauer schätzen (100KB ≈ 1 Min)
+            // Ungefähre Dauer berechnen: 100 KB Chunk = ca. 1 Minute Aufzeichnung (bei 10 Hz)
             const totalBytes = dayFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
             const estMinutes = Math.round(totalBytes / 102400);
 
-            cellClass += "bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-sm";
+            cellClass += "bg-emerald-50 border-emerald-400 hover:bg-emerald-100 cursor-pointer shadow-sm";
             contentHtml += `
                 <div class="mt-auto">
-                    <div class="text-[9px] sm:text-[10px] font-bold text-emerald-800 bg-emerald-200/50 rounded px-1 mb-0.5 w-fit">${dayFiles.length} Logs</div>
-                    <div class="text-[9px] sm:text-[10px] font-mono text-emerald-700 w-fit">~${estMinutes} Min</div>
+                    <div class="text-[9px] sm:text-[10px] font-bold text-emerald-800 bg-emerald-200/60 rounded px-1 mb-0.5 w-fit">${dayFiles.length} Weck-Events</div>
+                    <div class="text-[9px] sm:text-[10px] font-mono text-emerald-700 w-fit">~ ${estMinutes} Min</div>
                 </div>
             `;
-            html += `<div class="${cellClass}" onclick="openDailyTimeline('${dayKey}')">${contentHtml}</div>`;
+            html += `<div class="${cellClass}" onclick="openDailyTimeline('${dayKey}')" title="Klicken für 24h-Zeitleiste">${contentHtml}</div>`;
         } else {
             cellClass += "bg-slate-50 border-slate-200";
             html += `<div class="${cellClass}">${contentHtml}</div>`;
@@ -844,12 +844,11 @@ function renderCalendarUI() {
         currentRenderDate.setDate(currentRenderDate.getDate() + 1);
     }
 
-    html += `</div></div><div id="daily-timeline-wrapper" class="hidden"></div>`;
+    html += `</div></div>`;
     container.innerHTML = html;
 }
 
 function openDailyTimeline(dateStr) {
-    document.getElementById('calendar-wrapper').classList.add('hidden');
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
     timelineWrapper.classList.remove('hidden');
 
@@ -862,44 +861,43 @@ function openDailyTimeline(dateStr) {
     }).sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
 
     let html = `
-        <div class="bg-white border border-slate-300 rounded-lg p-3 sm:p-4 mt-2 shadow-sm">
-            <div class="flex justify-between items-center mb-6 pb-2 border-b border-slate-200">
-                <h4 class="text-sm font-bold text-stag-green">📅 ${displayDate}</h4>
-                <button onclick="closeDailyTimeline()" class="text-xs text-slate-600 hover:text-slate-900 font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-1.5 rounded transition">
-                    ◀ Zurück zum Kalender
-                </button>
-            </div>
+        <div class="bg-white border-2 border-stag-green rounded-lg p-3 sm:p-4 shadow-md relative">
+            <button onclick="closeDailyTimeline()" class="absolute top-3 right-3 text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 text-[11px] transition border border-slate-300">
+                ✕ Schließen
+            </button>
+            <h4 class="text-sm font-bold text-stag-green mb-5">📅 24-Stunden Zeitleiste: ${displayDate}</h4>
             
-            <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 tracking-wider">Aktivitäts-Zeitleiste (24 Stunden)</p>
-            <div class="relative w-full h-8 bg-slate-100 border border-slate-300 rounded-md mb-8">
-                <!-- Zeitleisten-Achse -->
-                <div class="absolute top-full left-0 text-[9px] text-slate-400 mt-1 -ml-2 font-mono">00:00</div>
-                <div class="absolute top-full left-1/4 text-[9px] text-slate-400 mt-1 -ml-3 font-mono">06:00</div>
-                <div class="absolute top-full left-2/4 text-[9px] text-slate-400 mt-1 -ml-3 font-mono">12:00</div>
-                <div class="absolute top-full left-3/4 text-[9px] text-slate-400 mt-1 -ml-3 font-mono">18:00</div>
-                <div class="absolute top-full right-0 text-[9px] text-slate-400 mt-1 -mr-2 font-mono">24:00</div>
+            <!-- Graphische 24h Balkenanzeige -->
+            <div class="relative w-full h-10 bg-slate-100 border border-slate-300 rounded-md mb-6">
+                <!-- Zeitleisten-Achse (Uhrzeiten) -->
+                <div class="absolute top-full left-0 text-[10px] text-slate-500 mt-1 font-mono">00:00</div>
+                <div class="absolute top-full left-1/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">06:00</div>
+                <div class="absolute top-full left-2/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">12:00</div>
+                <div class="absolute top-full left-3/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">18:00</div>
+                <div class="absolute top-full right-0 text-[10px] text-slate-500 mt-1 -mr-6 font-mono">24:00</div>
                 <div class="absolute inset-0">
     `;
 
-    // Balken für jedes File in der 24h-Ansicht positionieren
+    // Blöcke in die Zeitleiste zeichnen
     dayFiles.forEach(f => {
         const d = new Date(f.uploaded_at);
         const minutesFromMidnight = d.getHours() * 60 + d.getMinutes();
         const leftPercent = (minutesFromMidnight / 1440) * 100;
 
         // Breite basierend auf Dateigröße (100KB = ca. 1 Minute = ~0.07% von 24h)
-        // Wir setzen eine Mindestbreite von 0.5% damit es sichtbar bleibt
         let widthPercent = ((f.file_size_bytes / 102400) * 1) / 1440 * 100;
-        if (widthPercent < 0.8) widthPercent = 0.8;
+        if (widthPercent < 0.8) widthPercent = 0.8; // Mindestbreite für Sichtbarkeit und Klickbarkeit
 
         const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
         const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+        const kb = (f.file_size_bytes / 1024).toFixed(0);
 
+        // Klick auf den grünen Balken lädt das File sofort ins Oszilloskop!
         html += `
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
-                 class="absolute h-full bg-stag-green/80 hover:bg-emerald-500 cursor-pointer border-r border-white transition group"
-                 style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 2px;"
-                 title="${tipTime} - ${(f.file_size_bytes / 1024).toFixed(0)} KB">
+                 class="absolute h-full bg-stag-green hover:bg-emerald-500 cursor-pointer border-r border-white transition group flex items-center justify-center rounded-[1px] shadow-sm"
+                 style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 6px;"
+                 title="${tipTime} Uhr - ${kb} KB (Klicken für Oszilloskop)">
             </div>
         `;
     });
@@ -907,11 +905,14 @@ function openDailyTimeline(dateStr) {
     html += `
                 </div>
             </div>
+            
+            <p class="text-[11px] text-slate-500 mb-4 text-center">Klicken Sie auf einen grünen Block in der Zeitleiste, um die Aufzeichnung direkt im Oszilloskop zu analysieren.</p>
 
-            <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 border-b border-slate-200 pb-1 tracking-wider">Mess-Protokolle (${dayFiles.length})</p>
-            <div class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+            <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 border-b border-slate-200 pb-1 tracking-wider">Erfasste Aufzeichnungen (${dayFiles.length})</p>
+            <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
     `;
 
+    // Kompakte Liste für Download & Löschen
     dayFiles.forEach(f => {
         const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
         const uploadTime = new Date(f.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -925,8 +926,8 @@ function openDailyTimeline(dateStr) {
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
                     <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden md:inline mr-1">${uploadTime}</span>
-                    <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition">
-                        📊 Visualisieren
+                    <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition" title="Im Oszilloskop öffnen">
+                        📊
                     </button>
                     <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" class="text-red-600 hover:text-red-700 hover:bg-red-50 border border-slate-200 px-2 py-1 rounded transition text-xs" title="Aus Cloud löschen">
                         🗑️
@@ -938,11 +939,55 @@ function openDailyTimeline(dateStr) {
 
     html += `</div></div>`;
     timelineWrapper.innerHTML = html;
+    timelineWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function closeDailyTimeline() {
     document.getElementById('daily-timeline-wrapper').classList.add('hidden');
-    document.getElementById('calendar-wrapper').classList.remove('hidden');
+}
+
+// Passwortgeschütztes Löschen (wie im Captive Portal)
+async function deleteImuCloudFile(filePath, fileName) {
+    const pwd = prompt(`Sicherheitsabfrage: Bitte Admin-Passwort eingeben, um "${fileName}" endgültig zu löschen:`);
+
+    if (pwd !== 'stag2026') {
+        if (pwd !== null) alert("Falsches Passwort! Vorgang abgebrochen.");
+        return;
+    }
+
+    try {
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([filePath]);
+        if (sErr) throw sErr;
+
+        const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
+        if (dbErr) throw dbErr;
+
+        const titleEl = document.getElementById('replay-file-title');
+        if (titleEl && titleEl.innerText === fileName) {
+            closeImuReplayDeck();
+        }
+
+        // Lokale Datei aus dem RAM entfernen
+        currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
+
+        // UI aktualisieren (bleibt im selben Tag, wenn noch Dateien da sind)
+        const activeDateStr = filePath.split('/')[1];
+        const dayFilesRemaining = currentDeviceFiles.filter(f => {
+            const d = new Date(f.uploaded_at);
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === activeDateStr;
+        });
+
+        if (dayFilesRemaining.length > 0) {
+            openDailyTimeline(activeDateStr);
+            renderCalendarUI(); // Damit Zähler im Kalender stimmt
+        } else {
+            closeDailyTimeline();
+            fetchImuCloudLogs(); // Lädt die gesamte Ansicht neu
+        }
+
+    } catch (err) {
+        alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
+    }
 }
 
 // Window Exporte sicherstellen
@@ -951,3 +996,4 @@ window.changeCalendarMonth = changeCalendarMonth;
 window.setCalendarViewMode = setCalendarViewMode;
 window.openDailyTimeline = openDailyTimeline;
 window.closeDailyTimeline = closeDailyTimeline;
+window.deleteImuCloudFile = deleteImuCloudFile;
