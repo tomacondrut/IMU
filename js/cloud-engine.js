@@ -683,6 +683,19 @@ window.triggerLteDiagnosticTest = triggerLteDiagnosticTest;
 let currentDeviceFiles = [];
 let calendarDate = new Date();
 let calendarViewMode = 'month'; // 'month' oder 'week'
+let calendarInitialized = false;
+
+// Vereinheitlichte Datumsextraktion (bevorzugt day_folder, sonst Zeitstempel)
+function getFileDayKey(f) {
+    if (f.day_folder && /^\d{4}-\d{2}-\d{2}$/.test(f.day_folder)) {
+        return f.day_folder;
+    }
+    const d = new Date(f.uploaded_at);
+    if (!isNaN(d.getTime())) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    return '';
+}
 
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
@@ -717,12 +730,21 @@ async function fetchImuCloudLogs() {
     const freeEl = document.getElementById('storage-free-capacity');
 
     if (sumEl) sumEl.innerText = `${totalMbAll} MB von ${FREE_TIER_LIMIT_MB} MB (${pctAll}%)`;
-    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${currentDeviceFiles.length} Dateien)`;
+    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${currentDeviceFiles.length} Chunks)`;
     if (freeEl) freeEl.innerText = `Verbleibend: ${freeMb} MB frei`;
 
     if (barEl) {
         barEl.style.width = `${pctAll}%`;
         barEl.className = pctAll >= 90 ? 'h-full bg-red-500 transition-all' : (pctAll >= 75 ? 'h-full bg-amber-500 transition-all' : 'h-full bg-green-600 transition-all');
+    }
+
+    // Springt beim Erstaufruf automatisch in den Monat der neuesten Messung
+    if (!calendarInitialized && currentDeviceFiles.length > 0) {
+        const newestDate = new Date(currentDeviceFiles[0].uploaded_at);
+        if (!isNaN(newestDate.getTime())) {
+            calendarDate = new Date(newestDate.getFullYear(), newestDate.getMonth(), newestDate.getDate());
+            calendarInitialized = true;
+        }
     }
 
     renderCalendarUI();
@@ -746,13 +768,14 @@ function renderCalendarUI() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
 
-    // Dateien nach lokalem Datum gruppieren
+    // Dateien nach Tagen bündeln
     const filesByDate = {};
     currentDeviceFiles.forEach(f => {
-        const d = new Date(f.uploaded_at);
-        const dayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        if (!filesByDate[dayKey]) filesByDate[dayKey] = [];
-        filesByDate[dayKey].push(f);
+        const dayKey = getFileDayKey(f);
+        if (dayKey) {
+            if (!filesByDate[dayKey]) filesByDate[dayKey] = [];
+            filesByDate[dayKey].push(f);
+        }
     });
 
     const monthNames = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
@@ -763,12 +786,12 @@ function renderCalendarUI() {
         <div id="daily-timeline-wrapper" class="hidden mb-6"></div>
 
         <div id="calendar-wrapper">
-            <!-- Kalender Header -->
+            <!-- Kalender Header mit Monats-/Wochen-Umschalter -->
             <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
                 <div class="flex items-center gap-1 sm:gap-2">
-                    <button onclick="changeCalendarMonth(-1)" class="px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700 font-bold transition">◀</button>
-                    <h3 class="text-sm font-bold text-slate-800 w-32 text-center select-none">${currentMonthLabel}</h3>
-                    <button onclick="changeCalendarMonth(1)" class="px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700 font-bold transition">▶</button>
+                    <button onclick="changeCalendarMonth(-1)" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700 font-bold transition">◀</button>
+                    <h3 class="text-sm font-bold text-slate-800 w-36 text-center select-none font-mono">${currentMonthLabel}</h3>
+                    <button onclick="changeCalendarMonth(1)" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700 font-bold transition">▶</button>
                 </div>
                 <div class="flex items-center gap-1 bg-slate-100 border border-slate-300 p-1 rounded-lg">
                     <button onclick="setCalendarViewMode('month')" class="px-3 py-1 text-[11px] font-bold rounded transition ${calendarViewMode === 'month' ? 'bg-white shadow-sm text-stag-green' : 'text-slate-500 hover:text-slate-700'}">Monat</button>
@@ -777,7 +800,7 @@ function renderCalendarUI() {
             </div>
 
             <!-- Kalender Raster -->
-            <div class="grid grid-cols-7 gap-1 sm:gap-2 mb-2">
+            <div class="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2">
                 <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Mo</div>
                 <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Di</div>
                 <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">Mi</div>
@@ -787,7 +810,6 @@ function renderCalendarUI() {
                 <div class="text-[10px] font-bold text-slate-400 text-center uppercase pb-1">So</div>
     `;
 
-    // Kalender-Logik (Montag = erster Tag)
     const year = calendarDate.getFullYear();
     const month = calendarDate.getMonth();
     let startDate = new Date(year, month, 1);
@@ -806,7 +828,7 @@ function renderCalendarUI() {
 
     if (calendarViewMode === 'month') {
         for (let i = 0; i < firstDayIndex; i++) {
-            html += `<div class="p-2 rounded bg-slate-50/50 border border-slate-100/50"></div>`;
+            html += `<div class="p-2 rounded-lg bg-slate-50/40 border border-slate-100"></div>`;
         }
     }
 
@@ -824,9 +846,9 @@ function renderCalendarUI() {
         let contentHtml = `<span class="text-xs font-bold ${isToday ? 'text-blue-600' : 'text-slate-600'}">${currentRenderDate.getDate()}</span>`;
 
         if (dayFiles.length > 0) {
-            // Ungefähre Dauer berechnen: 100 KB Chunk = ca. 1 Minute Aufzeichnung (bei 10 Hz)
+            // Ungefähre Dauer: 100 KB Chunk = ca. 1 Minute Aufzeichnung
             const totalBytes = dayFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
-            const estMinutes = Math.round(totalBytes / 102400);
+            const estMinutes = Math.max(1, Math.round(totalBytes / 102400));
 
             cellClass += "bg-emerald-50 border-emerald-400 hover:bg-emerald-100 cursor-pointer shadow-sm";
             contentHtml += `
@@ -850,49 +872,47 @@ function renderCalendarUI() {
 
 function openDailyTimeline(dateStr) {
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
+    if (!timelineWrapper) return;
     timelineWrapper.classList.remove('hidden');
 
-    const displayDate = new Date(dateStr).toLocaleDateString('de-CH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const displayDate = new Date(dateStr + "T00:00:00").toLocaleDateString('de-CH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    // Dateien filtern und nach lokaler Uhrzeit sortieren
-    const dayFiles = currentDeviceFiles.filter(f => {
-        const d = new Date(f.uploaded_at);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === dateStr;
-    }).sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+    // Dateien dieses Tages filtern und chronologisch sortieren
+    const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr)
+        .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
 
     let html = `
         <div class="bg-white border-2 border-stag-green rounded-lg p-3 sm:p-4 shadow-md relative">
-            <button onclick="closeDailyTimeline()" class="absolute top-3 right-3 text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 text-[11px] transition border border-slate-300">
+            <button onclick="closeDailyTimeline()" class="absolute top-3 right-3 text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2.5 py-1 text-[11px] transition border border-slate-300">
                 ✕ Schließen
             </button>
             <h4 class="text-sm font-bold text-stag-green mb-5">📅 24-Stunden Zeitleiste: ${displayDate}</h4>
             
             <!-- Graphische 24h Balkenanzeige -->
-            <div class="relative w-full h-10 bg-slate-100 border border-slate-300 rounded-md mb-6">
+            <div class="relative w-full h-10 bg-slate-100 border border-slate-300 rounded-md mb-8">
                 <!-- Zeitleisten-Achse (Uhrzeiten) -->
                 <div class="absolute top-full left-0 text-[10px] text-slate-500 mt-1 font-mono">00:00</div>
                 <div class="absolute top-full left-1/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">06:00</div>
                 <div class="absolute top-full left-2/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">12:00</div>
                 <div class="absolute top-full left-3/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">18:00</div>
-                <div class="absolute top-full right-0 text-[10px] text-slate-500 mt-1 -mr-6 font-mono">24:00</div>
+                <div class="absolute top-full right-0 text-[10px] text-slate-500 mt-1 -mr-2 font-mono">24:00</div>
                 <div class="absolute inset-0">
     `;
 
-    // Blöcke in die Zeitleiste zeichnen
+    // Blöcke auf der 24h-Achse positionieren
     dayFiles.forEach(f => {
         const d = new Date(f.uploaded_at);
         const minutesFromMidnight = d.getHours() * 60 + d.getMinutes();
         const leftPercent = (minutesFromMidnight / 1440) * 100;
 
-        // Breite basierend auf Dateigröße (100KB = ca. 1 Minute = ~0.07% von 24h)
         let widthPercent = ((f.file_size_bytes / 102400) * 1) / 1440 * 100;
-        if (widthPercent < 0.8) widthPercent = 0.8; // Mindestbreite für Sichtbarkeit und Klickbarkeit
+        if (widthPercent < 0.8) widthPercent = 0.8; // Mindestbreite für Sichtbarkeit
 
         const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
         const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
         const kb = (f.file_size_bytes / 1024).toFixed(0);
 
-        // Klick auf den grünen Balken lädt das File sofort ins Oszilloskop!
+        // Klick auf den grünen Balken lädt das Log direkt ins Oszilloskop!
         html += `
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
                  class="absolute h-full bg-stag-green hover:bg-emerald-500 cursor-pointer border-r border-white transition group flex items-center justify-center rounded-[1px] shadow-sm"
@@ -943,10 +963,11 @@ function openDailyTimeline(dateStr) {
 }
 
 function closeDailyTimeline() {
-    document.getElementById('daily-timeline-wrapper').classList.add('hidden');
+    const timelineWrapper = document.getElementById('daily-timeline-wrapper');
+    if (timelineWrapper) timelineWrapper.classList.add('hidden');
 }
 
-// Passwortgeschütztes Löschen (wie im Captive Portal)
+// Passwortgeschütztes Löschen
 async function deleteImuCloudFile(filePath, fileName) {
     const pwd = prompt(`Sicherheitsabfrage: Bitte Admin-Passwort eingeben, um "${fileName}" endgültig zu löschen:`);
 
@@ -967,24 +988,19 @@ async function deleteImuCloudFile(filePath, fileName) {
             closeImuReplayDeck();
         }
 
-        // Lokale Datei aus dem RAM entfernen
         currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
+        const parts = filePath.split('/');
+        const activeDateStr = parts.find(p => /^\d{4}-\d{2}-\d{2}$/.test(p)) || parts[1] || '';
 
-        // UI aktualisieren (bleibt im selben Tag, wenn noch Dateien da sind)
-        const activeDateStr = filePath.split('/')[1];
-        const dayFilesRemaining = currentDeviceFiles.filter(f => {
-            const d = new Date(f.uploaded_at);
-            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === activeDateStr;
-        });
+        const dayFilesRemaining = currentDeviceFiles.filter(f => getFileDayKey(f) === activeDateStr);
 
         if (dayFilesRemaining.length > 0) {
             openDailyTimeline(activeDateStr);
-            renderCalendarUI(); // Damit Zähler im Kalender stimmt
+            renderCalendarUI();
         } else {
             closeDailyTimeline();
-            fetchImuCloudLogs(); // Lädt die gesamte Ansicht neu
+            fetchImuCloudLogs();
         }
-
     } catch (err) {
         alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
     }
