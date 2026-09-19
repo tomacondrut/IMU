@@ -94,13 +94,15 @@ function initRealtimeChannel() {
 
     liveChannel.subscribe((status) => {
         const ind = document.getElementById('realtime-indicator');
+        const txt = document.getElementById('realtime-indicator-text');
         if (!ind) return;
         if (status === 'SUBSCRIBED') {
-            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ${selectedDeviceId} LIVE`;
-            ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300';
+            // Nur STANDBY signalisieren – LIVE wird erst durch echte Datenpakete getriggert
+            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> <span id="realtime-indicator-text">${selectedDeviceId} STANDBY</span>`;
+            ind.className = 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-300';
         } else {
-            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> ${status}`;
-            ind.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300';
+            ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> <span id="realtime-indicator-text">${status}</span>`;
+            ind.className = 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300';
         }
     });
 }
