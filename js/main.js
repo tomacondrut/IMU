@@ -6,15 +6,22 @@
  * 3. Centralized fetchAllData() coordinating across all active modules.
  */
 
-selectedDeviceId = newId;
-appendTerminalLog(`\n[PORTAL] Aktives Gerät gewechselt auf: ${selectedDeviceId}`);
+/*
+ * Breadcrumb: 2026-09-13 09:30 - Main Orchestrator & Multi-Device Selector
+ * [CRITICAL BUGFIX FLAG - DYNAMIC SUBSCRIBER SWITCH]:
+ * 1. onDeviceSelectChange() cleanly closes active Realtime channels before resubscribing to the new ID.
+ * 2. switchTab() triggers domain-specific lifecycle hooks (Three.js resize, folder reload).
+ * 3. Centralized fetchAllData() coordinating across all active modules.
+ */
 
-// Bestehende Realtime- und Postgres-Channels trennen & auf neue ID binden
-initRealtimeChannel();
-if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs(); // <--- NE
+function onDeviceSelectChange(newId) {
+    selectedDeviceId = newId;
+    appendTerminalLog(`\n[PORTAL] Aktives Gerät gewechselt auf: ${selectedDeviceId}`);
 
     // Bestehende Realtime- und Postgres-Channels trennen & auf neue ID binden
     initRealtimeChannel();
+    if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs();
+
     if (cloudCmdChannel) {
         sbClient.removeChannel(cloudCmdChannel);
         cloudCmdChannel = null;

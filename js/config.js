@@ -39,3 +39,6 @@ let graphNeedsRedraw = true;
 window.accHistory = accHistory;
 window.curAx = 0; window.curAy = 0; window.curAz = 0;
 window.graphNeedsRedraw = true;
+
+// NEU: Initialisierung für den Stream-Watchdog
+window.lastLiveTelemetryTime = 0;
