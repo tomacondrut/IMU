@@ -224,11 +224,38 @@ function setReplayGraphMode(mode) {
  * [CRITICAL BUGFIX FLAG - CACHED CSV LOADING]:
  * Replaces direct fetch() with fetchCachedCsv() to eliminate redundant downloads.
  */
+/*
+ * Breadcrumb: 2026-09-20 21:05 - Wake-Cycle Timestamp Synchronization in Selector
+ * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
+ * 1. Replaced upload timestamp (file.uploaded_at) with actual sample recording time (parts[0] / firstTs).
+ * 2. Formats ISO/UTC sample timestamp to local Swiss time (HH:MM:SS) with regex fallback.
+ * 3. Applied to both inspectImuDayMerged() and inspectImuFile() cycle selectors.
+ * 4. Dismissed code: const timeStr = file.uploaded_at ? new Date(file.uploaded_at)... (showed upload time, not measurement time).
+ */
+function formatReplayTimestamp(tsStr, withSec = true) {
+    if (!tsStr) return '';
+    const d = new Date(tsStr);
+    if (!isNaN(d.getTime())) {
+        return d.toLocaleTimeString('de-CH', {
+            hour: '2-digit',
+            minute: '2-digit',
+            ...(withSec ? { second: '2-digit' } : {})
+        });
+    }
+    const m = String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/);
+    return m ? m[1] : String(tsStr);
+}
+
+/*
+ * Breadcrumb: 2026-09-20 21:05 - Single File Inspector with Cycle Timestamps
+ * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
+ * Displays real recording start time for individual wake cycles inside single files.
+ */
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
-    isDayMergedMode = false; // <-- NEU: Auf Einzeldatei zurücksetzen
+    isDayMergedMode = false;
 
     deck.classList.remove('hidden');
     deck.scrollIntoView({ behavior: 'smooth' });
@@ -239,7 +266,6 @@ async function inspectImuFile(downloadUrl, fileName) {
     initReplay3D();
 
     try {
-        // Lädt aus Cache Storage oder holt Datei einmalig aus Supabase
         const text = await fetchCachedCsv(downloadUrl);
 
         const lines = text.split('\n');
@@ -282,8 +308,12 @@ async function inspectImuFile(downloadUrl, fileName) {
         select.innerHTML = '<option value="ALL">Alle Zyklen der Datei (' + replayDataRaw.length + ' Pkt)</option>';
 
         Array.from(cyclesMap).sort((a, b) => a - b).forEach(c => {
-            const count = replayDataRaw.filter(d => d.cycle === c).length;
-            select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${count} Samples)</option>`;
+            const cyclePts = replayDataRaw.filter(d => d.cycle === c);
+            const count = cyclePts.length;
+            const firstPt = cyclePts[0];
+            const eventTime = (firstPt && firstPt.ts) ? formatReplayTimestamp(firstPt.ts) : '';
+            const timeLabel = eventTime ? `${eventTime} Uhr - ` : '';
+            select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${timeLabel}${count} Samples)</option>`;
         });
 
         onReplayCycleSelect('ALL');
@@ -1109,11 +1139,18 @@ window.setReplayThreshold = setReplayThreshold;
  * [CRITICAL BUGFIX FLAG - DAY LOG CACHED MERGE]:
  * Uses fetchCachedCsv() inside Promise.all to fetch/load all day chunks instantly from browser cache.
  */
+/*
+ * Breadcrumb: 2026-09-20 21:05 - Multi-Chunk Day Aggregator with Sample-Accurate Wake Times
+ * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
+ * 1. Captures firstTs from first data row (parts[0]) of each CSV chunk during concatenation.
+ * 2. Populates #replay-cycle-select options with event start time instead of file.uploaded_at.
+ * 3. Retains file.uploaded_at only as secondary fallback if parts[0] has no valid timestamp.
+ */
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
-    isDayMergedMode = true; // <-- NEU: Tages-Modus aktivieren
+    isDayMergedMode = true;
 
     if (replayIsPlaying) toggleReplayPlay();
     replayCurrentTimeSec = 0.0;
@@ -1138,7 +1175,6 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     initReplay3D();
 
     try {
-        // Parallel alle Chunks über den Cache abrufen
         const fetchPromises = dayFiles.map(async (f, idx) => {
             try {
                 const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
@@ -1161,12 +1197,17 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             const lines = text.split('\n');
             let samplesInChunk = 0;
             const cycleId = fileIdx + 1;
+            let firstTs = null;
 
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
                 const parts = line.split(',');
                 if (parts.length >= 8) {
+                    if (!firstTs && parts[0]) {
+                        firstTs = parts[0].trim();
+                    }
+
                     const qw = parseFloat(parts[1]) || 1.0;
                     const qx = parseFloat(parts[2]) || 0.0;
                     const qy = parseFloat(parts[3]) || 0.0;
@@ -1191,9 +1232,11 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             }
 
             if (samplesInChunk > 0) {
-                const timeStr = file.uploaded_at
-                    ? new Date(file.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' })
-                    : `Chunk #${cycleId}`;
+                // Echte Sensor-Uhrzeit des Aufweckzyklus aus dem ersten Datenpunkt (parts[0]) extrahieren
+                const eventTime = formatReplayTimestamp(firstTs);
+                const timeStr = eventTime || (file.uploaded_at
+                    ? formatReplayTimestamp(file.uploaded_at)
+                    : `Chunk #${cycleId}`);
                 chunkStats.push({ cycleId, timeStr, samplesInChunk, fileName: file.file_name });
             }
         });
@@ -1211,7 +1254,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
         });
 
         onReplayCycleSelect('ALL');
-        if (replayAccThreshold > 0) setReplayThreshold(replayAccThreshold); // Aktualisiert den Peak-Zähler sofort für den neuen Tag
+        if (replayAccThreshold > 0) setReplayThreshold(replayAccThreshold);
     } catch (err) {
         console.error('[CACHE MERGE FEHLER]', err);
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
