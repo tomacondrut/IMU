@@ -17,6 +17,7 @@ let replaySpeed = 1.0;
 let replayAnimId = null;
 let replayLastFrameTime = 0;
 let replayGraphMode = 'accel';
+let replayAccThreshold = 0.0; // <-- HIERHER verschoben (Standard: 0.0 = AUS)
 
 // Zoom- und Interaktionsstatus
 let replayZoomStartSec = 0.0;
@@ -26,6 +27,7 @@ let isSelectingZoom = false;
 let selectStartX = 0;
 let selectCurrentX = 0;
 let canvasListenersAttached = false;
+let isDayMergedMode = false; // Flag für aktive Tages-Zusammenführung
 
 // Three.js Replay Instanzen
 let repScene, repCamera, repRenderer, repMesh;
@@ -224,6 +226,9 @@ function setReplayGraphMode(mode) {
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
+
+    isDayMergedMode = false; // <-- NEU: Auf Einzeldatei zurücksetzen
+
     deck.classList.remove('hidden');
     deck.scrollIntoView({ behavior: 'smooth' });
 
@@ -682,53 +687,153 @@ function drawReplayGraph(curTimeSec) {
     // ========================================================================
     // DYNAMISCHES ZEITRASTER & KOLLISIONSFREIE ABSZISSEN-BESCHRIFTUNG
     // ========================================================================
-    const minPixelPerTick = 75; // Mindestabstand zwischen zwei Textbeschriftungen in Pixeln
-    const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
-    const rawStep = tSpan / maxTicks;
+    /*
+     * Breadcrumb: 2026-09-20 08:50 - Event-Anchored Clock Time Axis for Full Day Views
+     * [CRITICAL BUGFIX FLAG - CHUNK WAKE TIME LABELS]:
+     * 1. Detects unzoomed full-day merged view (isFullDayUnzoomed).
+     * 2. Replaces arbitrary cumulative minutes (0m, 10m, 20m) with real recording clock times (HH:MM / HH:MM:SS).
+     * 3. Renders dashed vertical green separator lines at each wake cycle start.
+     * 4. Retains high-precision adaptive seconds grid when user zooms in for waveform analysis.
+     */
+    // ========================================================================
+    // ZEITRASTER: REALZEIT-UHREN FÜR TAGES-CHUNKS ODER SEKUNDEN BEIM ZOOM
+    // ========================================================================
+    const isCycleAll = !document.getElementById('replay-cycle-select') || document.getElementById('replay-cycle-select').value === 'ALL';
+    const hasMultipleCycles = replayFilteredData.length > 0 && (replayFilteredData[0].cycle !== replayFilteredData[replayFilteredData.length - 1].cycle);
+    const isFullDayUnzoomed = !isReplayZoomed && isCycleAll && (isDayMergedMode || hasMultipleCycles);
 
-    // Gestaffelte, saubere Zeitintervalle (von 10 ms bis 1 Stunde)
-    const niceIntervals = [
-        0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
-        1, 2, 5, 10, 15, 30,
-        60, 120, 300, 600, 900, 1800, 3600
-    ];
-    const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
+    if (isFullDayUnzoomed) {
+        // 1. Alle Aufnahmestarts (Weck-Events) im Tagesverlauf erfassen
+        const recordings = [];
+        for (let i = 0; i < replayFilteredData.length; i++) {
+            const item = replayFilteredData[i];
+            if (i === 0 || item.cycle !== replayFilteredData[i - 1].cycle) {
+                recordings.push({
+                    index: i,
+                    t: i * 0.1,
+                    ts: item.ts,
+                    cycle: item.cycle
+                });
+            }
+        }
 
-    const firstTick = Math.ceil(tStart / timeStep) * timeStep;
-    ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '9px monospace';
+        // Hilfsfunktion: Wandelt UTC/ISO-Zeit in lokale Uhrzeit (HH:MM bzw. HH:MM:SS) um
+        function getUhrzeit(tsStr, withSec) {
+            if (!tsStr) return '';
+            const d = new Date(tsStr);
+            if (!isNaN(d.getTime())) {
+                return d.toLocaleTimeString('de-CH', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    ...(withSec ? { second: '2-digit' } : {})
+                });
+            }
+            const m = String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/);
+            return m ? m[1] : String(tsStr);
+        }
 
-    let lastLabelX = -999;
+        // Sekunden einblenden, falls zwei Aufnahmen in derselben Minute stattfanden
+        let withSec = false;
+        for (let k = 1; k < recordings.length; k++) {
+            if (getUhrzeit(recordings[k - 1].ts, false) === getUhrzeit(recordings[k].ts, false)) {
+                withSec = true;
+                break;
+            }
+        }
 
-    for (let t = firstTick; t <= tEnd; t += timeStep) {
-        const px = timeToX(t, w, leftMargin);
-        if (px >= leftMargin && px <= w) {
-            // Vertikale Rasterlinie
+        let lastLabelX = -999;
+        ctx.font = 'bold 9px monospace';
+
+        // 2. Jedes Weck-Event mit Trennlinie und Uhrzeit markieren
+        recordings.forEach((rec, idx) => {
+            const px = timeToX(rec.t, w, leftMargin);
+            if (px < leftMargin || px > w) return;
+
+            // Vertikale Trennlinie für den Aufnahmestart
+            ctx.save();
+            ctx.strokeStyle = (idx === 0) ? 'rgba(15, 23, 42, 0.25)' : 'rgba(0, 155, 76, 0.45)';
+            ctx.lineWidth = (idx === 0) ? 1 : 1.2;
+            if (idx > 0) ctx.setLineDash([3, 2]);
             ctx.beginPath();
             ctx.moveTo(px, 0);
             ctx.lineTo(px, h);
             ctx.stroke();
+            ctx.restore();
 
-            // Formatierung passend zur Zoomstufe
-            let labelText = '';
-            if (timeStep < 0.1) {
-                labelText = t.toFixed(2) + 's';
-            } else if (timeStep < 1.0) {
-                labelText = t.toFixed(1) + 's';
-            } else if (timeStep >= 60) {
-                const m = Math.floor(t / 60);
-                const s = Math.round(t % 60);
-                labelText = s === 0 ? `${m}m` : `${m}m ${s}s`;
-            } else {
-                labelText = Math.round(t) + 's';
-            }
+            // Uhrzeit-Label
+            const timeLabel = getUhrzeit(rec.ts, withSec);
+            const textWidth = ctx.measureText(timeLabel).width;
 
-            // Kollisionsschutz: Zeichnet Text nur, wenn genügend horizontaler Freiraum vorhanden ist
-            const textWidth = ctx.measureText(labelText).width;
-            if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
-                ctx.fillText(labelText, px + 2, h - 4);
+            // Kollisionsschutz: Label nur zeichnen, wenn Freiraum zum vorherigen Text vorhanden ist
+            if (px - lastLabelX >= textWidth + 8 && (px + textWidth) <= (w - 5)) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fillRect(px + 1, h - 13, textWidth + 3, 11);
+
+                ctx.fillStyle = '#009B4C'; // STAG-Grün für Event-Uhrzeiten
+                ctx.fillText(timeLabel, px + 2, h - 4);
                 lastLabelX = px;
+            }
+        });
+
+        // 3. Uhrzeit des Tages-Endes ganz rechts ergänzen
+        if (recordings.length > 0) {
+            const lastSample = replayFilteredData[replayFilteredData.length - 1];
+            const endPx = timeToX((replayFilteredData.length - 1) * 0.1, w, leftMargin);
+            const endTimeLabel = getUhrzeit(lastSample.ts, withSec);
+            const endTextWidth = ctx.measureText(endTimeLabel).width;
+            if (endPx - lastLabelX >= endTextWidth + 12 && endPx <= w) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fillRect(endPx - endTextWidth - 2, h - 13, endTextWidth + 3, 11);
+                ctx.fillStyle = '#64748b';
+                ctx.fillText(endTimeLabel, endPx - endTextWidth, h - 4);
+            }
+        }
+    } else {
+        // Standard dynamisches Zeitraster (beim Einzoomen oder bei Einzelaufnahmen)
+        const minPixelPerTick = 75;
+        const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
+        const rawStep = tSpan / maxTicks;
+
+        const niceIntervals = [
+            0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+            1, 2, 5, 10, 15, 30,
+            60, 120, 300, 600, 900, 1800, 3600
+        ];
+        const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
+
+        const firstTick = Math.ceil(tStart / timeStep) * timeStep;
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '9px monospace';
+
+        let lastLabelX = -999;
+
+        for (let t = firstTick; t <= tEnd; t += timeStep) {
+            const px = timeToX(t, w, leftMargin);
+            if (px >= leftMargin && px <= w) {
+                ctx.beginPath();
+                ctx.moveTo(px, 0);
+                ctx.lineTo(px, h);
+                ctx.stroke();
+
+                let labelText = '';
+                if (timeStep < 0.1) {
+                    labelText = t.toFixed(2) + 's';
+                } else if (timeStep < 1.0) {
+                    labelText = t.toFixed(1) + 's';
+                } else if (timeStep >= 60) {
+                    const m = Math.floor(t / 60);
+                    const s = Math.round(t % 60);
+                    labelText = s === 0 ? `${m}m` : `${m}m ${s}s`;
+                } else {
+                    labelText = Math.round(t) + 's';
+                }
+
+                const textWidth = ctx.measureText(labelText).width;
+                if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
+                    ctx.fillText(labelText, px + 2, h - 4);
+                    lastLabelX = px;
+                }
             }
         }
     }
@@ -934,6 +1039,8 @@ window.setReplayThreshold = setReplayThreshold;
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
+
+    isDayMergedMode = true; // <-- NEU: Tages-Modus aktivieren
 
     if (replayIsPlaying) toggleReplayPlay();
     replayCurrentTimeSec = 0.0;
