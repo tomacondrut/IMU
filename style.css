@@ -85,3 +85,63 @@ input[type="range"] {
 		box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
 	}
 }
+
+/*
+ * Breadcrumb: 2026-09-20 09:45 - Mobile Viewport, Touch Targets & iOS Safe-Areas
+ * [CRITICAL BUGFIX FLAG - MOBILE POLISH]:
+ * 1. Native iOS safe-area-inset padding for bottom drawers and home indicators.
+ * 2. Momentum scrolling and scrollbar suppression for horizontal tab navigation.
+ * 3. Eliminates tap delay and tap-highlight flashes on mobile WebKit/Chrome.
+ * 4. Responsive canvas containers with strict touch-action containment.
+ */
+
+/* Tap-Highlighting und 300ms Klick-Verzögerung auf Touchscreens deaktivieren */
+* {
+	-webkit-tap-highlight-color: transparent;
+}
+
+button, select, input[type="range"] {
+	touch-action: manipulation;
+}
+
+/* Horizontale Menüleiste auf dem Smartphone weich wischbar ohne sichtbare Scrollbalken */
+.overflow-x-auto {
+	-webkit-overflow-scrolling: touch;
+	scrollbar-width: none; /* Firefox */
+}
+
+	.overflow-x-auto::-webkit-scrollbar {
+		display: none; /* Safari/Chrome */
+	}
+
+/* Touch-Optimierung für das Oszilloskop-Canvas */
+#replayGraphCanvas {
+	touch-action: none; /* Verhindert Gesten-Konflikte mit dem Browser-Scroll */
+}
+
+/* Smartphone-Anpassungen (Bildschirme bis 640px) */
+@media (max-width: 640px) {
+	body {
+		padding-left: max(8px, env(safe-area-inset-left));
+		padding-right: max(8px, env(safe-area-inset-right));
+		padding-bottom: max(16px, env(safe-area-inset-bottom));
+	}
+
+	/* Slider-Spur vergrößern für zielsichere Finger-Bedienung */
+	input[type="range"] {
+		height: 18px;
+	}
+
+	/* Modale randlos und scrollbar auf kleinen Displays */
+	#battery-modal > div,
+	#gps-modal > div {
+		max-height: 94vh;
+		width: 98vw;
+	}
+
+	/* Terminal-Drawer nutzt volle Bildschirmbreite */
+	#terminal-drawer {
+		width: calc(100vw - 20px) !important;
+		right: 0 !important;
+	}
+}
