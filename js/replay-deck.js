@@ -589,33 +589,32 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
-    // Mausrad Panning
+    /*
+  * Breadcrumb: 2026-09-20 10:10 - Frame-by-Frame Wheel Scrubbing Controller
+  * [CRITICAL BUGFIX FLAG - WHEEL STEP PLAYBACK]:
+  * 1. Replaced horizontal pan with single-sample step scrubbing (100ms / 0.1s raster per notch).
+  * 2. Works seamlessly in both unzoomed full views and zoomed sub-regions.
+  * 3. Automatically pauses active animation loop to prevent playback fighting.
+  * 4. Bounds scrubbing strictly within visible time bounds (tStart to tEnd).
+  */
+    // Mausrad: Schrittweises Abspielen / Spulen (1 Sample = 100 ms pro Raste)
     cv.addEventListener('wheel', (e) => {
-        if (!isReplayZoomed) return;
         e.preventDefault();
+        if (replayFilteredData.length === 0) return;
 
-        const { maxDur, tSpan } = getTimeBounds();
-        const panDeltaSec = (e.deltaY > 0 ? 1 : -1) * (tSpan * 0.15);
+        // Laufende Wiedergabe bei manuellem Drehen pausieren
+        if (replayIsPlaying) toggleReplayPlay();
 
-        let newStart = replayZoomStartSec + panDeltaSec;
-        let newEnd = replayZoomEndSec + panDeltaSec;
+        const { tStart, tEnd } = getTimeBounds();
 
-        if (newStart < 0) {
-            newEnd -= newStart;
-            newStart = 0;
-        }
-        if (newEnd > maxDur) {
-            newStart -= (newEnd - maxDur);
-            newEnd = maxDur;
-            if (newStart < 0) newStart = 0;
-        }
+        // Rad nach unten (deltaY > 0) = Vorwärts, Rad nach oben (deltaY < 0) = Rückwärts
+        const direction = e.deltaY > 0 ? 1 : -1;
+        const stepSec = 0.1; // Exakt 1 Messpunkt (10 Hz Sensorraster)
 
-        replayZoomStartSec = newStart;
-        replayZoomEndSec = newEnd;
+        let newTime = replayCurrentTimeSec + (direction * stepSec);
+        newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
 
-        if (replayCurrentTimeSec < replayZoomStartSec) replayCurrentTimeSec = replayZoomStartSec;
-        if (replayCurrentTimeSec > replayZoomEndSec) replayCurrentTimeSec = replayZoomEndSec;
-
+        replayCurrentTimeSec = newTime;
         renderInterpolatedFrame(replayCurrentTimeSec);
     }, { passive: false });
 }
