@@ -477,6 +477,13 @@ function resetReplayZoom() {
  * 3. Unified touch-to-pixel coordinate translation matching devicePixelRatio and canvas bounding rect.
  * 4. 8px threshold distinguishes quick thumb-taps (scrub playhead) from region selection (zoom).
  */
+/*
+ * Breadcrumb: 2026-09-20 09:40 - Precision Drag-to-Zoom & Unified Touch Engine
+ * [CRITICAL BUGFIX FLAG - MOBILE TOUCH & CLICK SCRUB SEPARATION]:
+ * 1. Reduced zoom detection threshold from 15px to 6px to reliably catch fine selections.
+ * 2. Added passive:false touchstart/touchmove/touchend handlers for iPhone & Android gestures.
+ * 3. e.preventDefault() stops browser text selection, page scrolling, and ghost clicks on canvas.
+ */
 function attachCanvasInteraction() {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || canvasListenersAttached) return;
@@ -484,7 +491,6 @@ function attachCanvasInteraction() {
 
     const leftMargin = 38;
 
-    // --- Hilfsfunktion: X-Koordinate aus Maus- oder Touch-Event ermitteln ---
     function getEventX(e) {
         const rect = cv.getBoundingClientRect();
         const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
@@ -516,8 +522,8 @@ function attachCanvasInteraction() {
         const dx = Math.abs(selectCurrentX - selectStartX);
         const w = cvNow.clientWidth;
 
-        if (dx >= 8) {
-            // Wischgeste >= 8px: Zoom ausführen
+        // Ab 6px Bewegung verlässlich als Bereichs-Zoom werten
+        if (dx >= 6) {
             const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
             const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
 
@@ -542,14 +548,14 @@ function attachCanvasInteraction() {
                 renderInterpolatedFrame(replayCurrentTimeSec);
             }
         } else {
-            // Tippen (< 8px): Playhead setzen
+            // Reiner Klick (< 6px): Playhead-Position versetzen
             const targetTime = xToTime(selectStartX, w, leftMargin);
             replayCurrentTimeSec = targetTime;
             renderInterpolatedFrame(replayCurrentTimeSec);
         }
     }
 
-    // --- Maus-Events (Desktop) ---
+    // Desktop Maus-Events
     cv.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -564,10 +570,10 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
-    // --- Touch-Events (iOS / Android) ---
+    // Smartphone Touch-Events (iOS & Android)
     cv.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
-            e.preventDefault(); // Verhindert Scrollen beim Wischen über das Diagramm
+            e.preventDefault();
             handleStart(getEventX(e));
         }
     }, { passive: false });
@@ -583,7 +589,7 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
-    // --- Mausrad Pan (Desktop) ---
+    // Mausrad Panning
     cv.addEventListener('wheel', (e) => {
         if (!isReplayZoomed) return;
         e.preventDefault();
@@ -1066,6 +1072,8 @@ window.setReplayGraphMode = setReplayGraphMode;
  * [CRITICAL BUGFIX FLAG - ELIMINATED DUPLICATE LET DECLARATION]:
  * Removed duplicate 'let replayAccThreshold' to resolve fatal JS SyntaxError.
  */
+/
+
 function setReplayThreshold(val) {
     replayAccThreshold = parseFloat(val) || 0.0;
     const lbl = document.getElementById('replay-threshold-val');

@@ -523,9 +523,15 @@ async function fetchConfig() {
 
     liveModeActive = data.continuous_mode || false;
     updateStreamUI(liveModeActive);
+    updateLockUI(); // <-- DIESE ZEILE AM ENDE VON fetchConfig() ERGÄNZEN
 }
 
 async function saveConfigToCloud() {
+    if (!isSessionUnlocked()) {
+        openSessionAuthModal();
+        return;
+    }
+
     const btn = document.getElementById('btn-save-cfg');
     const status = document.getElementById('cfg-status-msg');
     btn.disabled = true;
@@ -572,8 +578,13 @@ async function saveConfigToCloud() {
 // ============================================================================
 
 async function toggleLteLiveStreaming() {
+    if (!isSessionUnlocked()) {
+        openSessionAuthModal();
+        return;
+    }
+
     const newState = !liveModeActive;
-    updateStreamUI(newState, true); // Optisch sofort Feedback geben (Ladezustand)
+    updateStreamUI(newState, true);
 
     try {
         const { error } = await sbClient
@@ -592,7 +603,7 @@ async function toggleLteLiveStreaming() {
     } catch (err) {
         console.error("Fehler beim Schalten des Live-Modus:", err);
         alert("Cloud-Fehler: Konnte Streaming-Status nicht aktualisieren.");
-        updateStreamUI(liveModeActive, false); // Zustand zurückrollen
+        updateStreamUI(liveModeActive, false);
     }
 }
 
@@ -670,6 +681,11 @@ window.subscribeToBatteryLogs = subscribeToBatteryLogs;
 * Breadcrumb: 2026-09-13 10:15 - Cloud-Triggered LTE Diagnostic Test Dispatcher
 */
 async function triggerLteDiagnosticTest() {
+    if (!isSessionUnlocked()) {
+        openSessionAuthModal();
+        return;
+    }
+
     if (window.ensureTerminalOpen) {
         window.ensureTerminalOpen();
     }
@@ -1029,25 +1045,90 @@ function isSessionUnlocked() {
     return sessionStorage.getItem('stag_admin_unlocked') === 'true';
 }
 
+/*
+ * Breadcrumb: 2026-09-20 09:50 - Comprehensive Settings & Action Lock Protection
+ * [CRITICAL BUGFIX FLAG - PARAMETER SECURITY LOCK]:
+ * 1. Extends isSessionUnlocked() authorization to all sliders, textfields, toggles & save operations in #tab-settings.
+ * 2. updateLockUI() toggles disabled states, cursor styles, and opacity on all parameter controls.
+ * 3. Renders interactive status banner in #tab-settings allowing one-click authentication.
+ * 4. Hard-guards saveConfigToCloud, toggleLteLiveStreaming, and triggerLteDiagnosticTest against unauthenticated execution.
+ */
+
 function updateLockUI() {
     const btn = document.getElementById('header-lock-btn');
     const unlocked = isSessionUnlocked();
-    if (!btn) return;
-
-    if (unlocked) {
-        btn.innerHTML = `<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>`;
-        btn.className = "flex items-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg cursor-pointer transition select-none shadow-sm";
-        btn.title = "Löschfunktion aktiv (Klicken zum Sperren)";
-    } else {
-        btn.innerHTML = `<svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>`;
-        btn.className = "flex items-center bg-slate-100 hover:bg-slate-200 border border-slate-300 p-2 rounded-lg cursor-pointer transition select-none shadow-sm";
-        btn.title = "Löschfunktion gesperrt (Klicken zum Entsperren)";
+    if (btn) {
+        if (unlocked) {
+            btn.innerHTML = `<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>`;
+            btn.className = "flex items-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg cursor-pointer transition select-none shadow-sm";
+            btn.title = "Lösch- & Parameterfunktionen aktiv (Klicken zum Sperren)";
+        } else {
+            btn.innerHTML = `<svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>`;
+            btn.className = "flex items-center bg-slate-100 hover:bg-slate-200 border border-slate-300 p-2 rounded-lg cursor-pointer transition select-none shadow-sm";
+            btn.title = "Lösch- & Parameterfunktionen gesperrt (Klicken zum Entsperren)";
+        }
     }
 
-    // Lösch-Buttons in der Zeitleiste dynamisch ein-/ausblenden
+    // 1. Lösch-Buttons in der Zeitleiste
     document.querySelectorAll('.btn-delete-log').forEach(el => {
         el.style.display = unlocked ? 'inline-flex' : 'none';
     });
+
+    // 2. Alle Parameter-Bedienelemente sperren / freigeben
+    const settingControlIds = [
+        'cfg-idle', 'cfg-sens', 'cfg-delta', 'cfg-rate', 'cfg-lte',
+        'cfg-sim-pin', 'cfg-sim-apn', 'btn-toggle-live', 'btn-save-cfg'
+    ];
+    settingControlIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = !unlocked;
+            if (!unlocked) {
+                el.classList.add('opacity-50', 'cursor-not-allowed');
+            } else {
+                el.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        }
+    });
+
+    // LTE-Diagnose Button im Parameter-Tab sperren / freigeben
+    const lteBtn = document.querySelector('#tab-settings button[onclick*="triggerLteDiagnosticTest"]');
+    if (lteBtn) {
+        lteBtn.disabled = !unlocked;
+        if (!unlocked) {
+            lteBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        } else {
+            lteBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    }
+
+    // 3. Status-Banner im Parameter-Tab anzeigen
+    const banner = document.getElementById('settings-lock-banner');
+    if (banner) {
+        if (unlocked) {
+            banner.className = "bg-emerald-50 border border-emerald-300 rounded-lg p-3 mb-4 flex justify-between items-center text-xs text-emerald-800 shadow-sm";
+            banner.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <span class="text-base">🔓</span>
+                    <span><strong class="font-bold">Freigegeben:</strong> Parameter können bearbeitet und gespeichert werden.</span>
+                </div>
+                <button type="button" onclick="toggleSessionLock()" class="bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-1 rounded text-xs font-bold transition">
+                    Sperren
+                </button>
+            `;
+        } else {
+            banner.className = "bg-amber-50 border border-amber-300 rounded-lg p-3 mb-4 flex justify-between items-center text-xs text-amber-800 shadow-sm";
+            banner.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <span class="text-base">🔒</span>
+                    <span><strong class="font-bold">Schreibgeschützt:</strong> Zum Ändern von Parametern ist eine Freigabe erforderlich.</span>
+                </div>
+                <button type="button" onclick="openSessionAuthModal()" class="bg-stag-green hover:bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold transition shadow-sm">
+                    Freischalten
+                </button>
+            `;
+        }
+    }
 }
 
 function toggleSessionLock() {

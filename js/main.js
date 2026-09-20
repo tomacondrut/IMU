@@ -67,7 +67,10 @@ function switchTab(tab) {
     }
     if (tab === 'imulogs' && window.fetchImuCloudLogs) window.fetchImuCloudLogs();
     if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
-    if (tab === 'settings') fetchConfig();
+    if (tab === 'settings') {
+        fetchConfig();
+        if (window.updateLockUI) window.updateLockUI();
+    }
     if (tab === 'ota' && window.fetchReleases) window.fetchReleases();
 }
 
