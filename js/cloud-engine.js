@@ -961,11 +961,12 @@ function openDailyTimeline(dateStr) {
         const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
         const kb = (f.file_size_bytes / 1024).toFixed(0);
 
+        // Mindestbreite 12px für verlässliche Touch-Bedienung mit Daumen/Finger
         html += `
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
-                 class="absolute h-full bg-stag-green hover:bg-emerald-500 cursor-pointer border-r border-white transition group flex items-center justify-center rounded-[1px] shadow-sm"
-                 style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 6px;"
-                 title="${tipTime} Uhr - ${kb} KB (Klicken für Einzeldatei)">
+                 class="absolute h-full bg-stag-green active:bg-emerald-600 hover:bg-emerald-500 cursor-pointer border-r border-white transition flex items-center justify-center rounded-[2px] shadow-sm touch-manipulation"
+                 style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 12px;"
+                 title="${tipTime} Uhr - ${kb} KB">
             </div>
         `;
     });

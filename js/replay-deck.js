@@ -461,6 +461,22 @@ function resetReplayZoom() {
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
+/*
+ * Breadcrumb: 2026-09-20 09:30 - Precision Drag-to-Zoom Sensitivity & Ghost Click Elimination
+ * [CRITICAL BUGFIX FLAG - SEPARATE CLICK SCRUB FROM REGION ZOOM]:
+ * 1. Added e.preventDefault() on mousedown to block native canvas/text drag collisions.
+ * 2. Reduced zoom detection threshold from 15px to 6px so even small peak selections reliably zoom.
+ * 3. Playhead only jumps on deliberate stationary clicks (dx < 6px).
+ * 4. Reduced minimum time slice to 20ms (0.02s) for micro-transient analysis.
+ */
+/*
+ * Breadcrumb: 2026-09-20 09:40 - Unified Touch & Mouse Gesture Engine for Replay Canvas
+ * [CRITICAL BUGFIX FLAG - MOBILE TOUCH DRAG-TO-ZOOM]:
+ * 1. Added passive:false touchstart, touchmove, touchend handlers to support mobile drag-to-zoom.
+ * 2. e.preventDefault() blocks browser viewport panning/pull-to-refresh while swiping the canvas.
+ * 3. Unified touch-to-pixel coordinate translation matching devicePixelRatio and canvas bounding rect.
+ * 4. 8px threshold distinguishes quick thumb-taps (scrub playhead) from region selection (zoom).
+ */
 function attachCanvasInteraction() {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || canvasListenersAttached) return;
@@ -468,26 +484,29 @@ function attachCanvasInteraction() {
 
     const leftMargin = 38;
 
-    cv.addEventListener('mousedown', (e) => {
+    // --- Hilfsfunktion: X-Koordinate aus Maus- oder Touch-Event ermitteln ---
+    function getEventX(e) {
         const rect = cv.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        if (mouseX < leftMargin) return;
+        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+        return clientX - rect.left;
+    }
 
+    function handleStart(clientX) {
+        if (clientX < leftMargin) return;
         isSelectingZoom = true;
-        selectStartX = mouseX;
-        selectCurrentX = mouseX;
-    });
+        selectStartX = clientX;
+        selectCurrentX = clientX;
+    }
 
-    window.addEventListener('mousemove', (e) => {
+    function handleMove(clientX) {
         if (!isSelectingZoom) return;
         const cvNow = document.getElementById('replayGraphCanvas');
         if (!cvNow) return;
-        const rect = cvNow.getBoundingClientRect();
-        selectCurrentX = Math.max(leftMargin, Math.min(cvNow.clientWidth, e.clientX - rect.left));
+        selectCurrentX = Math.max(leftMargin, Math.min(cvNow.clientWidth, clientX));
         drawReplayGraph(replayCurrentTimeSec);
-    });
+    }
 
-    window.addEventListener('mouseup', (e) => {
+    function handleEnd() {
         if (!isSelectingZoom) return;
         isSelectingZoom = false;
 
@@ -497,11 +516,12 @@ function attachCanvasInteraction() {
         const dx = Math.abs(selectCurrentX - selectStartX);
         const w = cvNow.clientWidth;
 
-        if (dx >= 15) {
+        if (dx >= 8) {
+            // Wischgeste >= 8px: Zoom ausführen
             const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
             const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
 
-            if (t2 - t1 >= 0.05) {
+            if (t2 - t1 >= 0.02) {
                 replayZoomStartSec = t1;
                 replayZoomEndSec = t2;
                 isReplayZoomed = true;
@@ -522,12 +542,48 @@ function attachCanvasInteraction() {
                 renderInterpolatedFrame(replayCurrentTimeSec);
             }
         } else {
+            // Tippen (< 8px): Playhead setzen
             const targetTime = xToTime(selectStartX, w, leftMargin);
             replayCurrentTimeSec = targetTime;
             renderInterpolatedFrame(replayCurrentTimeSec);
         }
+    }
+
+    // --- Maus-Events (Desktop) ---
+    cv.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        handleStart(getEventX(e));
     });
 
+    window.addEventListener('mousemove', (e) => {
+        if (isSelectingZoom) handleMove(getEventX(e));
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (isSelectingZoom) handleEnd();
+    });
+
+    // --- Touch-Events (iOS / Android) ---
+    cv.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            e.preventDefault(); // Verhindert Scrollen beim Wischen über das Diagramm
+            handleStart(getEventX(e));
+        }
+    }, { passive: false });
+
+    cv.addEventListener('touchmove', (e) => {
+        if (isSelectingZoom && e.touches.length === 1) {
+            e.preventDefault();
+            handleMove(getEventX(e));
+        }
+    }, { passive: false });
+
+    cv.addEventListener('touchend', () => {
+        if (isSelectingZoom) handleEnd();
+    });
+
+    // --- Mausrad Pan (Desktop) ---
     cv.addEventListener('wheel', (e) => {
         if (!isReplayZoomed) return;
         e.preventDefault();
@@ -1149,3 +1205,66 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     }
 }
 window.inspectImuDayMerged = inspectImuDayMerged;
+
+/*
+* Breadcrumb: 2026-09-20 09:35 - Visible Window CSV Slice Exporter
+* [CRITICAL BUGFIX FLAG - DYNAMIC CSV EXPORT]:
+* 1. Checks if zoomed (isReplayZoomed): slices only samples between replayZoomStartSec and replayZoomEndSec.
+* 2. If unzoomed: exports complete replayFilteredData.
+* 3. Generates standards-compliant CSV with header: timestamp,qw,qx,qy,qz,ax,ay,az,cycle.
+* 4. Creates instant client-side download Blob without backend roundtrips.
+*/
+function exportReplayVisibleCsv() {
+    if (!replayFilteredData || replayFilteredData.length === 0) {
+        alert('Keine Messdaten im Oszilloskop zum Exportieren vorhanden.');
+        return;
+    }
+
+    const { tStart, tEnd } = getTimeBounds();
+    let exportRows = [];
+
+    if (isReplayZoomed) {
+        const startIdx = Math.max(0, Math.floor(tStart / 0.1));
+        const endIdx = Math.min(replayFilteredData.length - 1, Math.ceil(tEnd / 0.1));
+        exportRows = replayFilteredData.slice(startIdx, endIdx + 1);
+    } else {
+        exportRows = replayFilteredData;
+    }
+
+    if (exportRows.length === 0) {
+        alert('Keine Datenpunkte im gewählten Bereich gefunden.');
+        return;
+    }
+
+    // CSV Header & Zeilen erzeugen
+    const header = 'timestamp,qw,qx,qy,qz,ax,ay,az,cycle\n';
+    const csvContent = header + exportRows.map(r =>
+        `${r.ts},${r.qw.toFixed(4)},${r.qx.toFixed(4)},${r.qy.toFixed(4)},${r.qz.toFixed(4)},${r.ax.toFixed(3)},${r.ay.toFixed(3)},${r.az.toFixed(3)},${r.cycle}`
+    ).join('\n');
+
+    // Dateinamen ableiten (Gerätename + Zeitspanne oder Dateiname)
+    const titleEl = document.getElementById('replay-file-title');
+    let baseName = titleEl ? titleEl.innerText.replace(/[^a-zA-Z0-9_\-]/g, '_') : 'IMU_Export';
+    if (baseName.endsWith('.csv')) baseName = baseName.replace('.csv', '');
+
+    const rangeSuffix = isReplayZoomed
+        ? `_zoom_${tStart.toFixed(1)}s-${tEnd.toFixed(1)}s`
+        : '_full';
+    const targetFilename = `${baseName}${rangeSuffix}.csv`;
+
+    // Download über Browser-Blob initiieren
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = targetFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    if (window.appendTerminalLog) {
+        window.appendTerminalLog(`[EXPORT] ${exportRows.length} Messpunkte erfolgreich als "${targetFilename}" exportiert.`);
+    }
+}
+window.exportReplayVisibleCsv = exportReplayVisibleCsv;
