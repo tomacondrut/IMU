@@ -1073,6 +1073,12 @@ window.setReplayGraphMode = setReplayGraphMode;
  * Removed duplicate 'let replayAccThreshold' to resolve fatal JS SyntaxError.
  */
 
+/*
+ * Breadcrumb: 2026-09-20 10:00 - Fixed Width Threshold Controller & Compact Counter
+ * [CRITICAL BUGFIX FLAG - ELIMINATE SLIDER JUMPING]:
+ * 1. Compacts peak counts >= 10000 to 'X.Xk' format to guarantee consistent label width.
+ * 2. Pairs with HTML w-28/w-32 fixed-width span to eliminate flexbox horizontal layout shift.
+ */
 function setReplayThreshold(val) {
     replayAccThreshold = parseFloat(val) || 0.0;
     const lbl = document.getElementById('replay-threshold-val');
@@ -1089,7 +1095,8 @@ function setReplayThreshold(val) {
 
     if (lbl) {
         if (replayAccThreshold > 0) {
-            lbl.innerText = `${replayAccThreshold.toFixed(1)} m/s² (${peakCount} Pkt)`;
+            const countStr = peakCount >= 10000 ? `${(peakCount / 1000).toFixed(1)}k` : peakCount;
+            lbl.innerText = `${replayAccThreshold.toFixed(1)} m/s² (${countStr} Pkt)`;
         } else {
             lbl.innerText = 'AUS';
         }
