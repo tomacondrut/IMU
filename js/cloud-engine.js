@@ -897,6 +897,30 @@ function openDayReplay(dateStr) {
 }
 window.openDayReplay = openDayReplay;
 
+/*
+ * Breadcrumb: 2026-09-20 09:05 - Auto-Launch Full Day Replay on Calendar Day Click
+ * [CRITICAL BUGFIX FLAG - INSTANT DAY REPLAY ON CLICK]:
+ * 1. Automatically calls openDayReplay(dateStr) when a day is opened.
+ * 2. Unhides 24h timeline and immediately streams merged day chunks to oscilloscope.
+ */
+function openDayReplay(dateStr) {
+    const dayFiles = currentDeviceFiles
+        .filter(f => getFileDayKey(f) === dateStr)
+        .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+
+    if (!dayFiles || dayFiles.length === 0) {
+        alert(`Keine Messdateien für den Tag ${dateStr} gefunden.`);
+        return;
+    }
+
+    if (window.inspectImuDayMerged) {
+        window.inspectImuDayMerged(dateStr, dayFiles);
+    } else {
+        console.error("inspectImuDayMerged ist nicht verfügbar.");
+    }
+}
+window.openDayReplay = openDayReplay;
+
 function openDailyTimeline(dateStr) {
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
     if (!timelineWrapper) return;
@@ -904,7 +928,6 @@ function openDailyTimeline(dateStr) {
 
     const displayDate = new Date(dateStr + "T00:00:00").toLocaleDateString('de-CH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    // Dateien dieses Tages filtern und chronologisch sortieren
     const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr)
         .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
 
@@ -918,7 +941,7 @@ function openDailyTimeline(dateStr) {
                 <div class="flex items-center gap-2 flex-wrap">
                     <button onclick="openDayReplay('${dateStr}')"
                             class="bg-stag-green hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded text-xs shadow-sm transition flex items-center gap-1.5">
-                        <span>📈 Gesamten Tag im Oszilloskop öffnen</span>
+                        <span>🔄 Tag neu laden</span>
                     </button>
                     <button onclick="closeDailyTimeline()" class="text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2.5 py-1.5 text-xs transition border border-slate-300">
                         ✕ Schließen
@@ -926,9 +949,7 @@ function openDailyTimeline(dateStr) {
                 </div>
             </div>
             
-            <!-- Graphische 24h Balkenanzeige -->
             <div class="relative w-full h-10 bg-slate-100 border border-slate-300 rounded-md mb-8">
-                <!-- Zeitleisten-Achse (Uhrzeiten) -->
                 <div class="absolute top-full left-0 text-[10px] text-slate-500 mt-1 font-mono">00:00</div>
                 <div class="absolute top-full left-1/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">06:00</div>
                 <div class="absolute top-full left-2/4 text-[10px] text-slate-500 mt-1 -ml-3 font-mono">12:00</div>
@@ -937,14 +958,13 @@ function openDailyTimeline(dateStr) {
                 <div class="absolute inset-0">
     `;
 
-    // Blöcke auf der 24h-Achse positionieren
     dayFiles.forEach(f => {
         const d = new Date(f.uploaded_at);
         const minutesFromMidnight = d.getHours() * 60 + d.getMinutes();
         const leftPercent = (minutesFromMidnight / 1440) * 100;
 
         let widthPercent = ((f.file_size_bytes / 102400) * 1) / 1440 * 100;
-        if (widthPercent < 0.8) widthPercent = 0.8; // Mindestbreite für Sichtbarkeit
+        if (widthPercent < 0.8) widthPercent = 0.8;
 
         const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
         const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
@@ -955,7 +975,7 @@ function openDailyTimeline(dateStr) {
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
                  class="absolute h-full bg-stag-green hover:bg-emerald-500 cursor-pointer border-r border-white transition group flex items-center justify-center rounded-[1px] shadow-sm"
                  style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 6px;"
-                 title="${tipTime} Uhr - ${kb} KB (Klicken für Oszilloskop)">
+                 title="${tipTime} Uhr - ${kb} KB (Klicken für Einzeldatei)">
             </div>
         `;
     });
@@ -964,13 +984,12 @@ function openDailyTimeline(dateStr) {
                 </div>
             </div>
             
-            <p class="text-[11px] text-slate-500 mb-4 text-center">Klicken Sie auf einen grünen Block in der Zeitleiste oder oben auf „Gesamten Tag im Oszilloskop öffnen“.</p>
+            <p class="text-[11px] text-slate-500 mb-4 text-center">Gesamter Tag wurde automatisch im Oszilloskop geöffnet. Klick auf einen grünen Balken isoliert die jeweilige Einzeldatei.</p>
 
             <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 border-b border-slate-200 pb-1 tracking-wider">Erfasste Aufzeichnungen (${dayFiles.length})</p>
             <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
     `;
 
-    // Kompakte Liste für Download & Löschen
     dayFiles.forEach(f => {
         const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
         const uploadTime = new Date(f.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -985,7 +1004,7 @@ function openDailyTimeline(dateStr) {
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
                     <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden md:inline mr-1">${uploadTime}</span>
-                    <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition" title="Im Oszilloskop öffnen">
+                    <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition" title="Nur diesen Chunk öffnen">
                         📊
                     </button>
                     <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" 
@@ -1001,7 +1020,9 @@ function openDailyTimeline(dateStr) {
 
     html += `</div></div>`;
     timelineWrapper.innerHTML = html;
-    timelineWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // AUTOMATISCH: Gesamten Tag sofort ins Oszilloskop laden & hinscrollen
+    openDayReplay(dateStr);
 }
 
 function closeDailyTimeline() {

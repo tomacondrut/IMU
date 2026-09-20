@@ -174,6 +174,7 @@ function loadReplayGLBModel() {
 
 function closeImuReplayDeck() {
     if (replayIsPlaying) toggleReplayPlay();
+    isDayMergedMode = false; // Zurücksetzen
     const deck = document.getElementById('imu-replay-deck');
     if (deck) deck.classList.add('hidden');
 }
@@ -1006,6 +1007,11 @@ window.setReplayGraphMode = setReplayGraphMode;
  */
 let replayAccThreshold = 0.0; // 0.0 = Deaktiviert
 
+/*
+ * Breadcrumb: 2026-09-20 09:00 - Replay Threshold Controller & Live Peak Counter
+ * [CRITICAL BUGFIX FLAG - ELIMINATED DUPLICATE LET DECLARATION]:
+ * Removed duplicate 'let replayAccThreshold' to resolve fatal JS SyntaxError.
+ */
 function setReplayThreshold(val) {
     replayAccThreshold = parseFloat(val) || 0.0;
     const lbl = document.getElementById('replay-threshold-val');
