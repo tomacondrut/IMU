@@ -872,6 +872,31 @@ function renderCalendarUI() {
     container.innerHTML = html;
 }
 
+/*
+ * Breadcrumb: 2026-09-20 07:45 - Robust 24h Timeline & Scope-Safe Day Replay Dispatcher
+ * [CRITICAL BUGFIX FLAG - RESTORED TIMELINE BAR & SCOPE SAFE DISPATCH]:
+ * 1. Restored missing 24h timeline graphic container (relative w-full h-10 & absolute inset-0).
+ * 2. Replaced fragile inline onclick filter logic with scope-safe openDayReplay(dateStr).
+ * 3. Normalizes storage file paths (removes leading slashes).
+ */
+function openDayReplay(dateStr) {
+    const dayFiles = currentDeviceFiles
+        .filter(f => getFileDayKey(f) === dateStr)
+        .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+
+    if (!dayFiles || dayFiles.length === 0) {
+        alert(`Keine Messdateien für den Tag ${dateStr} gefunden.`);
+        return;
+    }
+
+    if (window.inspectImuDayMerged) {
+        window.inspectImuDayMerged(dateStr, dayFiles);
+    } else {
+        console.error("inspectImuDayMerged ist nicht verfügbar.");
+    }
+}
+window.openDayReplay = openDayReplay;
+
 function openDailyTimeline(dateStr) {
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
     if (!timelineWrapper) return;
@@ -885,10 +910,21 @@ function openDailyTimeline(dateStr) {
 
     let html = `
         <div class="bg-white border-2 border-stag-green rounded-lg p-3 sm:p-4 shadow-md relative">
-            <button onclick="closeDailyTimeline()" class="absolute top-3 right-3 text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2.5 py-1 text-[11px] transition border border-slate-300">
-                ✕ Schließen
-            </button>
-            <h4 class="text-sm font-bold text-stag-green mb-5">📅 24-Stunden Zeitleiste: ${displayDate}</h4>
+            <div class="flex flex-wrap justify-between items-center gap-2 mb-4 pb-2 border-b border-slate-200">
+                <div>
+                    <h4 class="text-sm font-bold text-stag-green">📅 24-Stunden Zeitleiste: ${displayDate}</h4>
+                    <p class="text-[11px] text-slate-500 font-mono">${dayFiles.length} erfasste Mess-Chunks an diesem Tag</p>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <button onclick="openDayReplay('${dateStr}')"
+                            class="bg-stag-green hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded text-xs shadow-sm transition flex items-center gap-1.5">
+                        <span>📈 Gesamten Tag im Oszilloskop öffnen</span>
+                    </button>
+                    <button onclick="closeDailyTimeline()" class="text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2.5 py-1.5 text-xs transition border border-slate-300">
+                        ✕ Schließen
+                    </button>
+                </div>
+            </div>
             
             <!-- Graphische 24h Balkenanzeige -->
             <div class="relative w-full h-10 bg-slate-100 border border-slate-300 rounded-md mb-8">
@@ -910,11 +946,11 @@ function openDailyTimeline(dateStr) {
         let widthPercent = ((f.file_size_bytes / 102400) * 1) / 1440 * 100;
         if (widthPercent < 0.8) widthPercent = 0.8; // Mindestbreite für Sichtbarkeit
 
-        const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
+        const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
+        const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
         const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
         const kb = (f.file_size_bytes / 1024).toFixed(0);
 
-        // Klick auf den grünen Balken lädt das Log direkt ins Oszilloskop!
         html += `
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
                  class="absolute h-full bg-stag-green hover:bg-emerald-500 cursor-pointer border-r border-white transition group flex items-center justify-center rounded-[1px] shadow-sm"
@@ -928,7 +964,7 @@ function openDailyTimeline(dateStr) {
                 </div>
             </div>
             
-            <p class="text-[11px] text-slate-500 mb-4 text-center">Klicken Sie auf einen grünen Block in der Zeitleiste, um die Aufzeichnung direkt im Oszilloskop zu analysieren.</p>
+            <p class="text-[11px] text-slate-500 mb-4 text-center">Klicken Sie auf einen grünen Block in der Zeitleiste oder oben auf „Gesamten Tag im Oszilloskop öffnen“.</p>
 
             <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 border-b border-slate-200 pb-1 tracking-wider">Erfasste Aufzeichnungen (${dayFiles.length})</p>
             <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
@@ -938,7 +974,8 @@ function openDailyTimeline(dateStr) {
     dayFiles.forEach(f => {
         const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
         const uploadTime = new Date(f.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(f.file_path)}`;
+        const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
+        const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
 
         html += `
             <div class="flex justify-between items-center p-2 rounded bg-slate-50 hover:bg-white border border-slate-200 hover:border-emerald-300 text-xs font-mono transition shadow-sm">
@@ -951,7 +988,10 @@ function openDailyTimeline(dateStr) {
                     <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition" title="Im Oszilloskop öffnen">
                         📊
                     </button>
-                    <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" class="text-red-600 hover:text-red-700 hover:bg-red-50 border border-slate-200 px-2 py-1 rounded transition text-xs" title="Aus Cloud löschen">
+                    <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" 
+                            class="btn-delete-log text-red-600 hover:text-red-700 hover:bg-red-50 border border-slate-200 px-2 py-1 rounded transition text-xs" 
+                            style="display: ${isSessionUnlocked() ? 'inline-flex' : 'none'};"
+                            title="Aus Cloud löschen">
                         🗑️
                     </button>
                 </div>

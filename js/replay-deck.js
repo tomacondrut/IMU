@@ -489,6 +489,13 @@ function attachCanvasInteraction() {
     }, { passive: false });
 }
 
+/*
+ * Breadcrumb: 2026-09-20 07:45 - Highlighting & Threshold Grid Line Renderer
+ * [CRITICAL BUGFIX FLAG - CANVAS THRESHOLD SHADING RESTORATION]:
+ * 1. Integrated background red warning tint (rgba(239, 68, 68, 0.22)) for points exceeding replayAccThreshold.
+ * 2. Renders dashed red reference lines at ±replayAccThreshold when threshold is active.
+ * 3. Clips threshold highlights strictly within plot margins to prevent canvas bleed.
+ */
 function drawReplayGraph(curTimeSec) {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || replayFilteredData.length === 0) return;
@@ -524,6 +531,9 @@ function drawReplayGraph(curTimeSec) {
             if (Math.abs(d.ay) > maxScale) maxScale = Math.abs(d.ay);
             if (Math.abs(d.az) > maxScale) maxScale = Math.abs(d.az);
         }
+        if (replayAccThreshold > 0 && replayAccThreshold > maxScale) {
+            maxScale = replayAccThreshold * 1.1;
+        }
         maxScale = Math.ceil(maxScale * 1.15 * 10) / 10;
     } else {
         maxScale = 45.0;
@@ -536,6 +546,31 @@ function drawReplayGraph(curTimeSec) {
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
+    // ========================================================================
+    // 1. SCHWELLENWERT-HINTERGRUND (ROTE WARNZONEN BEI PEAKS)
+    // ========================================================================
+    if (replayAccThreshold > 0 && !isEuler) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(leftMargin, 0, plotW, h);
+        ctx.clip();
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+
+        for (let i = startIndex; i <= endIndex; i++) {
+            const d = replayFilteredData[i];
+            const aLen = Math.hypot(d.ax, d.ay, d.az);
+
+            if (aLen >= replayAccThreshold) {
+                const t = i * 0.1;
+                const px = timeToX(t, w, leftMargin);
+                const stepW = Math.max(2, (0.1 / tSpan) * plotW);
+                ctx.fillRect(px - stepW / 2, 0, stepW, h);
+            }
+        }
+        ctx.restore();
+    }
+
+    // Amplituden-Raster
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
@@ -550,6 +585,30 @@ function drawReplayGraph(curTimeSec) {
     });
     ctx.setLineDash([]);
 
+    // ========================================================================
+    // 2. HORIZONTALE SCHWELLENWERT-GRENZLINIEN (± SCHWELLE)
+    // ========================================================================
+    if (replayAccThreshold > 0 && !isEuler && replayAccThreshold <= maxScale) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 3]);
+
+        const yPos = midY - (replayAccThreshold / maxScale) * (midY - 8);
+        const yNeg = midY + (replayAccThreshold / maxScale) * (midY - 8);
+
+        ctx.beginPath();
+        ctx.moveTo(leftMargin, yPos); ctx.lineTo(w, yPos);
+        ctx.moveTo(leftMargin, yNeg); ctx.lineTo(w, yNeg);
+        ctx.stroke();
+
+        ctx.fillStyle = '#dc2626';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(`Schwelle ±${replayAccThreshold.toFixed(1)}`, leftMargin + 4, yPos - 3);
+        ctx.restore();
+    }
+
+    // Zeitraster
     let timeStep = 1.0;
     if (tSpan <= 0.5) timeStep = 0.05;
     else if (tSpan <= 2.0) timeStep = 0.2;
@@ -720,3 +779,158 @@ window.onReplaySpeedChange = onReplaySpeedChange;
 window.setReplaySpeedPreset = setReplaySpeedPreset;
 window.resetReplayZoom = resetReplayZoom;
 window.setReplayGraphMode = setReplayGraphMode;
+
+/*
+ * Breadcrumb: 2026-09-20 07:30 - Multi-Chunk Day Aggregator Engine
+ * [CRITICAL BUGFIX FLAG - DAY LOG CONCATENATION]:
+ * 1. Fetches all CSV chunks of a single date in parallel via Promise.all.
+ * 2. Merges CSV rows preserving sample order and normalizing wake cycles.
+ * 3. Populates cycle selector with both full-day and single-cycle drilldowns.
+ */
+/*
+ * Breadcrumb: 2026-09-20 07:45 - Robust Multi-Chunk Day Aggregator & Threshold Counter
+ * [CRITICAL BUGFIX FLAG - DAY LOG CONCATENATION & PEAK COUNTER]:
+ * 1. Resets active playback and current scrubber position before populating day data.
+ * 2. Normalizes storage paths (strips leading slashes) and catches per-file HTTP errors.
+ * 3. Builds detailed event options in cycle selector with timestamp and sample count.
+ * 4. Counts live threshold exceedances in real-time when adjusting threshold slider.
+ */
+let replayAccThreshold = 0.0; // 0.0 = Deaktiviert
+
+function setReplayThreshold(val) {
+    replayAccThreshold = parseFloat(val) || 0.0;
+    const lbl = document.getElementById('replay-threshold-val');
+
+    let peakCount = 0;
+    if (replayAccThreshold > 0 && replayFilteredData.length > 0) {
+        for (let i = 0; i < replayFilteredData.length; i++) {
+            const d = replayFilteredData[i];
+            if (Math.hypot(d.ax, d.ay, d.az) >= replayAccThreshold) {
+                peakCount++;
+            }
+        }
+    }
+
+    if (lbl) {
+        if (replayAccThreshold > 0) {
+            lbl.innerText = `${replayAccThreshold.toFixed(1)} m/s² (${peakCount} Pkt)`;
+        } else {
+            lbl.innerText = 'AUS';
+        }
+    }
+    drawReplayGraph(replayCurrentTimeSec);
+}
+window.setReplayThreshold = setReplayThreshold;
+
+async function inspectImuDayMerged(dateStr, dayFiles) {
+    const deck = document.getElementById('imu-replay-deck');
+    if (!deck) return;
+
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
+
+    deck.classList.remove('hidden');
+    deck.scrollIntoView({ behavior: 'smooth' });
+
+    if (!dayFiles || dayFiles.length === 0) {
+        if (typeof currentDeviceFiles !== 'undefined') {
+            dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+        }
+    }
+
+    if (!dayFiles || dayFiles.length === 0) {
+        document.getElementById('replay-meta-info').innerText = `Keine Chunks für ${dateStr} vorhanden.`;
+        return;
+    }
+
+    document.getElementById('replay-file-title').innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
+    document.getElementById('replay-meta-info').innerText = `Lade ${dayFiles.length} Archive parallel aus Supabase Storage...`;
+
+    initReplay3D();
+
+    try {
+        // Parallel alle Chunks des Tages abrufen mit isolierter Fehlerbehandlung
+        const fetchPromises = dayFiles.map(async (f, idx) => {
+            try {
+                const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
+                const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+                const r = await fetch(url);
+                if (!r.ok) {
+                    console.warn(`[MERGE] Chunk #${idx + 1} (${f.file_name}) HTTP ${r.status}`);
+                    return { file: f, fileIdx: idx, text: null };
+                }
+                const text = await r.text();
+                return { file: f, fileIdx: idx, text };
+            } catch (err) {
+                console.warn(`[MERGE] Netzwerkfehler bei ${f.file_name}:`, err);
+                return { file: f, fileIdx: idx, text: null };
+            }
+        });
+
+        const results = await Promise.all(fetchPromises);
+        replayDataRaw = [];
+        const chunkStats = [];
+
+        results.forEach(({ file, fileIdx, text }) => {
+            if (!text) return;
+
+            const lines = text.split('\n');
+            let samplesInChunk = 0;
+            const cycleId = fileIdx + 1; // Eindeutige ID pro Weck-Chunk des Tages
+
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                const parts = line.split(',');
+                if (parts.length >= 8) {
+                    const qw = parseFloat(parts[1]) || 1.0;
+                    const qx = parseFloat(parts[2]) || 0.0;
+                    const qy = parseFloat(parts[3]) || 0.0;
+                    const qz = parseFloat(parts[4]) || 0.0;
+                    const euler = quatToEulerDeg(qw, qx, qy, qz);
+
+                    const item = {
+                        ts: parts[0],
+                        qw, qx, qy, qz,
+                        ax: parseFloat(parts[5]) || 0.0,
+                        ay: parseFloat(parts[6]) || 0.0,
+                        az: parseFloat(parts[7]) || 0.0,
+                        roll: euler.roll,
+                        pitch: euler.pitch,
+                        yaw: euler.yaw,
+                        cycle: cycleId,
+                        fileIndex: fileIdx
+                    };
+                    replayDataRaw.push(item);
+                    samplesInChunk++;
+                }
+            }
+
+            if (samplesInChunk > 0) {
+                const timeStr = file.uploaded_at
+                    ? new Date(file.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' })
+                    : `Chunk #${cycleId}`;
+                chunkStats.push({ cycleId, timeStr, samplesInChunk, fileName: file.file_name });
+            }
+        });
+
+        if (replayDataRaw.length === 0) {
+            document.getElementById('replay-meta-info').innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
+            return;
+        }
+
+        // Dropdown für Zyklen / Events befüllen
+        const select = document.getElementById('replay-cycle-select');
+        select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+
+        chunkStats.forEach(cs => {
+            select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+        });
+
+        onReplayCycleSelect('ALL');
+    } catch (err) {
+        console.error('[MERGE FEHLER]', err);
+        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
+    }
+}
+window.inspectImuDayMerged = inspectImuDayMerged;
