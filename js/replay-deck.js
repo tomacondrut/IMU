@@ -30,6 +30,62 @@ let canvasListenersAttached = false;
 // Three.js Replay Instanzen
 let repScene, repCamera, repRenderer, repMesh;
 
+/*
+ * Breadcrumb: 2026-09-20 08:00 - Persistent Cache API & In-Memory Fallback Engine
+ * [CRITICAL BUGFIX FLAG - ZERO LATENCY LOG CACHING]:
+ * 1. Uses window.caches (Cache Storage API) to persist downloaded CSV logs across browser sessions.
+ * 2. In-memory Map fallback if Cache API is unavailable or restricted.
+ * 3. Prevents repeated Supabase Storage bandwidth usage and eliminates download wait times.
+ */
+const imuMemoryCache = new Map();
+
+async function fetchCachedCsv(url) {
+    // 1. Sofortige Rückgabe aus dem RAM-Puffer
+    if (imuMemoryCache.has(url)) {
+        return imuMemoryCache.get(url);
+    }
+
+    // 2. Persistente Cache Storage API des Browsers prüfen
+    if ('caches' in window) {
+        try {
+            const cache = await caches.open('stag-imu-csv-cache-v1');
+            const cachedResponse = await cache.match(url);
+            if (cachedResponse) {
+                const text = await cachedResponse.text();
+                imuMemoryCache.set(url, text);
+                return text;
+            }
+
+            // Datei noch nicht im Cache: Herunterladen und im Cache klonen
+            const netResponse = await fetch(url);
+            if (!netResponse.ok) throw new Error(`HTTP ${netResponse.status}`);
+            await cache.put(url, netResponse.clone());
+            const text = await netResponse.text();
+            imuMemoryCache.set(url, text);
+            return text;
+        } catch (e) {
+            console.warn('[CACHE] Cache API nicht verfügbar oder blockiert, nutze Fallback:', e);
+        }
+    }
+
+    // 3. Fallback: Standard-Fetch ohne persistenten Cache
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    imuMemoryCache.set(url, text);
+    return text;
+}
+
+// Globaler Befehl zum Leeren des Caches über die Browser-Konsole falls nötig
+async function clearImuLogCache() {
+    imuMemoryCache.clear();
+    if ('caches' in window) {
+        await caches.delete('stag-imu-csv-cache-v1');
+    }
+    console.log('[CACHE] Lokaler IMU-Log Cache wurde vollständig geleert.');
+}
+window.clearImuLogCache = clearImuLogCache;
+
 // ============================================================================
 // 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
 // ============================================================================
@@ -160,6 +216,11 @@ function setReplayGraphMode(mode) {
     drawReplayGraph(replayCurrentTimeSec);
 }
 
+/*
+ * Breadcrumb: 2026-09-20 08:05 - Cached Single File Inspector
+ * [CRITICAL BUGFIX FLAG - CACHED CSV LOADING]:
+ * Replaces direct fetch() with fetchCachedCsv() to eliminate redundant downloads.
+ */
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -167,14 +228,13 @@ async function inspectImuFile(downloadUrl, fileName) {
     deck.scrollIntoView({ behavior: 'smooth' });
 
     document.getElementById('replay-file-title').innerText = fileName;
-    document.getElementById('replay-meta-info').innerText = 'Lade Datensätze aus Supabase Storage...';
+    document.getElementById('replay-meta-info').innerText = 'Lade Daten (Cache / Cloud)...';
 
     initReplay3D();
 
     try {
-        const res = await fetch(downloadUrl);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const text = await res.text();
+        // Lädt aus Cache Storage oder holt Datei einmalig aus Supabase
+        const text = await fetchCachedCsv(downloadUrl);
 
         const lines = text.split('\n');
         replayDataRaw = [];
@@ -249,6 +309,9 @@ function onReplayCycleSelect(cycleVal) {
     if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
 
     resetReplayZoom();
+    if (replayAccThreshold > 0 && typeof setReplayThreshold === 'function') {
+        setReplayThreshold(replayAccThreshold); // Zählt Peaks passend zum gewählten Einzel-Zyklus
+    }
 }
 
 // ============================================================================
@@ -608,24 +671,65 @@ function drawReplayGraph(curTimeSec) {
         ctx.restore();
     }
 
-    // Zeitraster
-    let timeStep = 1.0;
-    if (tSpan <= 0.5) timeStep = 0.05;
-    else if (tSpan <= 2.0) timeStep = 0.2;
-    else if (tSpan <= 5.0) timeStep = 0.5;
-    else if (tSpan <= 20.0) timeStep = 2.0;
-    else timeStep = 5.0;
+    /*
+     * Breadcrumb: 2026-09-20 08:35 - Adaptive Dynamic Time-Axis Stepping & Collision Guard
+     * [CRITICAL BUGFIX FLAG - ELIMINATE X-AXIS OVERLAP]:
+     * 1. Replaced hardcoded 5.0s fallback with dynamic timeStep based on available pixel width.
+     * 2. Selects clean intervals (up to 15m/30m/1h for day logs) ensuring ~75px minimum label clearance.
+     * 3. Drops redundant decimal places for steps >= 1s and switches to m/s formatting for long spans.
+     * 4. Integrated lastLabelX width-guard to guarantee zero text collisions on any viewport size.
+     */
+    // ========================================================================
+    // DYNAMISCHES ZEITRASTER & KOLLISIONSFREIE ABSZISSEN-BESCHRIFTUNG
+    // ========================================================================
+    const minPixelPerTick = 75; // Mindestabstand zwischen zwei Textbeschriftungen in Pixeln
+    const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
+    const rawStep = tSpan / maxTicks;
+
+    // Gestaffelte, saubere Zeitintervalle (von 10 ms bis 1 Stunde)
+    const niceIntervals = [
+        0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+        1, 2, 5, 10, 15, 30,
+        60, 120, 300, 600, 900, 1800, 3600
+    ];
+    const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
 
     const firstTick = Math.ceil(tStart / timeStep) * timeStep;
     ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
     ctx.fillStyle = '#94a3b8';
+    ctx.font = '9px monospace';
+
+    let lastLabelX = -999;
 
     for (let t = firstTick; t <= tEnd; t += timeStep) {
         const px = timeToX(t, w, leftMargin);
         if (px >= leftMargin && px <= w) {
+            // Vertikale Rasterlinie
             ctx.beginPath();
-            ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-            ctx.fillText(`${t.toFixed(tSpan <= 1 ? 2 : 1)}s`, px + 2, h - 4);
+            ctx.moveTo(px, 0);
+            ctx.lineTo(px, h);
+            ctx.stroke();
+
+            // Formatierung passend zur Zoomstufe
+            let labelText = '';
+            if (timeStep < 0.1) {
+                labelText = t.toFixed(2) + 's';
+            } else if (timeStep < 1.0) {
+                labelText = t.toFixed(1) + 's';
+            } else if (timeStep >= 60) {
+                const m = Math.floor(t / 60);
+                const s = Math.round(t % 60);
+                labelText = s === 0 ? `${m}m` : `${m}m ${s}s`;
+            } else {
+                labelText = Math.round(t) + 's';
+            }
+
+            // Kollisionsschutz: Zeichnet Text nur, wenn genügend horizontaler Freiraum vorhanden ist
+            const textWidth = ctx.measureText(labelText).width;
+            if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
+                ctx.fillText(labelText, px + 2, h - 4);
+                lastLabelX = px;
+            }
         }
     }
 
@@ -822,6 +926,11 @@ function setReplayThreshold(val) {
 }
 window.setReplayThreshold = setReplayThreshold;
 
+/*
+ * Breadcrumb: 2026-09-20 08:10 - Multi-Chunk Day Aggregator with Cache Engine
+ * [CRITICAL BUGFIX FLAG - DAY LOG CACHED MERGE]:
+ * Uses fetchCachedCsv() inside Promise.all to fetch/load all day chunks instantly from browser cache.
+ */
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -844,25 +953,20 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     }
 
     document.getElementById('replay-file-title').innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
-    document.getElementById('replay-meta-info').innerText = `Lade ${dayFiles.length} Archive parallel aus Supabase Storage...`;
+    document.getElementById('replay-meta-info').innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
 
     initReplay3D();
 
     try {
-        // Parallel alle Chunks des Tages abrufen mit isolierter Fehlerbehandlung
+        // Parallel alle Chunks über den Cache abrufen
         const fetchPromises = dayFiles.map(async (f, idx) => {
             try {
                 const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
                 const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
-                const r = await fetch(url);
-                if (!r.ok) {
-                    console.warn(`[MERGE] Chunk #${idx + 1} (${f.file_name}) HTTP ${r.status}`);
-                    return { file: f, fileIdx: idx, text: null };
-                }
-                const text = await r.text();
+                const text = await fetchCachedCsv(url);
                 return { file: f, fileIdx: idx, text };
             } catch (err) {
-                console.warn(`[MERGE] Netzwerkfehler bei ${f.file_name}:`, err);
+                console.warn(`[CACHE MERGE] Fehler bei ${f.file_name}:`, err);
                 return { file: f, fileIdx: idx, text: null };
             }
         });
@@ -876,7 +980,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
 
             const lines = text.split('\n');
             let samplesInChunk = 0;
-            const cycleId = fileIdx + 1; // Eindeutige ID pro Weck-Chunk des Tages
+            const cycleId = fileIdx + 1;
 
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
@@ -919,7 +1023,6 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             return;
         }
 
-        // Dropdown für Zyklen / Events befüllen
         const select = document.getElementById('replay-cycle-select');
         select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
 
@@ -928,8 +1031,9 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
         });
 
         onReplayCycleSelect('ALL');
+        if (replayAccThreshold > 0) setReplayThreshold(replayAccThreshold); // Aktualisiert den Peak-Zähler sofort für den neuen Tag
     } catch (err) {
-        console.error('[MERGE FEHLER]', err);
+        console.error('[CACHE MERGE FEHLER]', err);
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
     }
 }
