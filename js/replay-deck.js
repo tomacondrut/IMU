@@ -1005,10 +1005,8 @@ window.setReplayGraphMode = setReplayGraphMode;
  * 3. Builds detailed event options in cycle selector with timestamp and sample count.
  * 4. Counts live threshold exceedances in real-time when adjusting threshold slider.
  */
-let replayAccThreshold = 0.0; // 0.0 = Deaktiviert
-
 /*
- * Breadcrumb: 2026-09-20 09:00 - Replay Threshold Controller & Live Peak Counter
+ * Breadcrumb: 2026-09-20 09:15 - Replay Threshold Controller & Live Peak Counter
  * [CRITICAL BUGFIX FLAG - ELIMINATED DUPLICATE LET DECLARATION]:
  * Removed duplicate 'let replayAccThreshold' to resolve fatal JS SyntaxError.
  */

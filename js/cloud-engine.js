@@ -879,29 +879,19 @@ function renderCalendarUI() {
  * 2. Replaced fragile inline onclick filter logic with scope-safe openDayReplay(dateStr).
  * 3. Normalizes storage file paths (removes leading slashes).
  */
-function openDayReplay(dateStr) {
-    const dayFiles = currentDeviceFiles
-        .filter(f => getFileDayKey(f) === dateStr)
-        .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
 
-    if (!dayFiles || dayFiles.length === 0) {
-        alert(`Keine Messdateien für den Tag ${dateStr} gefunden.`);
-        return;
-    }
-
-    if (window.inspectImuDayMerged) {
-        window.inspectImuDayMerged(dateStr, dayFiles);
-    } else {
-        console.error("inspectImuDayMerged ist nicht verfügbar.");
-    }
-}
-window.openDayReplay = openDayReplay;
 
 /*
  * Breadcrumb: 2026-09-20 09:05 - Auto-Launch Full Day Replay on Calendar Day Click
  * [CRITICAL BUGFIX FLAG - INSTANT DAY REPLAY ON CLICK]:
  * 1. Automatically calls openDayReplay(dateStr) when a day is opened.
  * 2. Unhides 24h timeline and immediately streams merged day chunks to oscilloscope.
+ */
+/*
+ * Breadcrumb: 2026-09-20 09:15 - Auto-Launch Full Day Replay on Calendar Day Click
+ * [CRITICAL BUGFIX FLAG - DEDUPLICATED DISPATCHER & INSTANT REPLAY]:
+ * 1. Deduplicated openDayReplay function declaration.
+ * 2. Unhides 24h timeline and immediately streams merged day chunks to oscilloscope on calendar click.
  */
 function openDayReplay(dateStr) {
     const dayFiles = currentDeviceFiles
@@ -1021,7 +1011,7 @@ function openDailyTimeline(dateStr) {
     html += `</div></div>`;
     timelineWrapper.innerHTML = html;
 
-    // AUTOMATISCH: Gesamten Tag sofort ins Oszilloskop laden & hinscrollen
+    // Lädt den gesamten Tag automatisch beim Klick auf die Tageskachel
     openDayReplay(dateStr);
 }
 
