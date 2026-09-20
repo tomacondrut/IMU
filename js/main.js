@@ -41,6 +41,11 @@ function onDeviceSelectChange(newId) {
     }
 }
 
+/*
+ * Breadcrumb: 2026-09-20 09:55 - Deduplicated switchTab Lifecycle Hooks
+ * [CRITICAL BUGFIX FLAG - CLEAN TAB ROUTING]:
+ * Cleaned single execution of fetchConfig() and updateLockUI() on tab switch.
+ */
 function switchTab(tab) {
     ['3d', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
         const tabEl = document.getElementById(`tab-${t}`);

@@ -1072,7 +1072,6 @@ window.setReplayGraphMode = setReplayGraphMode;
  * [CRITICAL BUGFIX FLAG - ELIMINATED DUPLICATE LET DECLARATION]:
  * Removed duplicate 'let replayAccThreshold' to resolve fatal JS SyntaxError.
  */
-/
 
 function setReplayThreshold(val) {
     replayAccThreshold = parseFloat(val) || 0.0;
