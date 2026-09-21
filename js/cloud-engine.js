@@ -509,8 +509,14 @@ async function fetchConfig() {
 
     document.getElementById('cfg-idle').value = data.idle_timeout_sec || 10;
     document.getElementById('cfg-idle-val').innerText = (data.idle_timeout_sec || 10) + ' s';
-    document.getElementById('cfg-sens').value = data.sens || 0.20;
-    document.getElementById('cfg-sens-val').innerText = Number(data.sens || 0.20).toFixed(2) + ' m/s²';
+    /*
+     * Breadcrumb: 2026-09-21 19:52 - Aligned Config Fetcher Fallback Floor (0.05 m/s²)
+     * [CRITICAL BUGFIX FLAG - SENSITIVITY DEFAULT PARITY]:
+     * Replaced 0.20 fallback with 0.05 so default or uncalibrated records render at 0.05 m/s².
+     */
+    const sensVal = (data.sens !== undefined && data.sens !== null) ? data.sens : 0.05;
+    document.getElementById('cfg-sens').value = sensVal;
+    document.getElementById('cfg-sens-val').innerText = Number(sensVal).toFixed(2) + ' m/s²';
     document.getElementById('cfg-delta').value = data.delta || 0.10;
     document.getElementById('cfg-delta-val').innerText = Number(data.delta || 0.10).toFixed(2);
     document.getElementById('cfg-rate').value = data.rate || 10;
