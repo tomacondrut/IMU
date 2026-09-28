@@ -721,13 +721,6 @@ function getFileDayKey(f) {
     return '';
 }
 
-/*
- * Breadcrumb: 2026-09-28 19:45 - Global State Sync & Storage URL Normalization
- * [CRITICAL BUGFIX FLAG - CROSS-MODULE REPLAY ACCESSIBILITY]:
- * 1. Synchronized currentDeviceFiles and getFileDayKey directly to window scope.
- * 2. Hardened deleteImuCloudFile and fetchImuCloudLogs against undefined array reads.
- * 3. Dismissed code: script-scoped let currentDeviceFiles blocking replay-deck.js access.
- */
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
@@ -744,14 +737,13 @@ async function fetchImuCloudLogs() {
         return;
     }
 
+    // Storage-Auslastung aktualisieren
     const FREE_TIER_LIMIT_MB = 1024;
     const totalBytesAll = (allFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
     const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
     const pctAll = Math.min(Math.max(((totalMbAll / FREE_TIER_LIMIT_MB) * 100), 0), 100).toFixed(1);
 
     currentDeviceFiles = (allFiles || []).filter(f => f.device_id === selectedDeviceId);
-    window.currentDeviceFiles = currentDeviceFiles; // Global für Replay-Deck synchronisieren
-
     const deviceBytes = currentDeviceFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
     const deviceMb = (deviceBytes / (1024 * 1024)).toFixed(1);
     const freeMb = Math.max(0, (FREE_TIER_LIMIT_MB - totalMbAll)).toFixed(1);
@@ -770,6 +762,7 @@ async function fetchImuCloudLogs() {
         barEl.className = pctAll >= 90 ? 'h-full bg-red-500 transition-all' : (pctAll >= 75 ? 'h-full bg-amber-500 transition-all' : 'h-full bg-green-600 transition-all');
     }
 
+    // Springt beim Erstaufruf automatisch in den Monat der neuesten Messung
     if (!calendarInitialized && currentDeviceFiles.length > 0) {
         const newestDate = new Date(currentDeviceFiles[0].uploaded_at);
         if (!isNaN(newestDate.getTime())) {
@@ -780,8 +773,6 @@ async function fetchImuCloudLogs() {
 
     renderCalendarUI();
 }
-
-
 
 function changeCalendarMonth(offset) {
     if (calendarViewMode === 'month') {
@@ -1186,11 +1177,6 @@ function handleSessionAuthSubmit(e) {
 }
 
 // Bereinigtes Löschen: Kein prompt() mehr, sondern einfaches confirm() bei entsperrtem Schloss
-/*
- * Breadcrumb: 2026-09-28 20:25 - Normalized Storage Path on Deletion
- * [CRITICAL BUGFIX FLAG - STORAGE PATH NORMALIZATION]:
- * Strips leading slashes and redundant bucket prefixes before calling Supabase Storage remove.
- */
 async function deleteImuCloudFile(filePath, fileName) {
     if (!isSessionUnlocked()) {
         openSessionAuthModal();
@@ -1202,13 +1188,7 @@ async function deleteImuCloudFile(filePath, fileName) {
     }
 
     try {
-        // Pfad für Supabase Storage normalisieren (keine führenden Slashes, kein doppeltes imu-logs/)
-        let cleanStoragePath = (filePath || '').replace(/^\/+/, '');
-        if (cleanStoragePath.startsWith('imu-logs/')) {
-            cleanStoragePath = cleanStoragePath.substring(9);
-        }
-
-        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([cleanStoragePath]);
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([filePath]);
         if (sErr) throw sErr;
 
         const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
@@ -1220,8 +1200,6 @@ async function deleteImuCloudFile(filePath, fileName) {
         }
 
         currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
-        window.currentDeviceFiles = currentDeviceFiles;
-
         const parts = filePath.split('/');
         const activeDateStr = parts.find(p => /^\d{4}-\d{2}-\d{2}$/.test(p)) || parts[1] || '';
 
@@ -1253,7 +1231,3 @@ window.closeSessionAuthModal = closeSessionAuthModal;
 window.handleSessionAuthSubmit = handleSessionAuthSubmit;
 window.updateLockUI = updateLockUI;
 window.isSessionUnlocked = isSessionUnlocked;
-
-// Ergänzungen am Dateiende von cloud-engine.js:
-window.getFileDayKey = getFileDayKey;
-window.currentDeviceFiles = currentDeviceFiles;
