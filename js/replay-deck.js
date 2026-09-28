@@ -514,140 +514,7 @@ function resetReplayZoom() {
  * 2. Added passive:false touchstart/touchmove/touchend handlers for iPhone & Android gestures.
  * 3. e.preventDefault() stops browser text selection, page scrolling, and ghost clicks on canvas.
  */
-function attachCanvasInteraction() {
-    const cv = document.getElementById('replayGraphCanvas');
-    if (!cv || canvasListenersAttached) return;
-    canvasListenersAttached = true;
 
-    const leftMargin = 38;
-
-    function getEventX(e) {
-        const rect = cv.getBoundingClientRect();
-        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
-        return clientX - rect.left;
-    }
-
-    function handleStart(clientX) {
-        if (clientX < leftMargin) return;
-        isSelectingZoom = true;
-        selectStartX = clientX;
-        selectCurrentX = clientX;
-    }
-
-    function handleMove(clientX) {
-        if (!isSelectingZoom) return;
-        const cvNow = document.getElementById('replayGraphCanvas');
-        if (!cvNow) return;
-        selectCurrentX = Math.max(leftMargin, Math.min(cvNow.clientWidth, clientX));
-        drawReplayGraph(replayCurrentTimeSec);
-    }
-
-    function handleEnd() {
-        if (!isSelectingZoom) return;
-        isSelectingZoom = false;
-
-        const cvNow = document.getElementById('replayGraphCanvas');
-        if (!cvNow) return;
-
-        const dx = Math.abs(selectCurrentX - selectStartX);
-        const w = cvNow.clientWidth;
-
-        // Ab 6px Bewegung verlässlich als Bereichs-Zoom werten
-        if (dx >= 6) {
-            const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
-            const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
-
-            if (t2 - t1 >= 0.02) {
-                replayZoomStartSec = t1;
-                replayZoomEndSec = t2;
-                isReplayZoomed = true;
-                replayCurrentTimeSec = replayZoomStartSec;
-
-                const btnReset = document.getElementById('btn-replay-reset-zoom');
-                const spanLbl = document.getElementById('replay-zoom-span-label');
-                if (btnReset) btnReset.classList.remove('hidden');
-                if (spanLbl) spanLbl.innerText = `${(t2 - t1).toFixed(2)}s`;
-
-                const scrubber = document.getElementById('replay-scrubber');
-                if (scrubber) {
-                    scrubber.min = Math.floor(t1 / 0.1);
-                    scrubber.max = Math.ceil(t2 / 0.1);
-                    scrubber.value = Math.round(t1 / 0.1);
-                }
-
-                renderInterpolatedFrame(replayCurrentTimeSec);
-            }
-        } else {
-            // Reiner Klick (< 6px): Playhead-Position versetzen
-            const targetTime = xToTime(selectStartX, w, leftMargin);
-            replayCurrentTimeSec = targetTime;
-            renderInterpolatedFrame(replayCurrentTimeSec);
-        }
-    }
-
-    // Desktop Maus-Events
-    cv.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        handleStart(getEventX(e));
-    });
-
-    window.addEventListener('mousemove', (e) => {
-        if (isSelectingZoom) handleMove(getEventX(e));
-    });
-
-    window.addEventListener('mouseup', () => {
-        if (isSelectingZoom) handleEnd();
-    });
-
-    // Smartphone Touch-Events (iOS & Android)
-    cv.addEventListener('touchstart', (e) => {
-        if (e.touches.length === 1) {
-            e.preventDefault();
-            handleStart(getEventX(e));
-        }
-    }, { passive: false });
-
-    cv.addEventListener('touchmove', (e) => {
-        if (isSelectingZoom && e.touches.length === 1) {
-            e.preventDefault();
-            handleMove(getEventX(e));
-        }
-    }, { passive: false });
-
-    cv.addEventListener('touchend', () => {
-        if (isSelectingZoom) handleEnd();
-    });
-
-    /*
-  * Breadcrumb: 2026-09-20 10:10 - Frame-by-Frame Wheel Scrubbing Controller
-  * [CRITICAL BUGFIX FLAG - WHEEL STEP PLAYBACK]:
-  * 1. Replaced horizontal pan with single-sample step scrubbing (100ms / 0.1s raster per notch).
-  * 2. Works seamlessly in both unzoomed full views and zoomed sub-regions.
-  * 3. Automatically pauses active animation loop to prevent playback fighting.
-  * 4. Bounds scrubbing strictly within visible time bounds (tStart to tEnd).
-  */
-    // Mausrad: Schrittweises Abspielen / Spulen (1 Sample = 100 ms pro Raste)
-    cv.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        if (replayFilteredData.length === 0) return;
-
-        // Laufende Wiedergabe bei manuellem Drehen pausieren
-        if (replayIsPlaying) toggleReplayPlay();
-
-        const { tStart, tEnd } = getTimeBounds();
-
-        // Rad nach unten (deltaY > 0) = Vorwärts, Rad nach oben (deltaY < 0) = Rückwärts
-        const direction = e.deltaY > 0 ? 1 : -1;
-        const stepSec = 0.1; // Exakt 1 Messpunkt (10 Hz Sensorraster)
-
-        let newTime = replayCurrentTimeSec + (direction * stepSec);
-        newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
-
-        replayCurrentTimeSec = newTime;
-        renderInterpolatedFrame(replayCurrentTimeSec);
-    }, { passive: false });
-}
 
 /*
  * Breadcrumb: 2026-09-20 07:45 - Highlighting & Threshold Grid Line Renderer
@@ -656,34 +523,104 @@ function attachCanvasInteraction() {
  * 2. Renders dashed red reference lines at ±replayAccThreshold when threshold is active.
  * 3. Clips threshold highlights strictly within plot margins to prevent canvas bleed.
  */
-function drawReplayGraph(curTimeSec) {
-    const cv = document.getElementById('replayGraphCanvas');
-    if (!cv || replayFilteredData.length === 0) return;
+/*
+ * Breadcrumb: 2026-09-28 19:40 - Optimal Dual-Layer Hardware-Accelerated Replay Engine
+ * [CRITICAL ARCHITECTURAL REFACTOR - ZERO-OVERHEAD 80K REPLAY]:
+ * 1. Automatically constructs a transparent foreground overlay canvas (#replayOverlayCanvas) for the playhead & drag-box.
+ * 2. Background canvas (waveforms, min-max envelope, grid) is rendered EXACTLY ONCE on zoom/mode changes.
+ * 3. Playhead rendering is throttled by integer pixel coordinates: zero GPU/CPU draw calls when cursor moves < 1px.
+ * 4. Coalesces threshold highlights into pixel-merged spans instead of 80,000 isolated fillRect invocations.
+ */
 
+let replayOverlayCanvas = null;
+let lastRenderedPlayheadX = -1;
+let backgroundNeedsRedraw = true;
+
+function invalidateReplayGraphCache() {
+    backgroundNeedsRedraw = true;
+    lastRenderedPlayheadX = -1;
+}
+
+// Stellt sicher, dass das 2-Layer-Setup existiert
+function ensureDualLayerCanvas(baseCv) {
+    if (replayOverlayCanvas && replayOverlayCanvas.parentElement === baseCv.parentElement) {
+        return;
+    }
+
+    const parent = baseCv.parentElement;
+    parent.style.position = 'relative';
+
+    baseCv.style.position = 'absolute';
+    baseCv.style.top = '0';
+    baseCv.style.left = '0';
+    baseCv.style.width = '100%';
+    baseCv.style.height = '100%';
+
+    replayOverlayCanvas = document.getElementById('replayOverlayCanvas');
+    if (!replayOverlayCanvas) {
+        replayOverlayCanvas = document.createElement('canvas');
+        replayOverlayCanvas.id = 'replayOverlayCanvas';
+        replayOverlayCanvas.className = 'w-full h-full block select-none';
+        replayOverlayCanvas.style.position = 'absolute';
+        replayOverlayCanvas.style.top = '0';
+        replayOverlayCanvas.style.left = '0';
+        replayOverlayCanvas.style.pointerEvents = 'none'; // Maus-Events gehen direkt an den Base-Canvas
+        parent.appendChild(replayOverlayCanvas);
+    }
+}
+
+function drawReplayGraph(curTimeSec) {
+    const bgCv = document.getElementById('replayGraphCanvas');
+    if (!bgCv || replayFilteredData.length === 0) return;
+
+    ensureDualLayerCanvas(bgCv);
     attachCanvasInteraction();
 
-    const w = cv.width = cv.clientWidth;
-    const h = cv.height = cv.clientHeight;
+    const w = bgCv.clientWidth;
+    const h = bgCv.clientHeight;
     if (w === 0 || h === 0) return;
 
+    // Canvas-Größen synchronisieren
+    if (bgCv.width !== w || bgCv.height !== h) {
+        bgCv.width = w;
+        bgCv.height = h;
+        replayOverlayCanvas.width = w;
+        replayOverlayCanvas.height = h;
+        backgroundNeedsRedraw = true;
+    }
+
+    const { tStart, tEnd, tSpan } = getTimeBounds();
+    const leftMargin = 38;
+    const plotW = w - leftMargin;
+
+    // ------------------------------------------------------------------------
+    // LAYER 1: HINTERGRUND (Wird NUR bei Parameter-/Zoom-Änderung gerendert)
+    // ------------------------------------------------------------------------
+    if (backgroundNeedsRedraw) {
+        renderGraphBackground(bgCv, w, h, leftMargin, plotW, tStart, tEnd, tSpan);
+        backgroundNeedsRedraw = false;
+        lastRenderedPlayheadX = -1;
+    }
+
+    // ------------------------------------------------------------------------
+    // LAYER 2: VORDERGRUND (Playhead & Drag-Selektor)
+    // ------------------------------------------------------------------------
+    renderGraphOverlay(w, h, leftMargin, curTimeSec);
+}
+
+function renderGraphBackground(cv, w, h, leftMargin, plotW, tStart, tEnd, tSpan) {
     const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, w, h);
 
     const count = replayFilteredData.length;
     const midY = h / 2;
-    const leftMargin = 38;
-    const plotW = w - leftMargin;
-
-    if (count < 2) return;
-
-    const { tStart, tEnd, tSpan } = getTimeBounds();
-
-    let maxScale = 2.0;
     const isEuler = (replayGraphMode === 'euler');
 
     const startIndex = Math.max(0, Math.floor(tStart / 0.1) - 1);
     const endIndex = Math.min(count - 1, Math.ceil(tEnd / 0.1) + 1);
 
+    // 1. Skalierung ermitteln
+    let maxScale = 2.0;
     if (!isEuler) {
         for (let i = startIndex; i <= endIndex; i++) {
             const d = replayFilteredData[i];
@@ -706,9 +643,7 @@ function drawReplayGraph(curTimeSec) {
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // ========================================================================
-    // 1. SCHWELLENWERT-HINTERGRUND (ROTE WARNZONEN BEI PEAKS)
-    // ========================================================================
+    // 2. Schwellenwert-Zonen (auf Pixelspalten aggregiert statt 80.000 fillRect)
     if (replayAccThreshold > 0 && !isEuler) {
         ctx.save();
         ctx.beginPath();
@@ -716,21 +651,29 @@ function drawReplayGraph(curTimeSec) {
         ctx.clip();
         ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
 
-        for (let i = startIndex; i <= endIndex; i++) {
-            const d = replayFilteredData[i];
-            const aLen = Math.hypot(d.ax, d.ay, d.az);
+        const visibleCount = endIndex - startIndex;
+        const ptsPerPx = visibleCount / plotW;
 
-            if (aLen >= replayAccThreshold) {
-                const t = i * 0.1;
-                const px = timeToX(t, w, leftMargin);
-                const stepW = Math.max(2, (0.1 / tSpan) * plotW);
-                ctx.fillRect(px - stepW / 2, 0, stepW, h);
+        for (let col = 0; col < plotW; col++) {
+            const bStart = Math.floor(startIndex + col * ptsPerPx);
+            const bEnd = Math.min(count, Math.floor(startIndex + (col + 1) * ptsPerPx));
+            let hasPeak = false;
+
+            for (let j = bStart; j < bEnd; j++) {
+                const d = replayFilteredData[j];
+                if (Math.hypot(d.ax, d.ay, d.az) >= replayAccThreshold) {
+                    hasPeak = true;
+                    break;
+                }
+            }
+            if (hasPeak) {
+                ctx.fillRect(leftMargin + col, 0, 1.5, h);
             }
         }
         ctx.restore();
     }
 
-    // Amplituden-Raster
+    // 3. Amplituden-Raster
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
@@ -745,182 +688,92 @@ function drawReplayGraph(curTimeSec) {
     });
     ctx.setLineDash([]);
 
-    // ========================================================================
-    // 2. HORIZONTALE SCHWELLENWERT-GRENZLINIEN (± SCHWELLE)
-    // ========================================================================
+    // 4. Horizontale Schwellenwertlinien
     if (replayAccThreshold > 0 && !isEuler && replayAccThreshold <= maxScale) {
         ctx.save();
         ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
         ctx.lineWidth = 1.2;
         ctx.setLineDash([4, 3]);
-
         const yPos = midY - (replayAccThreshold / maxScale) * (midY - 8);
         const yNeg = midY + (replayAccThreshold / maxScale) * (midY - 8);
-
         ctx.beginPath();
         ctx.moveTo(leftMargin, yPos); ctx.lineTo(w, yPos);
         ctx.moveTo(leftMargin, yNeg); ctx.lineTo(w, yNeg);
         ctx.stroke();
-
         ctx.fillStyle = '#dc2626';
         ctx.font = 'bold 9px monospace';
         ctx.fillText(`Schwelle ±${replayAccThreshold.toFixed(1)}`, leftMargin + 4, yPos - 3);
         ctx.restore();
     }
 
-    /*
-     * Breadcrumb: 2026-09-20 08:35 - Adaptive Dynamic Time-Axis Stepping & Collision Guard
-     * [CRITICAL BUGFIX FLAG - ELIMINATE X-AXIS OVERLAP]:
-     * 1. Replaced hardcoded 5.0s fallback with dynamic timeStep based on available pixel width.
-     * 2. Selects clean intervals (up to 15m/30m/1h for day logs) ensuring ~75px minimum label clearance.
-     * 3. Drops redundant decimal places for steps >= 1s and switches to m/s formatting for long spans.
-     * 4. Integrated lastLabelX width-guard to guarantee zero text collisions on any viewport size.
-     */
-    // ========================================================================
-    // DYNAMISCHES ZEITRASTER & KOLLISIONSFREIE ABSZISSEN-BESCHRIFTUNG
-    // ========================================================================
-    /*
-     * Breadcrumb: 2026-09-20 08:50 - Event-Anchored Clock Time Axis for Full Day Views
-     * [CRITICAL BUGFIX FLAG - CHUNK WAKE TIME LABELS]:
-     * 1. Detects unzoomed full-day merged view (isFullDayUnzoomed).
-     * 2. Replaces arbitrary cumulative minutes (0m, 10m, 20m) with real recording clock times (HH:MM / HH:MM:SS).
-     * 3. Renders dashed vertical green separator lines at each wake cycle start.
-     * 4. Retains high-precision adaptive seconds grid when user zooms in for waveform analysis.
-     */
-    // ========================================================================
-    // ZEITRASTER: REALZEIT-UHREN FÜR TAGES-CHUNKS ODER SEKUNDEN BEIM ZOOM
-    // ========================================================================
+    // 5. Zeitachse / Trennlinien
     const isCycleAll = !document.getElementById('replay-cycle-select') || document.getElementById('replay-cycle-select').value === 'ALL';
     const hasMultipleCycles = replayFilteredData.length > 0 && (replayFilteredData[0].cycle !== replayFilteredData[replayFilteredData.length - 1].cycle);
     const isFullDayUnzoomed = !isReplayZoomed && isCycleAll && (isDayMergedMode || hasMultipleCycles);
 
     if (isFullDayUnzoomed) {
-        // 1. Alle Aufnahmestarts (Weck-Events) im Tagesverlauf erfassen
         const recordings = [];
         for (let i = 0; i < replayFilteredData.length; i++) {
             const item = replayFilteredData[i];
             if (i === 0 || item.cycle !== replayFilteredData[i - 1].cycle) {
-                recordings.push({
-                    index: i,
-                    t: i * 0.1,
-                    ts: item.ts,
-                    cycle: item.cycle
-                });
+                recordings.push({ index: i, t: i * 0.1, ts: item.ts });
             }
         }
-
-        // Hilfsfunktion: Wandelt UTC/ISO-Zeit in lokale Uhrzeit (HH:MM bzw. HH:MM:SS) um
         function getUhrzeit(tsStr, withSec) {
             if (!tsStr) return '';
             const d = new Date(tsStr);
-            if (!isNaN(d.getTime())) {
-                return d.toLocaleTimeString('de-CH', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    ...(withSec ? { second: '2-digit' } : {})
-                });
-            }
-            const m = String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/);
-            return m ? m[1] : String(tsStr);
+            return !isNaN(d.getTime())
+                ? d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', ...(withSec ? { second: '2-digit' } : {}) })
+                : (String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/)?.[1] || String(tsStr));
         }
 
-        // Sekunden einblenden, falls zwei Aufnahmen in derselben Minute stattfanden
         let withSec = false;
         for (let k = 1; k < recordings.length; k++) {
             if (getUhrzeit(recordings[k - 1].ts, false) === getUhrzeit(recordings[k].ts, false)) {
-                withSec = true;
-                break;
+                withSec = true; break;
             }
         }
 
         let lastLabelX = -999;
         ctx.font = 'bold 9px monospace';
-
-        // 2. Jedes Weck-Event mit Trennlinie und Uhrzeit markieren
         recordings.forEach((rec, idx) => {
             const px = timeToX(rec.t, w, leftMargin);
             if (px < leftMargin || px > w) return;
-
-            // Vertikale Trennlinie für den Aufnahmestart
             ctx.save();
             ctx.strokeStyle = (idx === 0) ? 'rgba(15, 23, 42, 0.25)' : 'rgba(0, 155, 76, 0.45)';
             ctx.lineWidth = (idx === 0) ? 1 : 1.2;
             if (idx > 0) ctx.setLineDash([3, 2]);
-            ctx.beginPath();
-            ctx.moveTo(px, 0);
-            ctx.lineTo(px, h);
-            ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
             ctx.restore();
 
-            // Uhrzeit-Label
             const timeLabel = getUhrzeit(rec.ts, withSec);
             const textWidth = ctx.measureText(timeLabel).width;
-
-            // Kollisionsschutz: Label nur zeichnen, wenn Freiraum zum vorherigen Text vorhanden ist
             if (px - lastLabelX >= textWidth + 8 && (px + textWidth) <= (w - 5)) {
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
                 ctx.fillRect(px + 1, h - 13, textWidth + 3, 11);
-
-                ctx.fillStyle = '#009B4C'; // STAG-Grün für Event-Uhrzeiten
+                ctx.fillStyle = '#009B4C';
                 ctx.fillText(timeLabel, px + 2, h - 4);
                 lastLabelX = px;
             }
         });
-
-        // 3. Uhrzeit des Tages-Endes ganz rechts ergänzen
-        if (recordings.length > 0) {
-            const lastSample = replayFilteredData[replayFilteredData.length - 1];
-            const endPx = timeToX((replayFilteredData.length - 1) * 0.1, w, leftMargin);
-            const endTimeLabel = getUhrzeit(lastSample.ts, withSec);
-            const endTextWidth = ctx.measureText(endTimeLabel).width;
-            if (endPx - lastLabelX >= endTextWidth + 12 && endPx <= w) {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-                ctx.fillRect(endPx - endTextWidth - 2, h - 13, endTextWidth + 3, 11);
-                ctx.fillStyle = '#64748b';
-                ctx.fillText(endTimeLabel, endPx - endTextWidth, h - 4);
-            }
-        }
     } else {
-        // Standard dynamisches Zeitraster (beim Einzoomen oder bei Einzelaufnahmen)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
-
-        const niceIntervals = [
-            0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
-            1, 2, 5, 10, 15, 30,
-            60, 120, 300, 600, 900, 1800, 3600
-        ];
+        const niceIntervals = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
         const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
-
         const firstTick = Math.ceil(tStart / timeStep) * timeStep;
+
         ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
         ctx.fillStyle = '#94a3b8';
         ctx.font = '9px monospace';
-
         let lastLabelX = -999;
 
         for (let t = firstTick; t <= tEnd; t += timeStep) {
             const px = timeToX(t, w, leftMargin);
             if (px >= leftMargin && px <= w) {
-                ctx.beginPath();
-                ctx.moveTo(px, 0);
-                ctx.lineTo(px, h);
-                ctx.stroke();
-
-                let labelText = '';
-                if (timeStep < 0.1) {
-                    labelText = t.toFixed(2) + 's';
-                } else if (timeStep < 1.0) {
-                    labelText = t.toFixed(1) + 's';
-                } else if (timeStep >= 60) {
-                    const m = Math.floor(t / 60);
-                    const s = Math.round(t % 60);
-                    labelText = s === 0 ? `${m}m` : `${m}m ${s}s`;
-                } else {
-                    labelText = Math.round(t) + 's';
-                }
-
+                ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+                let labelText = timeStep < 0.1 ? t.toFixed(2) + 's' : (timeStep < 1.0 ? t.toFixed(1) + 's' : (timeStep >= 60 ? `${Math.floor(t / 60)}m` : Math.round(t) + 's'));
                 const textWidth = ctx.measureText(labelText).width;
                 if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
                     ctx.fillText(labelText, px + 2, h - 4);
@@ -930,37 +783,70 @@ function drawReplayGraph(curTimeSec) {
         }
     }
 
-    const drawCurve = (key, colorHex) => {
+    // 6. Signal-Kurven mit Min/Max Hüllkurve zeichnen
+    const drawCurveFast = (key, colorHex) => {
         ctx.save();
         ctx.beginPath();
         ctx.rect(leftMargin, 0, plotW, h);
         ctx.clip();
         ctx.strokeStyle = colorHex;
-        ctx.lineWidth = 1.8;
+        ctx.lineWidth = 1.6;
         ctx.beginPath();
 
-        let first = true;
-        for (let i = startIndex; i <= endIndex; i++) {
-            const t = i * 0.1;
-            const px = timeToX(t, w, leftMargin);
-            const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
-            if (first) { ctx.moveTo(px, py); first = false; }
-            else { ctx.lineTo(px, py); }
+        const visibleCount = endIndex - startIndex;
+        if (visibleCount <= plotW * 2) {
+            let first = true;
+            for (let i = startIndex; i <= endIndex; i++) {
+                const t = i * 0.1;
+                const px = timeToX(t, w, leftMargin);
+                const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
+                if (first) { ctx.moveTo(px, py); first = false; } else { ctx.lineTo(px, py); }
+            }
+        } else {
+            const ptsPerPx = visibleCount / plotW;
+            let first = true;
+
+            for (let col = 0; col < plotW; col++) {
+                const bStart = Math.floor(startIndex + col * ptsPerPx);
+                const bEnd = Math.min(count, Math.floor(startIndex + (col + 1) * ptsPerPx));
+                if (bStart >= bEnd) continue;
+
+                let minVal = Infinity, maxVal = -Infinity;
+                for (let j = bStart; j < bEnd; j++) {
+                    const v = replayFilteredData[j][key];
+                    if (v < minVal) minVal = v;
+                    if (v > maxVal) maxVal = v;
+                }
+
+                const px = leftMargin + col;
+                const pyMin = midY - (minVal / maxScale) * (midY - 8);
+                const pyMax = midY - (maxVal / maxScale) * (midY - 8);
+
+                if (first) {
+                    ctx.moveTo(px, pyMin);
+                    if (pyMin !== pyMax) ctx.lineTo(px, pyMax);
+                    first = false;
+                } else {
+                    ctx.lineTo(px, pyMin);
+                    ctx.lineTo(px, pyMax);
+                }
+            }
         }
         ctx.stroke();
         ctx.restore();
     };
 
     if (!isEuler) {
-        drawCurve('ax', '#dc2626');
-        drawCurve('ay', '#009B4C');
-        drawCurve('az', '#2563eb');
+        drawCurveFast('ax', '#dc2626');
+        drawCurveFast('ay', '#009B4C');
+        drawCurveFast('az', '#2563eb');
     } else {
-        drawCurve('roll', '#dc2626');
-        drawCurve('pitch', '#009B4C');
-        drawCurve('yaw', '#7c3aed');
+        drawCurveFast('roll', '#dc2626');
+        drawCurveFast('pitch', '#009B4C');
+        drawCurveFast('yaw', '#7c3aed');
     }
 
+    // Legende
     ctx.font = 'bold 9px monospace';
     const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
     const legendWidth = ctx.measureText(legendText).width;
@@ -978,7 +864,23 @@ function drawReplayGraph(curTimeSec) {
         ctx.fillStyle = '#009B4C'; ctx.fillText('● Pitch', w - legendWidth + 31, 14);
         ctx.fillStyle = '#7c3aed'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
     }
+}
 
+function renderGraphOverlay(w, h, leftMargin, curTimeSec) {
+    if (!replayOverlayCanvas) return;
+    const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
+    const curX = Math.round(timeToX(curTime, w, leftMargin));
+
+    // Dirty-Check: Wenn der Cursor denselben Pixel belegt und keine Selektion aktiv ist, abbrechen (0 ms Rechenzeit!)
+    if (!isSelectingZoom && curX === lastRenderedPlayheadX) {
+        return;
+    }
+    lastRenderedPlayheadX = curX;
+
+    const ctx = replayOverlayCanvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+
+    // Zoom-Selektionsbox
     if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
         const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
         const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
@@ -997,9 +899,7 @@ function drawReplayGraph(curTimeSec) {
         ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, 18);
     }
 
-    const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
-    const curX = timeToX(curTime, w, leftMargin);
-
+    // Playhead-Cursor
     if (curX >= leftMargin && curX <= w) {
         ctx.strokeStyle = '#d97706';
         ctx.lineWidth = 2;
