@@ -18,10 +18,7 @@ function onDeviceSelectChange(newId) {
     selectedDeviceId = newId;
     appendTerminalLog(`\n[PORTAL] Aktives Gerät gewechselt auf: ${selectedDeviceId}`);
 
-    if (window.closeImuReplayDeck) {
-        window.closeImuReplayDeck();
-    }
-
+    // Bestehende Realtime- und Postgres-Channels trennen & auf neue ID binden
     initRealtimeChannel();
     if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs();
 
@@ -31,31 +28,23 @@ function onDeviceSelectChange(newId) {
         initCloudCommandChannel();
     }
 
+    // Puffer und Visualisierungen zurücksetzen
     accHistory.length = 0;
     graphNeedsRedraw = true;
 
+    // Alle Daten des neuen Geräts abrufen
     fetchAllData();
 
+    // Falls SD-Tab aktiv ist, Verzeichnis sofort neu anfordern
     if (!document.getElementById('tab-files').classList.contains('hidden')) {
         loadCloudSdDirectory(currentCloudSdDir);
     }
 }
 
-// In window.onload: Den Stream-Watchdog-Block ersetzen:
-
-
 /*
  * Breadcrumb: 2026-09-20 09:55 - Deduplicated switchTab Lifecycle Hooks
  * [CRITICAL BUGFIX FLAG - CLEAN TAB ROUTING]:
  * Cleaned single execution of fetchConfig() and updateLockUI() on tab switch.
- */
-/*
- * Breadcrumb: 2026-09-28 19:45 - Replay-Protected Watchdog & Lifecycle Router
- * [CRITICAL BUGFIX FLAG - NON-INTRUSIVE STREAM SWITCHING]:
- * 1. Watchdog checks if #imu-replay-deck is active before triggering automated switchTab('3d').
- * 2. switchTab('imulogs') triggers resizeReplayDeck() to restore WebGL and Canvas bounds on return.
- * 3. onDeviceSelectChange automatically closes active replay session of previous device.
- * 4. Dismissed code: unconditioned switchTab('3d') throwing user out of active replay deck.
  */
 function switchTab(tab) {
     ['3d', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
@@ -81,12 +70,7 @@ function switchTab(tab) {
             if (window.drawAccGraphs) window.drawAccGraphs();
         }, 80);
     }
-    if (tab === 'imulogs') {
-        if (window.fetchImuCloudLogs) window.fetchImuCloudLogs();
-        setTimeout(() => {
-            if (window.resizeReplayDeck) window.resizeReplayDeck();
-        }, 80);
-    }
+    if (tab === 'imulogs' && window.fetchImuCloudLogs) window.fetchImuCloudLogs();
     if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
     if (tab === 'settings') {
         fetchConfig();
@@ -102,25 +86,15 @@ function fetchAllData() {
     if (window.fetchImuCloudLogs) window.fetchImuCloudLogs();
 }
 
-/*
- * Breadcrumb: 2026-09-28 20:05 - Fixed SyntaxError duplicate watchdog block in window.onload
- * [CRITICAL BUGFIX FLAG - RESTORE EXECUTION OF MAIN ENGINE]:
- * Removed dangling duplicated setInterval block that threw a fatal SyntaxError crashing entire runtime.
- */
-/*
- * Breadcrumb: 2026-09-28 20:30 - Restored Clean Orchestrator Lifecycle
- * [CRITICAL BUGFIX FLAG - REMOVED DANGLING SYNTAX FRAGMENT]:
- * 1. Cleaned window.onload and removed the duplicate setInterval block that crashed runtime.
- * 2. Watchdog preserves active replay sessions without forcefully switching to 3d tab.
- * 3. Dismissed code: trailing orphan '}, 1000); };' fragment.
- */
 window.onload = () => {
     if (window.init3D) window.init3D();
     initRealtimeChannel();
-    if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs();
+    if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs(); // <--- NEU
     fetchAllData();
 
-    // Koordinatengitter sofort beim Laden initialisieren
+
+    // [BUGFIX]: Zeichnet das Koordinatengitter sofort beim Laden,
+    // noch bevor das erste Sensorpaket aus der Cloud eintrifft.
     setTimeout(() => {
         if (window.drawAccGraphs) window.drawAccGraphs();
     }, 100);
@@ -150,17 +124,13 @@ window.onload = () => {
             }
         }
 
-        const replayDeck = document.getElementById('imu-replay-deck');
-        const isReplayOpen = replayDeck && !replayDeck.classList.contains('hidden');
-
-        // 2. 3D-Tab ein- / ausblenden (unterbricht Replay nicht eigenmächtig)
+        // 2. 3D-Tab ein- / ausblenden
         if (isStreaming && !wasStreaming) {
             wasStreaming = true;
             if (btn3d) btn3d.style.display = 'flex';
-            if (!isReplayOpen) {
-                switchTab('3d');
-            }
-        } else if (!isStreaming && wasStreaming) {
+            switchTab('3d');
+        }
+        else if (!isStreaming && wasStreaming) {
             wasStreaming = false;
             if (btn3d) btn3d.style.display = 'none';
 
