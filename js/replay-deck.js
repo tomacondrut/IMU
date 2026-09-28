@@ -92,9 +92,47 @@ window.clearImuLogCache = clearImuLogCache;
 // 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
 // ============================================================================
 
+/*
+ * Breadcrumb: 2026-09-28 19:45 - Dynamic 3D Viewport Resizer & Observer
+ * [CRITICAL BUGFIX FLAG - RESPONSIVE REPLAY 3D VIEWPORT]:
+ * 1. Added ResizeObserver directly on #replay-canvas-container to update camera aspect on DOM unhide.
+ * 2. Exposed window.resizeReplayDeck coordinating WebGL canvas and graph redraws.
+ * 3. Dismissed code: static 300x240 fallback render ignoring parent DOM width after display:none.
+ */
+let repContainerObserver = null;
+
+function resizeReplay3D() {
+    const container = document.getElementById('replay-canvas-container');
+    if (!container || !repRenderer || !repCamera) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w > 0 && h > 0) {
+        repCamera.aspect = w / h;
+        repCamera.updateProjectionMatrix();
+        repRenderer.setSize(w, h);
+        if (repScene) repRenderer.render(repScene, repCamera);
+    }
+}
+
+function resizeReplayDeck() {
+    resizeReplay3D();
+    invalidateReplayGraphCache();
+    drawReplayGraph(replayCurrentTimeSec);
+}
+window.resizeReplayDeck = resizeReplayDeck;
+
 function initReplay3D() {
     const container = document.getElementById('replay-canvas-container');
-    if (!container || repRenderer) return;
+    if (!container) return;
+    if (typeof THREE === 'undefined') {
+        console.warn('[REPLAY-3D] Three.js Bibliothek noch nicht geladen.');
+        return;
+    }
+
+    if (repRenderer) {
+        resizeReplay3D();
+        return;
+    }
 
     const w = container.clientWidth || 300;
     const h = container.clientHeight || 240;
@@ -122,14 +160,15 @@ function initReplay3D() {
     createReplayFallbackCube();
     loadReplayGLBModel();
 
-    window.addEventListener('resize', () => {
-        if (!container || container.clientWidth === 0) return;
-        repCamera.aspect = container.clientWidth / container.clientHeight;
-        repCamera.updateProjectionMatrix();
-        repRenderer.setSize(container.clientWidth, container.clientHeight);
-    });
-}
+    if (!repContainerObserver && window.ResizeObserver) {
+        repContainerObserver = new ResizeObserver(() => {
+            resizeReplay3D();
+        });
+        repContainerObserver.observe(container);
+    }
 
+    window.addEventListener('resize', resizeReplay3D);
+}
 function createReplayFallbackCube() {
     if (repMesh && repScene) repScene.remove(repMesh);
     const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
@@ -172,11 +211,30 @@ function loadReplayGLBModel() {
     tryLoad(0);
 }
 
+/*
+ * Breadcrumb: 2026-09-28 19:45 - Complete Deck Teardown & Overlay Clear
+ * [CRITICAL BUGFIX FLAG - SAFE REPLAY DECK CLOSURE]:
+ * 1. Halts requestAnimationFrame loop and resets playhead/state variables to origin.
+ * 2. Clears overlay canvas preventing playhead ghosting on subsequent opens.
+ */
 function closeImuReplayDeck() {
     if (replayIsPlaying) toggleReplayPlay();
-    isDayMergedMode = false; // Zurücksetzen
+    if (replayAnimId) {
+        cancelAnimationFrame(replayAnimId);
+        replayAnimId = null;
+    }
+    replayIsPlaying = false;
+    isDayMergedMode = false;
+    replayCurrentTimeSec = 0.0;
+
     const deck = document.getElementById('imu-replay-deck');
     if (deck) deck.classList.add('hidden');
+
+    if (replayOverlayCanvas) {
+        const ctx = replayOverlayCanvas.getContext('2d');
+        ctx.clearRect(0, 0, replayOverlayCanvas.width, replayOverlayCanvas.height);
+    }
+    lastRenderedPlayheadX = -1;
 }
 
 // ============================================================================
@@ -321,7 +379,11 @@ async function inspectImuFile(downloadUrl, fileName) {
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
     }
 }
-
+/*
+ * Breadcrumb: 2026-09-28 19:40 - Synchronous Clean Cycle Select
+ * [CRITICAL BUGFIX FLAG - DIRECT RESET WITH RESIZE OBSERVER GUARD]:
+ * Reset zoom and trigger peak counter without frame delay races.
+ */
 function onReplayCycleSelect(cycleVal) {
     const select = document.getElementById('replay-cycle-select');
     if (select) select.value = cycleVal;
@@ -346,7 +408,7 @@ function onReplayCycleSelect(cycleVal) {
 
     resetReplayZoom();
     if (replayAccThreshold > 0 && typeof setReplayThreshold === 'function') {
-        setReplayThreshold(replayAccThreshold); // Zählt Peaks passend zum gewählten Einzel-Zyklus
+        setReplayThreshold(replayAccThreshold);
     }
 }
 
@@ -472,6 +534,32 @@ function setReplaySpeedPreset(spd) {
     });
 }
 
+/*
+ * Breadcrumb: 2026-09-28 19:55 - Restored Gesture Engine & Auto-Invalidating Dual-Layer Replay
+ * [CRITICAL BUGFIX FLAG - FIXED REFERENCE ERROR & CACHE INVALIDATION]:
+ * 1. Restored missing attachCanvasInteraction() engine (mouse, touch & wheel stepping).
+ * 2. Integrated state comparison in drawReplayGraph: automatically redraws background when
+ *    timebounds (zoom/pan), signal mode (acc/euler), threshold, or data lengths change.
+ * 3. Overlay canvas now safely handles both playhead scrubbing and drag-to-zoom rects.
+ */
+
+let replayOverlayCanvas = null;
+let lastRenderedPlayheadX = -1;
+let backgroundNeedsRedraw = true;
+
+// Gespeicherter Status zur automatischen Invalidierung des Hintergrunds
+let lastDrawnStartSec = -1;
+let lastDrawnEndSec = -1;
+let lastDrawnMode = '';
+let lastDrawnThreshold = -1;
+let lastDrawnDataLen = -1;
+
+function invalidateReplayGraphCache() {
+    backgroundNeedsRedraw = true;
+    lastRenderedPlayheadX = -1;
+}
+window.invalidateReplayGraphCache = invalidateReplayGraphCache;
+
 function resetReplayZoom() {
     isReplayZoomed = false;
     const { maxDur } = getTimeBounds();
@@ -488,66 +576,123 @@ function resetReplayZoom() {
         scrubber.value = Math.round(replayCurrentTimeSec / 0.1);
     }
 
+    invalidateReplayGraphCache();
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
-/*
- * Breadcrumb: 2026-09-20 09:30 - Precision Drag-to-Zoom Sensitivity & Ghost Click Elimination
- * [CRITICAL BUGFIX FLAG - SEPARATE CLICK SCRUB FROM REGION ZOOM]:
- * 1. Added e.preventDefault() on mousedown to block native canvas/text drag collisions.
- * 2. Reduced zoom detection threshold from 15px to 6px so even small peak selections reliably zoom.
- * 3. Playhead only jumps on deliberate stationary clicks (dx < 6px).
- * 4. Reduced minimum time slice to 20ms (0.02s) for micro-transient analysis.
- */
-/*
- * Breadcrumb: 2026-09-20 09:40 - Unified Touch & Mouse Gesture Engine for Replay Canvas
- * [CRITICAL BUGFIX FLAG - MOBILE TOUCH DRAG-TO-ZOOM]:
- * 1. Added passive:false touchstart, touchmove, touchend handlers to support mobile drag-to-zoom.
- * 2. e.preventDefault() blocks browser viewport panning/pull-to-refresh while swiping the canvas.
- * 3. Unified touch-to-pixel coordinate translation matching devicePixelRatio and canvas bounding rect.
- * 4. 8px threshold distinguishes quick thumb-taps (scrub playhead) from region selection (zoom).
- */
-/*
- * Breadcrumb: 2026-09-20 09:40 - Precision Drag-to-Zoom & Unified Touch Engine
- * [CRITICAL BUGFIX FLAG - MOBILE TOUCH & CLICK SCRUB SEPARATION]:
- * 1. Reduced zoom detection threshold from 15px to 6px to reliably catch fine selections.
- * 2. Added passive:false touchstart/touchmove/touchend handlers for iPhone & Android gestures.
- * 3. e.preventDefault() stops browser text selection, page scrolling, and ghost clicks on canvas.
- */
+function attachCanvasInteraction() {
+    const cv = document.getElementById('replayGraphCanvas');
+    if (!cv || canvasListenersAttached) return;
+    canvasListenersAttached = true;
 
+    const leftMargin = 38;
 
-/*
- * Breadcrumb: 2026-09-20 07:45 - Highlighting & Threshold Grid Line Renderer
- * [CRITICAL BUGFIX FLAG - CANVAS THRESHOLD SHADING RESTORATION]:
- * 1. Integrated background red warning tint (rgba(239, 68, 68, 0.22)) for points exceeding replayAccThreshold.
- * 2. Renders dashed red reference lines at ±replayAccThreshold when threshold is active.
- * 3. Clips threshold highlights strictly within plot margins to prevent canvas bleed.
- */
-/*
- * Breadcrumb: 2026-09-28 19:40 - Optimal Dual-Layer Hardware-Accelerated Replay Engine
- * [CRITICAL ARCHITECTURAL REFACTOR - ZERO-OVERHEAD 80K REPLAY]:
- * 1. Automatically constructs a transparent foreground overlay canvas (#replayOverlayCanvas) for the playhead & drag-box.
- * 2. Background canvas (waveforms, min-max envelope, grid) is rendered EXACTLY ONCE on zoom/mode changes.
- * 3. Playhead rendering is throttled by integer pixel coordinates: zero GPU/CPU draw calls when cursor moves < 1px.
- * 4. Coalesces threshold highlights into pixel-merged spans instead of 80,000 isolated fillRect invocations.
- */
+    function getEventX(e) {
+        const rect = cv.getBoundingClientRect();
+        return e.clientX - rect.left;
+    }
 
-let replayOverlayCanvas = null;
-let lastRenderedPlayheadX = -1;
-let backgroundNeedsRedraw = true;
+    // Pointerdown: Einheitlich für Maus, Touch & Stylus
+    cv.addEventListener('pointerdown', (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        const clientX = getEventX(e);
+        if (clientX < leftMargin) return;
 
-function invalidateReplayGraphCache() {
-    backgroundNeedsRedraw = true;
-    lastRenderedPlayheadX = -1;
+        isSelectingZoom = true;
+        selectStartX = clientX;
+        selectCurrentX = clientX;
+
+        // Fängt Berührung ein, auch wenn der Finger über das Canvas hinausgleitet
+        try { cv.setPointerCapture(e.pointerId); } catch (_) { }
+        e.preventDefault();
+    });
+
+    cv.addEventListener('pointermove', (e) => {
+        if (!isSelectingZoom) return;
+        selectCurrentX = Math.max(leftMargin, Math.min(cv.clientWidth, getEventX(e)));
+        renderGraphOverlay(cv.clientWidth, cv.clientHeight, leftMargin, replayCurrentTimeSec);
+    });
+
+    function handlePointerEnd(e) {
+        if (!isSelectingZoom) return;
+        isSelectingZoom = false;
+        try { cv.releasePointerCapture(e.pointerId); } catch (_) { }
+
+        const dx = Math.abs(selectCurrentX - selectStartX);
+        const w = cv.clientWidth;
+
+        if (dx >= 6) {
+            const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
+            const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
+
+            if (t2 - t1 >= 0.02) {
+                replayZoomStartSec = t1;
+                replayZoomEndSec = t2;
+                isReplayZoomed = true;
+                replayCurrentTimeSec = replayZoomStartSec;
+
+                const btnReset = document.getElementById('btn-replay-reset-zoom');
+                const spanLbl = document.getElementById('replay-zoom-span-label');
+                if (btnReset) btnReset.classList.remove('hidden');
+                if (spanLbl) spanLbl.innerText = `${(t2 - t1).toFixed(2)}s`;
+
+                const scrubber = document.getElementById('replay-scrubber');
+                if (scrubber) {
+                    scrubber.min = Math.floor(t1 / 0.1);
+                    scrubber.max = Math.ceil(t2 / 0.1);
+                    scrubber.value = Math.round(t1 / 0.1);
+                }
+
+                invalidateReplayGraphCache();
+                renderInterpolatedFrame(replayCurrentTimeSec);
+            }
+        } else {
+            const targetTime = xToTime(selectStartX, w, leftMargin);
+            replayCurrentTimeSec = targetTime;
+            renderInterpolatedFrame(replayCurrentTimeSec);
+        }
+    }
+
+    cv.addEventListener('pointerup', handlePointerEnd);
+    cv.addEventListener('pointercancel', handlePointerEnd);
+
+    // Mausrad: 100 ms Einzelschritt-Navigation
+    cv.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        if (replayFilteredData.length === 0) return;
+
+        if (replayIsPlaying) toggleReplayPlay();
+
+        const { tStart, tEnd } = getTimeBounds();
+        const direction = e.deltaY > 0 ? 1 : -1;
+        const stepSec = 0.1;
+
+        let newTime = replayCurrentTimeSec + (direction * stepSec);
+        newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
+
+        replayCurrentTimeSec = newTime;
+        renderInterpolatedFrame(replayCurrentTimeSec);
+    }, { passive: false });
 }
 
-// Stellt sicher, dass das 2-Layer-Setup existiert
+// 2-Layer Setup
+/*
+ * Breadcrumb: 2026-09-28 19:40 - Unified Pointer Capture & Zero Layout Thrashing
+ * [CRITICAL BUGFIX FLAG - HIGH-PERFORMANCE INTERACTION ENGINE]:
+ * 1. Converted mouse/touch listeners to Pointer Events API with setPointerCapture (no edge tearing).
+ * 2. Guarded ensureDualLayerCanvas: zero getComputedStyle reflows during 60 FPS playback.
+ * 3. ResizeObserver auto-syncs canvas dimensions reliably across mobile rotations and tab switches.
+ */
+let replayResizeObserver = null;
+
 function ensureDualLayerCanvas(baseCv) {
     if (replayOverlayCanvas && replayOverlayCanvas.parentElement === baseCv.parentElement) {
         return;
     }
 
     const parent = baseCv.parentElement;
+    if (!parent) return;
+
     parent.style.position = 'relative';
 
     baseCv.style.position = 'absolute';
@@ -555,17 +700,33 @@ function ensureDualLayerCanvas(baseCv) {
     baseCv.style.left = '0';
     baseCv.style.width = '100%';
     baseCv.style.height = '100%';
+    baseCv.style.zIndex = '1';
 
-    replayOverlayCanvas = document.getElementById('replayOverlayCanvas');
-    if (!replayOverlayCanvas) {
-        replayOverlayCanvas = document.createElement('canvas');
-        replayOverlayCanvas.id = 'replayOverlayCanvas';
-        replayOverlayCanvas.className = 'w-full h-full block select-none';
-        replayOverlayCanvas.style.position = 'absolute';
-        replayOverlayCanvas.style.top = '0';
-        replayOverlayCanvas.style.left = '0';
-        replayOverlayCanvas.style.pointerEvents = 'none'; // Maus-Events gehen direkt an den Base-Canvas
-        parent.appendChild(replayOverlayCanvas);
+    let ov = document.getElementById('replayOverlayCanvas');
+    if (!ov || ov.parentElement !== parent) {
+        if (ov) ov.remove();
+        ov = document.createElement('canvas');
+        ov.id = 'replayOverlayCanvas';
+        ov.className = 'w-full h-full block select-none pointer-events-none';
+        ov.style.position = 'absolute';
+        ov.style.top = '0';
+        ov.style.left = '0';
+        ov.style.width = '100%';
+        ov.style.height = '100%';
+        ov.style.zIndex = '2';
+        parent.appendChild(ov);
+    }
+    replayOverlayCanvas = ov;
+
+    // Automatisches und flackerfreies Nachjustieren bei Fenster- oder Orientierungswechsel
+    if (!replayResizeObserver && window.ResizeObserver) {
+        replayResizeObserver = new ResizeObserver(() => {
+            if (baseCv.clientWidth > 0 && baseCv.clientHeight > 0) {
+                invalidateReplayGraphCache();
+                drawReplayGraph(replayCurrentTimeSec);
+            }
+        });
+        replayResizeObserver.observe(parent);
     }
 }
 
@@ -573,19 +734,22 @@ function drawReplayGraph(curTimeSec) {
     const bgCv = document.getElementById('replayGraphCanvas');
     if (!bgCv || replayFilteredData.length === 0) return;
 
-    ensureDualLayerCanvas(bgCv);
-    attachCanvasInteraction();
+    if (!replayOverlayCanvas) {
+        ensureDualLayerCanvas(bgCv);
+        attachCanvasInteraction();
+    }
 
     const w = bgCv.clientWidth;
     const h = bgCv.clientHeight;
     if (w === 0 || h === 0) return;
 
-    // Canvas-Größen synchronisieren
     if (bgCv.width !== w || bgCv.height !== h) {
         bgCv.width = w;
         bgCv.height = h;
-        replayOverlayCanvas.width = w;
-        replayOverlayCanvas.height = h;
+        if (replayOverlayCanvas) {
+            replayOverlayCanvas.width = w;
+            replayOverlayCanvas.height = h;
+        }
         backgroundNeedsRedraw = true;
     }
 
@@ -593,18 +757,25 @@ function drawReplayGraph(curTimeSec) {
     const leftMargin = 38;
     const plotW = w - leftMargin;
 
-    // ------------------------------------------------------------------------
-    // LAYER 1: HINTERGRUND (Wird NUR bei Parameter-/Zoom-Änderung gerendert)
-    // ------------------------------------------------------------------------
+    if (tStart !== lastDrawnStartSec ||
+        tEnd !== lastDrawnEndSec ||
+        replayGraphMode !== lastDrawnMode ||
+        replayAccThreshold !== lastDrawnThreshold ||
+        replayFilteredData.length !== lastDrawnDataLen) {
+        backgroundNeedsRedraw = true;
+        lastDrawnStartSec = tStart;
+        lastDrawnEndSec = tEnd;
+        lastDrawnMode = replayGraphMode;
+        lastDrawnThreshold = replayAccThreshold;
+        lastDrawnDataLen = replayFilteredData.length;
+    }
+
     if (backgroundNeedsRedraw) {
         renderGraphBackground(bgCv, w, h, leftMargin, plotW, tStart, tEnd, tSpan);
         backgroundNeedsRedraw = false;
         lastRenderedPlayheadX = -1;
     }
 
-    // ------------------------------------------------------------------------
-    // LAYER 2: VORDERGRUND (Playhead & Drag-Selektor)
-    // ------------------------------------------------------------------------
     renderGraphOverlay(w, h, leftMargin, curTimeSec);
 }
 
@@ -643,7 +814,7 @@ function renderGraphBackground(cv, w, h, leftMargin, plotW, tStart, tEnd, tSpan)
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // 2. Schwellenwert-Zonen (auf Pixelspalten aggregiert statt 80.000 fillRect)
+    // 2. Schwellenwert-Zonen (auf Pixelspalten aggregiert)
     if (replayAccThreshold > 0 && !isEuler) {
         ctx.save();
         ctx.beginPath();
@@ -706,7 +877,7 @@ function renderGraphBackground(cv, w, h, leftMargin, plotW, tStart, tEnd, tSpan)
         ctx.restore();
     }
 
-    // 5. Zeitachse / Trennlinien
+    // 5. Zeitachse & Labels
     const isCycleAll = !document.getElementById('replay-cycle-select') || document.getElementById('replay-cycle-select').value === 'ALL';
     const hasMultipleCycles = replayFilteredData.length > 0 && (replayFilteredData[0].cycle !== replayFilteredData[replayFilteredData.length - 1].cycle);
     const isFullDayUnzoomed = !isReplayZoomed && isCycleAll && (isDayMergedMode || hasMultipleCycles);
@@ -783,7 +954,7 @@ function renderGraphBackground(cv, w, h, leftMargin, plotW, tStart, tEnd, tSpan)
         }
     }
 
-    // 6. Signal-Kurven mit Min/Max Hüllkurve zeichnen
+    // 6. Signal-Kurven mit Min/Max-Decimation
     const drawCurveFast = (key, colorHex) => {
         ctx.save();
         ctx.beginPath();
@@ -871,7 +1042,6 @@ function renderGraphOverlay(w, h, leftMargin, curTimeSec) {
     const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
     const curX = Math.round(timeToX(curTime, w, leftMargin));
 
-    // Dirty-Check: Wenn der Cursor denselben Pixel belegt und keine Selektion aktiv ist, abbrechen (0 ms Rechenzeit!)
     if (!isSelectingZoom && curX === lastRenderedPlayheadX) {
         return;
     }
@@ -1046,6 +1216,14 @@ window.setReplayThreshold = setReplayThreshold;
  * 2. Populates #replay-cycle-select options with event start time instead of file.uploaded_at.
  * 3. Retains file.uploaded_at only as secondary fallback if parts[0] has no valid timestamp.
  */
+/*
+ * Breadcrumb: 2026-09-28 19:45 - Resilient Day-Merge & CSV Delimiter Engine
+ * [CRITICAL BUGFIX FLAG - STORAGE PATH NORMALIZATION & FALLBACK PARSING]:
+ * 1. Strips duplicate bucket prefixes and normalizes slashes from Supabase Storage paths.
+ * 2. Auto-detects comma and semicolon CSV delimiters from firmware exports.
+ * 3. Gracefully resolves day files via window.currentDeviceFiles and window.getFileDayKey.
+ * 4. Dismissed code: direct f.file_path concatenation failing on leading slash bucket overlaps.
+ */
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -1059,26 +1237,35 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     deck.scrollIntoView({ behavior: 'smooth' });
 
     if (!dayFiles || dayFiles.length === 0) {
-        if (typeof currentDeviceFiles !== 'undefined') {
-            dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+        const allFiles = window.currentDeviceFiles || (typeof currentDeviceFiles !== 'undefined' ? currentDeviceFiles : []);
+        const getDayKey = window.getFileDayKey || (typeof getFileDayKey !== 'undefined' ? getFileDayKey : null);
+        if (getDayKey) {
+            dayFiles = allFiles.filter(f => getDayKey(f) === dateStr);
         }
     }
 
     if (!dayFiles || dayFiles.length === 0) {
-        document.getElementById('replay-meta-info').innerText = `Keine Chunks für ${dateStr} vorhanden.`;
+        const metaEl = document.getElementById('replay-meta-info');
+        if (metaEl) metaEl.innerText = `Keine Chunks für ${dateStr} vorhanden.`;
         return;
     }
 
-    document.getElementById('replay-file-title').innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
-    document.getElementById('replay-meta-info').innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
+    dayFiles.sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+
+    const titleEl = document.getElementById('replay-file-title');
+    if (titleEl) titleEl.innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
+    const metaEl = document.getElementById('replay-meta-info');
+    if (metaEl) metaEl.innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
 
     initReplay3D();
 
     try {
+        const baseUrl = (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : '').replace(/\/+$/, '');
         const fetchPromises = dayFiles.map(async (f, idx) => {
             try {
-                const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
-                const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+                let cleanPath = (f.file_path || '').replace(/^\/+/, '');
+                if (cleanPath.startsWith('imu-logs/')) cleanPath = cleanPath.substring(9);
+                const url = `${baseUrl}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
                 const text = await fetchCachedCsv(url);
                 return { file: f, fileIdx: idx, text };
             } catch (err) {
@@ -1102,7 +1289,8 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
-                const parts = line.split(',');
+                const sep = line.includes(';') ? ';' : ',';
+                const parts = line.split(sep);
                 if (parts.length >= 8) {
                     if (!firstTs && parts[0]) {
                         firstTs = parts[0].trim();
@@ -1132,7 +1320,6 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             }
 
             if (samplesInChunk > 0) {
-                // Echte Sensor-Uhrzeit des Aufweckzyklus aus dem ersten Datenpunkt (parts[0]) extrahieren
                 const eventTime = formatReplayTimestamp(firstTs);
                 const timeStr = eventTime || (file.uploaded_at
                     ? formatReplayTimestamp(file.uploaded_at)
@@ -1142,25 +1329,25 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
         });
 
         if (replayDataRaw.length === 0) {
-            document.getElementById('replay-meta-info').innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
+            if (metaEl) metaEl.innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
             return;
         }
 
         const select = document.getElementById('replay-cycle-select');
-        select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
-
-        chunkStats.forEach(cs => {
-            select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
-        });
+        if (select) {
+            select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+            chunkStats.forEach(cs => {
+                select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+            });
+        }
 
         onReplayCycleSelect('ALL');
         if (replayAccThreshold > 0) setReplayThreshold(replayAccThreshold);
     } catch (err) {
         console.error('[CACHE MERGE FEHLER]', err);
-        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
+        if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
     }
 }
-window.inspectImuDayMerged = inspectImuDayMerged;
 
 /*
 * Breadcrumb: 2026-09-20 09:35 - Visible Window CSV Slice Exporter

@@ -18,7 +18,10 @@ function onDeviceSelectChange(newId) {
     selectedDeviceId = newId;
     appendTerminalLog(`\n[PORTAL] Aktives Gerät gewechselt auf: ${selectedDeviceId}`);
 
-    // Bestehende Realtime- und Postgres-Channels trennen & auf neue ID binden
+    if (window.closeImuReplayDeck) {
+        window.closeImuReplayDeck();
+    }
+
     initRealtimeChannel();
     if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs();
 
@@ -28,23 +31,31 @@ function onDeviceSelectChange(newId) {
         initCloudCommandChannel();
     }
 
-    // Puffer und Visualisierungen zurücksetzen
     accHistory.length = 0;
     graphNeedsRedraw = true;
 
-    // Alle Daten des neuen Geräts abrufen
     fetchAllData();
 
-    // Falls SD-Tab aktiv ist, Verzeichnis sofort neu anfordern
     if (!document.getElementById('tab-files').classList.contains('hidden')) {
         loadCloudSdDirectory(currentCloudSdDir);
     }
 }
 
+// In window.onload: Den Stream-Watchdog-Block ersetzen:
+
+
 /*
  * Breadcrumb: 2026-09-20 09:55 - Deduplicated switchTab Lifecycle Hooks
  * [CRITICAL BUGFIX FLAG - CLEAN TAB ROUTING]:
  * Cleaned single execution of fetchConfig() and updateLockUI() on tab switch.
+ */
+/*
+ * Breadcrumb: 2026-09-28 19:45 - Replay-Protected Watchdog & Lifecycle Router
+ * [CRITICAL BUGFIX FLAG - NON-INTRUSIVE STREAM SWITCHING]:
+ * 1. Watchdog checks if #imu-replay-deck is active before triggering automated switchTab('3d').
+ * 2. switchTab('imulogs') triggers resizeReplayDeck() to restore WebGL and Canvas bounds on return.
+ * 3. onDeviceSelectChange automatically closes active replay session of previous device.
+ * 4. Dismissed code: unconditioned switchTab('3d') throwing user out of active replay deck.
  */
 function switchTab(tab) {
     ['3d', 'imulogs', 'files', 'settings', 'ota'].forEach(t => {
@@ -70,7 +81,12 @@ function switchTab(tab) {
             if (window.drawAccGraphs) window.drawAccGraphs();
         }, 80);
     }
-    if (tab === 'imulogs' && window.fetchImuCloudLogs) window.fetchImuCloudLogs();
+    if (tab === 'imulogs') {
+        if (window.fetchImuCloudLogs) window.fetchImuCloudLogs();
+        setTimeout(() => {
+            if (window.resizeReplayDeck) window.resizeReplayDeck();
+        }, 80);
+    }
     if (tab === 'files') loadCloudSdDirectory(currentCloudSdDir);
     if (tab === 'settings') {
         fetchConfig();
@@ -113,7 +129,6 @@ window.onload = () => {
         const tab3d = document.getElementById('tab-3d');
         const ind = document.getElementById('realtime-indicator');
 
-        // 1. Status-Badge synchron mit Datenfluss umschalten
         if (ind) {
             if (isStreaming) {
                 ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ${selectedDeviceId} LIVE`;
@@ -123,6 +138,26 @@ window.onload = () => {
                 ind.className = 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-300';
             }
         }
+
+        const replayDeck = document.getElementById('imu-replay-deck');
+        const isReplayOpen = replayDeck && !replayDeck.classList.contains('hidden');
+
+        if (isStreaming && !wasStreaming) {
+            wasStreaming = true;
+            if (btn3d) btn3d.style.display = 'flex';
+            // Unterbricht eine aktive Replay-Analyse nicht eigenmächtig
+            if (!isReplayOpen) {
+                switchTab('3d');
+            }
+        } else if (!isStreaming && wasStreaming) {
+            wasStreaming = false;
+            if (btn3d) btn3d.style.display = 'none';
+
+            if (tab3d && !tab3d.classList.contains('hidden')) {
+                switchTab('imulogs');
+            }
+        }
+    }, 1000);
 
         // 2. 3D-Tab ein- / ausblenden
         if (isStreaming && !wasStreaming) {
