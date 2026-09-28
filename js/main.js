@@ -107,14 +107,20 @@ function fetchAllData() {
  * [CRITICAL BUGFIX FLAG - RESTORE EXECUTION OF MAIN ENGINE]:
  * Removed dangling duplicated setInterval block that threw a fatal SyntaxError crashing entire runtime.
  */
+/*
+ * Breadcrumb: 2026-09-28 20:30 - Restored Clean Orchestrator Lifecycle
+ * [CRITICAL BUGFIX FLAG - REMOVED DANGLING SYNTAX FRAGMENT]:
+ * 1. Cleaned window.onload and removed the duplicate setInterval block that crashed runtime.
+ * 2. Watchdog preserves active replay sessions without forcefully switching to 3d tab.
+ * 3. Dismissed code: trailing orphan '}, 1000); };' fragment.
+ */
 window.onload = () => {
     if (window.init3D) window.init3D();
     initRealtimeChannel();
     if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs();
     fetchAllData();
 
-    // Zeichnet das Koordinatengitter sofort beim Laden,
-    // noch bevor das erste Sensorpaket aus der Cloud eintrifft.
+    // Koordinatengitter sofort beim Laden initialisieren
     setTimeout(() => {
         if (window.drawAccGraphs) window.drawAccGraphs();
     }, 100);
@@ -133,6 +139,7 @@ window.onload = () => {
         const tab3d = document.getElementById('tab-3d');
         const ind = document.getElementById('realtime-indicator');
 
+        // 1. Status-Badge synchron mit Datenfluss umschalten
         if (ind) {
             if (isStreaming) {
                 ind.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ${selectedDeviceId} LIVE`;
@@ -146,31 +153,14 @@ window.onload = () => {
         const replayDeck = document.getElementById('imu-replay-deck');
         const isReplayOpen = replayDeck && !replayDeck.classList.contains('hidden');
 
+        // 2. 3D-Tab ein- / ausblenden (unterbricht Replay nicht eigenmächtig)
         if (isStreaming && !wasStreaming) {
             wasStreaming = true;
             if (btn3d) btn3d.style.display = 'flex';
-            // Unterbricht eine aktive Replay-Analyse nicht eigenmächtig
             if (!isReplayOpen) {
                 switchTab('3d');
             }
         } else if (!isStreaming && wasStreaming) {
-            wasStreaming = false;
-            if (btn3d) btn3d.style.display = 'none';
-
-            if (tab3d && !tab3d.classList.contains('hidden')) {
-                switchTab('imulogs');
-            }
-        }
-    }, 1000);
-};
-
-        // 2. 3D-Tab ein- / ausblenden
-        if (isStreaming && !wasStreaming) {
-            wasStreaming = true;
-            if (btn3d) btn3d.style.display = 'flex';
-            switchTab('3d');
-        }
-        else if (!isStreaming && wasStreaming) {
             wasStreaming = false;
             if (btn3d) btn3d.style.display = 'none';
 
