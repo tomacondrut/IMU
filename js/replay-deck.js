@@ -309,11 +309,22 @@ function formatReplayTimestamp(tsStr, withSec = true) {
  * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
  * Displays real recording start time for individual wake cycles inside single files.
  */
+/*
+ * Breadcrumb: 2026-09-28 20:20 - Robust Single-File Delimiter Detection & Playback Guard
+ * [CRITICAL BUGFIX FLAG - CSV PARSING & STATE RESET]:
+ * 1. Added semicolon/comma delimiter auto-detection to inspectImuFile.
+ * 2. Pauses active replay and resets playhead before parsing single file.
+ * 3. onReplayCycleSelect resets playhead to 0.0s to eliminate duration overhang.
+ */
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
     isDayMergedMode = false;
+
+    // Laufende Wiedergabe sicher stoppen und Zeit nullen
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
 
     deck.classList.remove('hidden');
     deck.scrollIntoView({ behavior: 'smooth' });
@@ -333,7 +344,9 @@ async function inspectImuFile(downloadUrl, fileName) {
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            const parts = line.split(',');
+            // Dynamische Erkennung von Komma oder Semikolon
+            const sep = line.includes(';') ? ';' : ',';
+            const parts = line.split(sep);
             if (parts.length >= 8) {
                 const qw = parseFloat(parts[1]) || 1.0;
                 const qx = parseFloat(parts[2]) || 0.0;
@@ -396,7 +409,7 @@ function onReplayCycleSelect(cycleVal) {
     }
 
     const total = replayFilteredData.length;
-    const durSec = ((total - 1) * 0.1).toFixed(1);
+    const durSec = total > 0 ? ((total - 1) * 0.1).toFixed(1) : "0.0";
 
     document.getElementById('replay-meta-info').innerText =
         `${total} Messpunkte geladen | Dauer: ${durSec} s | 100 ms Raster`;
@@ -405,6 +418,10 @@ function onReplayCycleSelect(cycleVal) {
     if (durLabel) durLabel.innerText = durSec + ' s';
     const totalTimeLabel = document.getElementById('replay-total-time-label');
     if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
+
+    // Setzt Playhead auf den Zyklusstart zurück, um Zeitausreißer zu vermeiden
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
 
     resetReplayZoom();
     if (replayAccThreshold > 0 && typeof setReplayThreshold === 'function') {
@@ -1140,16 +1157,7 @@ function onReplaySpeedChange(spd) {
 // ============================================================================
 // WINDOW-EXPORTE FÜR DAS REPLAY-DECK (OHNE KALENDER-DOPPLUNG)
 // ============================================================================
-window.inspectImuFile = inspectImuFile;
-window.closeImuReplayDeck = closeImuReplayDeck;
-window.onReplayCycleSelect = onReplayCycleSelect;
-window.onReplayScrub = onReplayScrub;
-window.toggleReplayPlay = toggleReplayPlay;
-window.resetReplayPlayback = resetReplayPlayback;
-window.onReplaySpeedChange = onReplaySpeedChange;
-window.setReplaySpeedPreset = setReplaySpeedPreset;
-window.resetReplayZoom = resetReplayZoom;
-window.setReplayGraphMode = setReplayGraphMode;
+
 
 /*
  * Breadcrumb: 2026-09-20 07:30 - Multi-Chunk Day Aggregator Engine
@@ -1410,4 +1418,24 @@ function exportReplayVisibleCsv() {
         window.appendTerminalLog(`[EXPORT] ${exportRows.length} Messpunkte erfolgreich als "${targetFilename}" exportiert.`);
     }
 }
+window.exportReplayVisibleCsv = exportReplayVisibleCsv;
+
+
+/*
+* Breadcrumb: 2026-09-28 20:15 - Window Scope Exposure for Day Replay & Delimiter Parity
+* [CRITICAL BUGFIX FLAG - CALENDAR TO REPLAY ENGINE LINK]:
+* Explicitly binds inspectImuDayMerged to window to fix broken calendar timeline dispatch.
+*/
+window.inspectImuFile = inspectImuFile;
+window.inspectImuDayMerged = inspectImuDayMerged; // <-- WAR FEHLEND
+window.closeImuReplayDeck = closeImuReplayDeck;
+window.onReplayCycleSelect = onReplayCycleSelect;
+window.onReplayScrub = onReplayScrub;
+window.toggleReplayPlay = toggleReplayPlay;
+window.resetReplayPlayback = resetReplayPlayback;
+window.onReplaySpeedChange = onReplaySpeedChange;
+window.setReplaySpeedPreset = setReplaySpeedPreset;
+window.resetReplayZoom = resetReplayZoom;
+window.setReplayGraphMode = setReplayGraphMode;
+window.setReplayThreshold = setReplayThreshold;
 window.exportReplayVisibleCsv = exportReplayVisibleCsv;

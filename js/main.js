@@ -102,14 +102,18 @@ function fetchAllData() {
     if (window.fetchImuCloudLogs) window.fetchImuCloudLogs();
 }
 
+/*
+ * Breadcrumb: 2026-09-28 20:05 - Fixed SyntaxError duplicate watchdog block in window.onload
+ * [CRITICAL BUGFIX FLAG - RESTORE EXECUTION OF MAIN ENGINE]:
+ * Removed dangling duplicated setInterval block that threw a fatal SyntaxError crashing entire runtime.
+ */
 window.onload = () => {
     if (window.init3D) window.init3D();
     initRealtimeChannel();
-    if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs(); // <--- NEU
+    if (window.subscribeToBatteryLogs) window.subscribeToBatteryLogs();
     fetchAllData();
 
-
-    // [BUGFIX]: Zeichnet das Koordinatengitter sofort beim Laden,
+    // Zeichnet das Koordinatengitter sofort beim Laden,
     // noch bevor das erste Sensorpaket aus der Cloud eintrifft.
     setTimeout(() => {
         if (window.drawAccGraphs) window.drawAccGraphs();
@@ -158,6 +162,7 @@ window.onload = () => {
             }
         }
     }, 1000);
+};
 
         // 2. 3D-Tab ein- / ausblenden
         if (isStreaming && !wasStreaming) {

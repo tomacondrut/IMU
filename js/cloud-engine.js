@@ -1186,6 +1186,11 @@ function handleSessionAuthSubmit(e) {
 }
 
 // Bereinigtes Löschen: Kein prompt() mehr, sondern einfaches confirm() bei entsperrtem Schloss
+/*
+ * Breadcrumb: 2026-09-28 20:25 - Normalized Storage Path on Deletion
+ * [CRITICAL BUGFIX FLAG - STORAGE PATH NORMALIZATION]:
+ * Strips leading slashes and redundant bucket prefixes before calling Supabase Storage remove.
+ */
 async function deleteImuCloudFile(filePath, fileName) {
     if (!isSessionUnlocked()) {
         openSessionAuthModal();
@@ -1197,7 +1202,13 @@ async function deleteImuCloudFile(filePath, fileName) {
     }
 
     try {
-        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([filePath]);
+        // Pfad für Supabase Storage normalisieren (keine führenden Slashes, kein doppeltes imu-logs/)
+        let cleanStoragePath = (filePath || '').replace(/^\/+/, '');
+        if (cleanStoragePath.startsWith('imu-logs/')) {
+            cleanStoragePath = cleanStoragePath.substring(9);
+        }
+
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([cleanStoragePath]);
         if (sErr) throw sErr;
 
         const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
@@ -1209,6 +1220,8 @@ async function deleteImuCloudFile(filePath, fileName) {
         }
 
         currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
+        window.currentDeviceFiles = currentDeviceFiles;
+
         const parts = filePath.split('/');
         const activeDateStr = parts.find(p => /^\d{4}-\d{2}-\d{2}$/.test(p)) || parts[1] || '';
 
