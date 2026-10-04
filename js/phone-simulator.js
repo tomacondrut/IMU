@@ -319,3 +319,34 @@ function startSimWaveAnimation() {
         t += 0.15;
     }, 50);
 }
+
+/*
+* Breadcrumb: 2026-10-04 16:45 - Phone Simulator LTE Toggle & Power-Down Controller
+* [CRITICAL FEATURE - SIMULATOR PARITY WITH DASHBOARD_PAGE]:
+* 1. toggleSimLteModule(): Replicates the toggleLteModule() portal mechanism.
+* 2. Visualizes active (#009B4C) vs. deactivated (#ef4444) modem state.
+* 3. Appends battery-saving power-down logs to simulated phone console.
+* Dismissed: Static unclickable text label in simulator screen.
+*/
+let simLteModuleActive = true;
+
+function toggleSimLteModule() {
+    simLteModuleActive = !simLteModuleActive;
+    const btn = document.getElementById('sim-btn-lte-toggle');
+    if (btn) {
+        btn.innerText = simLteModuleActive ? 'LTE: AKTIV' : 'LTE: DEAKTIVIERT';
+        btn.className = simLteModuleActive
+            ? 'bg-green-700 hover:bg-green-800 text-white font-bold px-2.5 py-0.5 rounded text-[9px] transition shadow-sm'
+            : 'bg-red-600 hover:bg-red-700 text-white font-bold px-2.5 py-0.5 rounded text-[9px] transition shadow-sm';
+    }
+
+    const cEl = document.getElementById('sim-phone-console');
+    if (cEl) {
+        if (!simLteModuleActive) {
+            cEl.innerText += '\n[CONFIG] LTE-Modul über Web-Dashboard deaktiviert & stromlos geschaltet (Akkuschonung aktiv).';
+        } else {
+            cEl.innerText += '\n[CONFIG] LTE-Modul über Web-Dashboard reaktiviert.';
+        }
+        cEl.scrollTop = cEl.scrollHeight;
+    }
+}
