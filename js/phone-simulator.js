@@ -350,3 +350,40 @@ function toggleSimLteModule() {
         cEl.scrollTop = cEl.scrollHeight;
     }
 }
+
+/*
+* Breadcrumb: 2026-10-04 17:35 - Simulator Button Highlighting & Direct Deep-Links
+* [CRITICAL FEATURE - INTERACTIVE SUPPORT GUIDE FEEDBACK]:
+* 1. highlightSimLteTest(): Switches to 'conn' tab, smoothly scrolls to 'sim-btn-test-lte',
+*    and flashes a pulsing yellow ring around the button so the user sees where to tap.
+* 2. highlightSimLteToggle(): Switches to 'conn' tab, smoothly scrolls to 'sim-btn-lte-toggle',
+*    and pulses a highlight ring.
+*/
+
+function highlightSimLteTest() {
+    switchSimPhoneTab('conn');
+    setTimeout(() => {
+        const btn = document.getElementById('sim-btn-test-lte');
+        if (btn) {
+            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            btn.classList.add('ring-4', 'ring-amber-400', 'scale-105');
+            setTimeout(() => {
+                btn.classList.remove('ring-4', 'ring-amber-400', 'scale-105');
+            }, 1800);
+        }
+    }, 100);
+}
+
+function highlightSimLteToggle() {
+    switchSimPhoneTab('conn');
+    setTimeout(() => {
+        const btn = document.getElementById('sim-btn-lte-toggle');
+        if (btn) {
+            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            btn.classList.add('ring-4', 'ring-amber-400', 'scale-105');
+            setTimeout(() => {
+                btn.classList.remove('ring-4', 'ring-amber-400', 'scale-105');
+            }, 1800);
+        }
+    }, 100);
+}
