@@ -1045,7 +1045,10 @@
 
                                 <div class="grid grid-cols-2 gap-1.5 pt-1">
                                     <button type="button" class="bg-green-700 text-white font-bold py-1.5 rounded text-[10px]">SIM Speichern</button>
-                                    <button type="button" onclick="simTriggerTest()" class="bg-blue-600 text-white font-bold py-1.5 rounded text-[10px]">⚡ LTE Testen</button>
+                                    <button type="button" id="sim-btn-test-lte" onclick="simTriggerTest()"
+                                            class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 rounded text-[10px] transition-all duration-200 shadow-sm">
+                                        ⚡ LTE Testen
+                                    </button>
                                 </div>
                             </div>
 
@@ -1153,6 +1156,14 @@
          2. Fallback path (No LTE): 1. Turn LTE off for battery save -> 2. Optional Wi-Fi provisioning.
          3. Field operation: Periodic double-tap sync trigger.
          4. Live verification: Check data ingress & battery status directly on GitHub Pages portal. -->
+            <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & INTERAKTIVE SCHNELL-NAVIGATION -->
+            <!-- Breadcrumb: 2026-10-04 17:35 - Interactive Guide Links & Button Highlighting
+         [CRITICAL FEATURE - DEEP SIMULATOR LINKING & GITHUB PAGES INTEGRATION]:
+         1. Portal ingress updated to 'http://st.ag/' or 'http://10.10.10.1/'.
+         2. Quicknav '1. LTE-Test ausführen' triggers highlightSimLteTest() (flashes yellow ring on button).
+         3. 'Direkt ins Terminal wechseln' links directly to terminal tab.
+         4. Step A links to connection tab, and 'DEAKTIVIERT' toggles the simulator modem button.
+         5. Step C links directly to 'https://tomacondrut.github.io/IMU/' for data verification. -->
             <div class="w-full lg:w-96 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
                 <div class="space-y-3.5">
                     <!-- Header -->
@@ -1171,29 +1182,29 @@
                         </span>
                         <p>1. Taster <strong>1.5 s halten</strong> (LEDs: Cyan / WLAN-Welle).</p>
                         <p>2. Smartphone mit WLAN <strong>STAG IMU-1</strong> verbinden (<code class="font-bold">stag2026</code>).</p>
-                        <p>3. Browser öffnen: <code class="font-bold">http://10.10.10.1/</code></p>
+                        <p>3. Browser öffnen: <code class="font-bold">http://st.ag/</code> oder <code class="font-bold">http://10.10.10.1/</code></p>
                     </div>
 
                     <!-- Schnellnavigation / Direkt-Sprünge -->
                     <div class="space-y-1.5">
                         <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Schnell-Navigation</span>
 
-                        <button type="button" onclick="switchSimPhoneTab('conn')"
-                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                        <button type="button" onclick="highlightSimLteTest()"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between group">
                             <span>1. LTE-Test ausführen</span>
-                            <span class="text-blue-700 font-bold text-[10px]">Konnektivität ➔</span>
+                            <span class="text-blue-700 font-bold text-[10px] group-hover:translate-x-0.5 transition-transform">Konnektivität ➔</span>
                         </button>
 
                         <button type="button" onclick="switchSimPhoneTab('term')"
-                                class="w-full text-left bg-purple-50/70 hover:bg-purple-100/70 border border-purple-200 p-2 rounded-lg text-xs font-medium text-purple-900 transition flex items-center justify-between">
+                                class="w-full text-left bg-purple-50/70 hover:bg-purple-100/70 border border-purple-200 p-2 rounded-lg text-xs font-medium text-purple-900 transition flex items-center justify-between group">
                             <span>2. Seriellen Log prüfen</span>
-                            <span class="text-purple-700 font-bold text-[10px]">Terminal ➔</span>
+                            <span class="text-purple-700 font-bold text-[10px] group-hover:translate-x-0.5 transition-transform">Terminal ➔</span>
                         </button>
 
                         <button type="button" onclick="unlockAndShowWifiSetup()"
-                                class="w-full text-left bg-emerald-50/80 hover:bg-emerald-100/80 border border-emerald-200 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between">
+                                class="w-full text-left bg-emerald-50/80 hover:bg-emerald-100/80 border border-emerald-200 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between group">
                             <span>3. Fallback: WLAN eintragen (optional)</span>
-                            <span class="text-emerald-700 font-bold text-[10px]">WLAN ➔</span>
+                            <span class="text-emerald-700 font-bold text-[10px] group-hover:translate-x-0.5 transition-transform">WLAN ➔</span>
                         </button>
                     </div>
 
@@ -1203,8 +1214,8 @@
                             <span>📶</span> 1. Standard: LTE-Test & Log-Prüfung
                         </span>
                         <p class="text-slate-600 leading-relaxed">
-                            1. Im Reiter <strong>Konnektivität</strong> auf <strong class="text-blue-700">⚡ LTE Testen</strong> tippen.<br>
-                            2. <strong>Direkt ins Terminal wechseln</strong> und den Verbindungsaufbau verifizieren:
+                            1. Im Reiter <strong>Konnektivität</strong> auf <button type="button" onclick="highlightSimLteTest()" class="text-blue-700 hover:text-blue-900 font-bold underline">⚡ LTE Testen</button> tippen.<br>
+                            2. <button type="button" onclick="switchSimPhoneTab('term')" class="text-purple-700 hover:text-purple-900 underline font-bold inline-flex items-center gap-0.5">Direkt ins Terminal wechseln ➔</button> und den Verbindungsaufbau verifizieren:
                         </p>
                         <div class="bg-slate-900 text-green-400 p-2 rounded font-mono text-[9px] leading-tight space-y-0.5">
                             <div>+CPIN: READY &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ SIM entsperrt</div>
@@ -1227,15 +1238,27 @@
 
                         <!-- A. LTE Abschalten -->
                         <div class="bg-white p-2 rounded border border-amber-200">
-                            <span class="font-bold text-slate-900 block">Schritt A: LTE-Modul abschalten (Akkuschutz)</span>
-                            <p class="text-slate-600 text-[10px] mt-0.5">
-                                Im Reiter <em>Konnektivität</em> das LTE-Modul auf <strong class="text-red-600">DEAKTIVIERT</strong> schalten. Das trennt das Modem vom Strom und verhindert, dass endlose Suchläufe die Batterie leeren.
+                            <button type="button" onclick="highlightSimLteToggle()"
+                                    class="font-bold text-slate-900 hover:text-amber-800 underline text-left block text-[11px]">
+                                Schritt A: LTE-Modul abschalten (Akkuschutz) ➔
+                            </button>
+                            <p class="text-slate-600 text-[10px] mt-1 leading-relaxed">
+                                Im Reiter <em>Konnektivität</em> das LTE-Modul auf
+                                <button type="button" onclick="toggleSimLteModule()"
+                                        class="underline font-bold text-red-600 hover:text-red-800 cursor-pointer bg-red-50 hover:bg-red-100 px-1.5 py-0.5 rounded border border-red-300 transition"
+                                        title="Hier klicken um LTE im Simulator umzuschalten">
+                                    DEAKTIVIERT
+                                </button>
+                                schalten. Das trennt das Modem vom Strom und verhindert, dass endlose Suchläufe die Batterie leeren.
                             </p>
                         </div>
 
                         <!-- B. Lokales WLAN & Taster-Doppeltippen -->
                         <div class="bg-white p-2 rounded border border-amber-200 space-y-1">
-                            <span class="font-bold text-slate-900 block">Schritt B: Lokales WLAN & Taster-Doppeltipp</span>
+                            <button type="button" onclick="unlockAndShowWifiSetup()"
+                                    class="font-bold text-slate-900 hover:text-emerald-800 underline text-left block text-[11px]">
+                                Schritt B: Lokales WLAN & Taster-Doppeltipp ➔
+                            </button>
                             <p class="text-slate-600 text-[10px] leading-relaxed">
                                 • Im Portal unter <strong>Admin (<code class="font-bold">stag2026</code>)</strong> das Firmen-WLAN oder einen Smartphone-Hotspot hinterlegen.<br>
                                 • <strong>Im Messbetrieb vor Ort:</strong> Periodisch einen <strong>Doppelklick auf den Taster</strong> ausführen. Das Board verbindet sich mit dem bekannten WLAN und lädt den gesamten Mess-Rückstau in die Cloud.
@@ -1244,9 +1267,13 @@
 
                         <!-- C. Verifikation auf GitHub Pages -->
                         <div class="bg-emerald-50 border border-emerald-300 p-2 rounded text-[10px] text-emerald-950">
-                            <span class="font-bold text-emerald-900 block">Schritt C: Live-Prüfung auf GitHub Pages:</span>
-                            <p class="text-emerald-800 mt-0.5 leading-relaxed">
-                                Nach dem Doppelklick das Dashboard auf <strong>GitHub Pages</strong> öffnen:
+                            <a href="https://tomacondrut.github.io/IMU/" target="_blank" rel="noopener noreferrer"
+                               class="font-bold text-emerald-900 hover:text-emerald-700 underline flex items-center justify-between">
+                                <span>Schritt C: Live-Prüfung auf GitHub Pages</span>
+                                <span class="text-[11px]">↗</span>
+                            </a>
+                            <p class="text-emerald-800 mt-1 leading-relaxed">
+                                Nach dem Doppelklick das Dashboard auf <a href="https://tomacondrut.github.io/IMU/" target="_blank" rel="noopener noreferrer" class="underline font-bold text-emerald-900 hover:text-black">tomacondrut.github.io/IMU/</a> öffnen:
                                 <br>1. Im Reiter <strong>Cloud IMU</strong> erscheint der übertragene Mess-Chunk in der Tageszeitleiste.
                                 <br>2. Im Header aktualisiert sich der Zeitstempel und die Batteriespannung.
                             </p>
