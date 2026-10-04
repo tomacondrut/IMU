@@ -140,6 +140,14 @@ function switchSimPhoneTab(tabKey) {
     if (scrollContainer) scrollContainer.scrollTop = 0;
 }
 
+/*
+ * Breadcrumb: 2026-10-04 12:55 - Synchronized Wi-Fi Provisioning in Phone Simulator
+ * [CRITICAL FEATURE - PORTAL PARITY]:
+ * 1. toggleSimPhoneLockModal / submitSimPhoneAuth toggle both #sim-admin-data-sec and #sim-admin-wifi-sec.
+ * 2. unlockAndShowWifiSetup(): 1-Click Support guide jump that unlocks admin and scrolls to Wi-Fi.
+ * 3. simSaveWifi(): Replicates websocket payload {wifi_ssid, wifi_pass} and writes /settings/wifi.json to terminal log.
+ */
+
 function toggleSimPhoneLockModal() {
     const dialog = document.getElementById('sim-auth-dialog');
     if (!dialog) return;
@@ -149,6 +157,8 @@ function toggleSimPhoneLockModal() {
         simPhoneIsAdmin = false;
         document.getElementById('sim-lock-btn').innerText = '🔒';
         document.getElementById('sim-admin-data-sec')?.classList.add('hidden');
+        document.getElementById('sim-admin-wifi-sec')?.classList.add('hidden');
+        document.getElementById('sim-wifi-locked-hint')?.classList.remove('hidden');
         return;
     }
 
@@ -163,9 +173,68 @@ function submitSimPhoneAuth() {
         simPhoneIsAdmin = true;
         document.getElementById('sim-lock-btn').innerText = '🔓';
         document.getElementById('sim-admin-data-sec')?.classList.remove('hidden');
+        document.getElementById('sim-admin-wifi-sec')?.classList.remove('hidden');
+        document.getElementById('sim-wifi-locked-hint')?.classList.add('hidden');
         document.getElementById('sim-auth-dialog')?.classList.add('hidden');
+
+        // Logeintrag im Simulator-Terminal
+        const cEl = document.getElementById('sim-phone-console');
+        if (cEl) {
+            cEl.innerText += '\n[AUTH] Admin-Modus autorisiert (stag2026). Vertrauliche Menüs freigegeben.';
+        }
     } else {
         document.getElementById('sim-auth-err')?.classList.remove('hidden');
+    }
+}
+
+// Direktsprung aus dem Support-Leitfaden: Entsperrt Admin sofort und öffnet den WLAN-Bereich
+function unlockAndShowWifiSetup() {
+    switchSimPhoneTab('conn');
+    simPhoneIsAdmin = true;
+    document.getElementById('sim-lock-btn').innerText = '🔓';
+    document.getElementById('sim-admin-data-sec')?.classList.remove('hidden');
+    document.getElementById('sim-admin-wifi-sec')?.classList.remove('hidden');
+    document.getElementById('sim-wifi-locked-hint')?.classList.add('hidden');
+
+    // Nach unten zum WLAN-Formular scrollen
+    setTimeout(() => {
+        const wifiSec = document.getElementById('sim-admin-wifi-sec');
+        if (wifiSec) wifiSec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+}
+
+function toggleSimWifiPassVisibility() {
+    const passInput = document.getElementById('sim-wifi-pass');
+    if (!passInput) return;
+    passInput.type = passInput.type === 'password' ? 'text' : 'password';
+}
+
+function simSaveWifi() {
+    const ssid = document.getElementById('sim-wifi-ssid')?.value.trim();
+    const pass = document.getElementById('sim-wifi-pass')?.value;
+    const statEl = document.getElementById('sim-wifi-save-status');
+
+    if (!ssid) {
+        if (statEl) {
+            statEl.innerText = 'SSID darf nicht leer sein!';
+            statEl.className = 'text-[10px] text-red-600 font-bold text-center';
+            statEl.classList.remove('hidden');
+        }
+        return;
+    }
+
+    if (statEl) {
+        statEl.innerText = 'WLAN-Zugang auf SD gespeichert!';
+        statEl.className = 'text-[10px] text-green-700 font-bold text-center';
+        statEl.classList.remove('hidden');
+        setTimeout(() => statEl.classList.add('hidden'), 4000);
+    }
+
+    // Terminal im Simulator nachführen
+    const cEl = document.getElementById('sim-phone-console');
+    if (cEl) {
+        cEl.innerText += `\n[WIFI SD] Zugangsdaten in /settings/wifi.json gesichert: SSID='${ssid}'`;
+        cEl.scrollTop = cEl.scrollHeight;
     }
 }
 
