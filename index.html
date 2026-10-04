@@ -1149,21 +1149,17 @@
                 </div>
             </div>
 
-            <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & SCHNELL-NAVIGATION -->
-            <!-- Breadcrumb: 2026-10-04 17:15 - Restructured Support Guide Workflow
-         [CRITICAL FEATURE - LOGICAL TROUBLESHOOTING SEQUENCE]:
-         1. Sequence: 1. LTE Test -> 2. Terminal Log Check (Standard path finished if OK).
-         2. Fallback path (No LTE): 1. Turn LTE off for battery save -> 2. Optional Wi-Fi provisioning.
-         3. Field operation: Periodic double-tap sync trigger.
-         4. Live verification: Check data ingress & battery status directly on GitHub Pages portal. -->
             <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & INTERAKTIVE SCHNELL-NAVIGATION -->
-            <!-- Breadcrumb: 2026-10-04 17:35 - Interactive Guide Links & Button Highlighting
-         [CRITICAL FEATURE - DEEP SIMULATOR LINKING & GITHUB PAGES INTEGRATION]:
-         1. Portal ingress updated to 'http://st.ag/' or 'http://10.10.10.1/'.
-         2. Quicknav '1. LTE-Test ausführen' triggers highlightSimLteTest() (flashes yellow ring on button).
-         3. 'Direkt ins Terminal wechseln' links directly to terminal tab.
-         4. Step A links to connection tab, and 'DEAKTIVIERT' toggles the simulator modem button.
-         5. Step C links directly to 'https://tomacondrut.github.io/IMU/' for data verification. -->
+            <!-- Breadcrumb: 2026-10-04 17:55 - Shift Lock Guidance Strictly to Wi-Fi Fallback Step
+         [CRITICAL WORKFLOW REFACTORING - LEAN INGRESS & CONTEXTUAL UNLOCK]:
+         1. Ingress kept purely operational (Turn on AP -> Connect Wi-Fi -> Open browser).
+         2. Step 1 (LTE-Test) requires zero authentication and finishes standard path if OK.
+         3. Step 2 (Fallback when LTE missing):
+            - Schritt A: Deactivate LTE module for battery conservation.
+            - Schritt B: ONLY HERE the lock mechanism is introduced: explains position (top-right next to ONLINE),
+              password 'stag2026', and configuring local Wi-Fi / smartphone hotspot + periodic double-tap.
+            - Schritt C: Live check on GitHub Pages.
+            - Schritt D: Physical SD extraction. -->
             <div class="w-full lg:w-96 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
                 <div class="space-y-3.5">
                     <!-- Header -->
@@ -1175,9 +1171,9 @@
                         <button type="button" onclick="closePhoneSimulatorModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
                     </div>
 
-                    <!-- Vorbereitung: Portal-Einstieg -->
-                    <div class="bg-blue-50/80 border border-blue-200 p-2.5 rounded-lg text-[11px] text-blue-900 leading-snug">
-                        <span class="font-bold flex items-center gap-1 text-blue-950 mb-1">
+                    <!-- Vorbereitung: Portal-Einstieg (ohne Login-Erwähnung) -->
+                    <div class="bg-blue-50/80 border border-blue-200 p-2.5 rounded-lg text-[11px] text-blue-900 leading-snug space-y-1">
+                        <span class="font-bold flex items-center gap-1 text-blue-950">
                             <span>📱</span> Portal-Einstieg vor Ort:
                         </span>
                         <p>1. Taster <strong>1.5 s halten</strong> (LEDs: Cyan / WLAN-Welle).</p>
@@ -1191,7 +1187,7 @@
 
                         <button type="button" onclick="highlightSimLteTest()"
                                 class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between group">
-                            <span>1. LTE-Test ausführen</span>
+                            <span>1. LTE-Test ausführen (kein Login nötig)</span>
                             <span class="text-blue-700 font-bold text-[10px] group-hover:translate-x-0.5 transition-transform">Konnektivität ➔</span>
                         </button>
 
@@ -1203,7 +1199,7 @@
 
                         <button type="button" onclick="unlockAndShowWifiSetup()"
                                 class="w-full text-left bg-emerald-50/80 hover:bg-emerald-100/80 border border-emerald-200 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between group">
-                            <span>3. Fallback: WLAN eintragen (optional)</span>
+                            <span>3. Fallback: WLAN eintragen</span>
                             <span class="text-emerald-700 font-bold text-[10px] group-hover:translate-x-0.5 transition-transform">WLAN ➔</span>
                         </button>
                     </div>
@@ -1214,16 +1210,17 @@
                             <span>📶</span> 1. Standard: LTE-Test & Log-Prüfung
                         </span>
                         <p class="text-slate-600 leading-relaxed">
+                            Der LTE-Test erfordert <strong>keine Passworteingabe</strong>:<br>
                             1. Im Reiter <strong>Konnektivität</strong> auf <button type="button" onclick="highlightSimLteTest()" class="text-blue-700 hover:text-blue-900 font-bold underline">⚡ LTE Testen</button> tippen.<br>
                             2. <button type="button" onclick="switchSimPhoneTab('term')" class="text-purple-700 hover:text-purple-900 underline font-bold inline-flex items-center gap-0.5">Direkt ins Terminal wechseln ➔</button> und den Verbindungsaufbau verifizieren:
                         </p>
                         <div class="bg-slate-900 text-green-400 p-2 rounded font-mono text-[9px] leading-tight space-y-0.5">
-                            <div>+CPIN: READY &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ SIM entsperrt</div>
+                            <div>+CPIN: READY &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ SIM betriebsbereit</div>
                             <div>+CEREG: 0,1 / 0,5 &nbsp;&nbsp;→ Cat-M1 eingebucht</div>
-                            <div>HTTP 200 / 201 &nbsp;&nbsp;&nbsp;&nbsp;→ Upload erfolgreich</div>
+                            <div>HTTP 200 / 201 &nbsp;&nbsp;&nbsp;&nbsp;→ Upload bestätigt</div>
                         </div>
                         <p class="text-emerald-700 font-semibold text-[10px] pt-0.5">
-                            ✓ Wenn Test erfolgreich: Fertig! Das Gerät sendet seine Daten künftig vollautomatisch per Mobilfunk.
+                            ✓ Wenn Test erfolgreich: Vorgang abgeschlossen! Das Gerät synchronisiert künftig vollautomatisch per Mobilfunk.
                         </p>
                     </div>
 
@@ -1233,7 +1230,7 @@
                             <span>⚠️</span> 2. Fallback: Kein LTE-Empfang (CSQ 99 / Fehler)
                         </span>
                         <p class="text-amber-900/90 leading-relaxed">
-                            Ohne Mobilfunk ist <strong>keine automatische Hintergrundübertragung möglich</strong>. In diesem Fall:
+                            Ohne Mobilfunkverbindung ist <strong>keine automatische Hintergrundübertragung möglich</strong>. In diesem Fall:
                         </p>
 
                         <!-- A. LTE Abschalten -->
@@ -1249,19 +1246,31 @@
                                         title="Hier klicken um LTE im Simulator umzuschalten">
                                     DEAKTIVIERT
                                 </button>
-                                schalten. Das trennt das Modem vom Strom und verhindert, dass endlose Suchläufe die Batterie leeren.
+                                schalten. Das trennt das Modem hardwareseitig vom Strom und verhindert, dass endlose Suchzyklen den Akku leeren.
                             </p>
                         </div>
 
-                        <!-- B. Lokales WLAN & Taster-Doppeltippen -->
-                        <div class="bg-white p-2 rounded border border-amber-200 space-y-1">
-                            <button type="button" onclick="unlockAndShowWifiSetup()"
-                                    class="font-bold text-slate-900 hover:text-emerald-800 underline text-left block text-[11px]">
-                                Schritt B: Lokales WLAN & Taster-Doppeltipp ➔
-                            </button>
+                        <!-- B. Lokales WLAN & Schlösschen-Entsperrung -->
+                        <div class="bg-white p-2 rounded border border-amber-200 space-y-1.5">
+                            <span class="font-bold text-slate-900 block text-[11px]">
+                                Schritt B: Portal entsperren & lokales WLAN hinterlegen
+                            </span>
                             <p class="text-slate-600 text-[10px] leading-relaxed">
-                                • Im Portal unter <strong>Admin (<code class="font-bold">stag2026</code>)</strong> das Firmen-WLAN oder einen Smartphone-Hotspot hinterlegen.<br>
-                                • <strong>Im Messbetrieb vor Ort:</strong> Periodisch einen <strong>Doppelklick auf den Taster</strong> ausführen. Das Board verbindet sich mit dem bekannten WLAN und lädt den gesamten Mess-Rückstau in die Cloud.
+                                Um vertrauliche Netzwerkdaten einzutragen, muss das erweiterte Menü entsperrt werden:
+                            </p>
+                            <div class="bg-slate-50 p-2 rounded border border-slate-200 text-[10px] space-y-1">
+                                <p>
+                                    1. Oben rechts im weißen Header direkt neben der grünen Anzeige <strong>ONLINE</strong> auf das
+                                    <button type="button" onclick="highlightSimLock()" class="font-bold underline text-blue-700 hover:text-blue-900">
+                                        Schlösschen-Symbol (🔒) ➔
+                                    </button>
+                                    tippen.
+                                </p>
+                                <p>2. Im Dialog das Passwort <code class="font-bold">stag2026</code> eingeben und auf <em>Entsperren</em> tippen.</p>
+                                <p>3. Im Reiter <strong>Konnektivität</strong> erscheint nun der Abschnitt <em>„Vertrauliches WLAN konfigurieren“</em>: Hier Firmen-WLAN oder Smartphone-Hotspot eintragen und auf <em>„WLAN-Zugang auf SD sichern“</em> tippen.</p>
+                            </div>
+                            <p class="text-slate-600 text-[10px] leading-relaxed pt-0.5">
+                                • <strong>Im Messbetrieb vor Ort:</strong> Periodisch einen <strong>Doppelklick auf den Taster</strong> am Gerät ausführen. Das Board verbindet sich mit dem hinterlegten WLAN und lädt den gesamten Mess-Rückstau in die Cloud.
                             </p>
                         </div>
 
@@ -1273,9 +1282,9 @@
                                 <span class="text-[11px]">↗</span>
                             </a>
                             <p class="text-emerald-800 mt-1 leading-relaxed">
-                                Nach dem Doppelklick das Dashboard auf <a href="https://tomacondrut.github.io/IMU/" target="_blank" rel="noopener noreferrer" class="underline font-bold text-emerald-900 hover:text-black">tomacondrut.github.io/IMU/</a> öffnen:
+                                Nach dem Doppeltippen das Dashboard auf <a href="https://tomacondrut.github.io/IMU/" target="_blank" rel="noopener noreferrer" class="underline font-bold text-emerald-900 hover:text-black">tomacondrut.github.io/IMU/</a> öffnen:
                                 <br>1. Im Reiter <strong>Cloud IMU</strong> erscheint der übertragene Mess-Chunk in der Tageszeitleiste.
-                                <br>2. Im Header aktualisiert sich der Zeitstempel und die Batteriespannung.
+                                <br>2. Im Header aktualisieren sich Zeitstempel und Batteriespannung.
                             </p>
                         </div>
 
