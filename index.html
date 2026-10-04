@@ -998,7 +998,16 @@
                         </div>
 
                         <!-- TAB 3: KONNEKTIVITÄT -->
+                        <!--
+      Breadcrumb: 2026-10-04 12:50 - Captive Portal Parity: Confidential Wi-Fi Provisioning
+      [CRITICAL FEATURE - TRUSTED WI-FI CREDENTIAL MANAGEMENT IN SIMULATOR]:
+      1. Replicates #admin-wifi-sec from ESP32 DASHBOARD_PAGE 1:1.
+      2. Gated behind admin authentication (stag2026) via #sim-lock-btn.
+      3. Displays guidance hint when locked and reveals SSID / Pass inputs upon unlocking.
+      4. Includes interactive 'WLAN-Zugang auf SD sichern' simulation writing to /settings/wifi.json.
+    -->
                         <div id="sim-tab-conn" class="space-y-2.5 hidden">
+                            <!-- Mobilfunk & SIM Karte -->
                             <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px]">
                                 <span class="text-[10px] font-bold text-slate-700 uppercase block">Mobilfunk & SIM-Karte (Schweiz)</span>
 
@@ -1040,6 +1049,41 @@
                                 </div>
                             </div>
 
+                            <!-- NEU: Vertrauliches WLAN konfigurieren (Original Parität zu DASHBOARD_PAGE #admin-wifi-sec) -->
+                            <div id="sim-admin-wifi-sec" class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px] hidden">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-[10px] font-bold text-slate-700 uppercase">Vertrauliches WLAN konfigurieren</span>
+                                    <span class="text-[9px] bg-green-100 text-green-800 font-bold px-1.5 py-0.5 rounded">Admin aktiv</span>
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-slate-600 block mb-0.5">WLAN SSID (Netzwerkname)</label>
+                                    <input type="text" id="sim-wifi-ssid" placeholder="z. B. STAG-Guest oder Firmen-WLAN"
+                                           class="w-full bg-white border border-slate-300 rounded p-1 text-[10px] font-mono outline-none focus:border-green-600">
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-slate-600 block mb-0.5">WLAN Passwort</label>
+                                    <div class="relative">
+                                        <input type="password" id="sim-wifi-pass" placeholder="Netzwerkschlüssel"
+                                               class="w-full bg-white border border-slate-300 rounded p-1 pr-6 text-[10px] font-mono outline-none focus:border-green-600">
+                                        <button type="button" onclick="toggleSimWifiPassVisibility()"
+                                                class="absolute right-1.5 top-1 text-slate-400 hover:text-slate-600 text-[10px] select-none">
+                                            👁️
+                                        </button>
+                                    </div>
+                                </div>
+                                <button type="button" onclick="simSaveWifi()"
+                                        class="w-full bg-green-700 hover:bg-green-800 text-white font-bold py-1.5 rounded text-[10px] transition shadow-sm">
+                                    WLAN-Zugang auf SD sichern
+                                </button>
+                                <div id="sim-wifi-save-status" class="text-[10px] text-green-700 font-bold text-center hidden"></div>
+                            </div>
+
+                            <!-- Schlosshinweis, wenn Admin-Modus noch nicht entsperrt ist -->
+                            <div id="sim-wifi-locked-hint" class="bg-slate-50 border border-dashed border-slate-300 p-2.5 rounded-lg text-center text-[10px] text-slate-500">
+                                🔒 <span>WLAN-Konfiguration ist geschützt. Oben auf das <strong>Schloss 🔒</strong> tippen (Passwort: <code class="font-bold text-slate-700">stag2026</code>).</span>
+                            </div>
+
+                            <!-- Telemetrie Übertragungsmodus -->
                             <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5 text-[11px]">
                                 <span class="text-[10px] font-bold text-slate-700 uppercase block">Telemetrie Übertragung</span>
                                 <div class="flex justify-between items-center">
@@ -1110,6 +1154,7 @@
                     </p>
 
                     <!-- Schnellnavigation / Sprungmarken -->
+                    <!-- Schnellnavigation / Sprungmarken -->
                     <div class="space-y-2 mb-4">
                         <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Schnell-Navigation</span>
                         <button type="button" onclick="switchSimPhoneTab('sensors')"
@@ -1119,8 +1164,13 @@
                         </button>
                         <button type="button" onclick="switchSimPhoneTab('conn')"
                                 class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
-                            <span>2. Schritt: APN eintragen & PIN sichern</span>
+                            <span>2a. Schritt: APN & SIM-PIN prüfen</span>
                             <span class="text-blue-700 font-bold text-[10px]">Konnektivität ➔</span>
+                        </button>
+                        <button type="button" onclick="unlockAndShowWifiSetup()"
+                                class="w-full text-left bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between">
+                            <span>2b. Schritt: Firmen-WLAN hinterlegen</span>
+                            <span class="text-emerald-700 font-bold text-[10px]">WLAN ➔</span>
                         </button>
                         <button type="button" onclick="switchSimPhoneTab('term')"
                                 class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
