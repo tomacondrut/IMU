@@ -119,6 +119,31 @@ button, select, input[type="range"] {
 	touch-action: none; /* Verhindert Gesten-Konflikte mit dem Browser-Scroll */
 }
 
+/*
+ * Breadcrumb: 2026-10-04 12:45 - Phone Simulator Frame & Mobile Modal Polish
+ * [CRITICAL BUGFIX & MOBILE OPTIMIZATION - IPHONE & ANDROID]:
+ * 1. Suppresses visible scrollbars in #sim-portal-scroll for realistic mobile app viewport look.
+ * 2. Extends 640px mobile modal query to include #sim-config-modal.
+ * 3. Adds responsive height & scroll containment to #phone-simulator-modal for small displays.
+ * 4. Dismissed code: rigid non-scrollable modal container cutting off simulator on <700px viewports.
+ */
+
+/* Nahtloses Smartphone-Feeling im Simulator (keine störenden Desktop-Scrollbalken) */
+#sim-portal-scroll {
+	-webkit-overflow-scrolling: touch;
+	scrollbar-width: none; /* Firefox */
+}
+
+	#sim-portal-scroll::-webkit-scrollbar {
+		display: none; /* Chrome, Safari, Edge */
+	}
+
+/* Scroll-Sicherung für den Simulator bei niedriger Bildschirmhöhe */
+#phone-simulator-modal {
+	overflow-y: auto;
+	-webkit-overflow-scrolling: touch;
+}
+
 /* Smartphone-Anpassungen (Bildschirme bis 640px) */
 @media (max-width: 640px) {
 	body {
@@ -134,10 +159,22 @@ button, select, input[type="range"] {
 
 	/* Modale randlos und scrollbar auf kleinen Displays */
 	#battery-modal > div,
-	#gps-modal > div {
+	#gps-modal > div,
+	#sim-config-modal > div {
 		max-height: 94vh;
 		width: 98vw;
 	}
+
+	/* Simulator auf Smartphones von zentriert auf fließend-scrollbar umstellen */
+	#phone-simulator-modal {
+		align-items: flex-start;
+		padding-top: 1rem;
+		padding-bottom: 2rem;
+	}
+
+		#phone-simulator-modal > div {
+			max-height: none;
+		}
 
 	/* Terminal-Drawer nutzt volle Bildschirmbreite */
 	#terminal-drawer {
