@@ -859,6 +859,15 @@
     <!-- ========================================================================== -->
     <!-- MODAL: INTERAKTIVER SMARTPHONE-SIMULATOR (CAPTIVE PORTAL PARITY)          -->
     <!-- ========================================================================== -->
+    <!-- ========================================================================== -->
+    <!-- MODAL: INTERAKTIVER SMARTPHONE-SIMULATOR (CAPTIVE PORTAL PARITY)          -->
+    <!-- Breadcrumb: 2026-10-04 16:50 - Purged Duplicate Tabs & Repaired Nesting   -->
+    <!-- [CRITICAL BUGFIX FLAG - ELIMINATE DUPLICATE DOM IDs & FIX TAB NESTING]:
+         1. Removed duplicated second half of phone simulator (auth dialog, terminal, duplicate hint).
+         2. Correctly closed #sim-tab-conn before opening #sim-tab-term.
+         3. Replaced static telemetry block with interactive #sim-btn-lte-toggle.
+         4. Kept support guide sidebar cleanly aligned side-by-side with phone frame. -->
+    <!-- ========================================================================== -->
     <div id="phone-simulator-modal" class="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4 hidden select-none">
         <div class="flex flex-col lg:flex-row items-center gap-5 max-h-[96vh]">
 
@@ -912,7 +921,6 @@
                         <!-- TAB 1: SENSOREN -->
                         <div id="sim-tab-sensors" class="space-y-2.5">
                             <div class="h-28 bg-[#dbe2ea] rounded-lg border border-slate-300 relative flex items-center justify-center overflow-hidden">
-                                <!-- Schematischer 3D Enclosure Simulator -->
                                 <div id="sim-3d-box" class="w-24 h-12 bg-slate-800 border-t-4 border-green-600 rounded shadow-lg transform transition-transform duration-200 flex items-center justify-center text-white text-[9px] font-mono">
                                     STAG IMU-01
                                 </div>
@@ -1078,7 +1086,7 @@
                                     Jetzt entsperren (stag2026)
                                 </button>
                             </div>
-                            <!-- Breadcrumb: 2026-10-04 16:45 - Interactive LTE Toggle in Phone Simulator -->
+
                             <!-- Telemetrie Übertragung mit interaktivem Abschalter zur Akkuschonung -->
                             <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5 text-[11px]">
                                 <span class="text-[10px] font-bold text-slate-700 uppercase block">Telemetrie Übertragung</span>
@@ -1095,17 +1103,17 @@
                                     </button>
                                 </div>
                             </div>
-
-                            <!-- TAB 4: TERMINAL -->
-                            <div id="sim-tab-term" class="space-y-2.5 hidden">
-                                <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5">
-                                    <div class="flex justify-between items-center">
-                                        <span class="text-[10px] font-bold text-slate-700 uppercase">Live Serieller Log</span>
-                                        <div class="flex gap-1 text-[9px]">
-                                            <button type="button" onclick="clearSimConsole()" class="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded">Löschen</button>
-                                        </div>
+                        </div> <!-- Ende #sim-tab-conn -->
+                        <!-- TAB 4: TERMINAL -->
+                        <div id="sim-tab-term" class="space-y-2.5 hidden">
+                            <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-[10px] font-bold text-slate-700 uppercase">Live Serieller Log</span>
+                                    <div class="flex gap-1 text-[9px]">
+                                        <button type="button" onclick="clearSimConsole()" class="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded">Löschen</button>
                                     </div>
-                                    <pre id="sim-phone-console" class="p-2 font-mono text-[9px] text-green-700 bg-slate-50 border border-slate-200 rounded h-64 overflow-y-auto leading-relaxed select-text">[BOOT] STAG IMU Firmware 3.0.1
+                                </div>
+                                <pre id="sim-phone-console" class="p-2 font-mono text-[9px] text-green-700 bg-slate-50 border border-slate-200 rounded h-64 overflow-y-auto leading-relaxed select-text">[BOOT] STAG IMU Firmware 3.0.1
 [POWER] USB-Netzteil aktiv (Laden)
 [BNO085] Reports 0x08 & 0x04 synchronisiert (25 Hz)
 [SD INFO] SD FatFS gemountet (16 MHz)
@@ -1113,122 +1121,115 @@
 [WIFI] Smartphone verbunden (10.10.10.1)
 [LTE TEST] Einbuchung Cat-M1 erfolgreich (CSQ 22)
 [HTTP] Auslieferung Dashboard an Client...</pre>
+                            </div>
+                        </div> <!-- Ende #sim-tab-term -->
+                        <!-- Einziges Simuliertes Admin-Passwort Modal im Smartphone mit Enter-Support -->
+                        <div id="sim-auth-dialog" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 hidden">
+                            <div class="bg-white rounded-lg p-3 w-full max-w-[240px] shadow-xl text-center space-y-2">
+                                <span class="text-xs font-bold text-slate-800 block">Erweitertes Menü</span>
+                                <input type="password" id="sim-admin-pass-input" placeholder="Passwort (stag2026)"
+                                       onkeydown="if(event.key==='Enter') submitSimPhoneAuth()"
+                                       class="w-full bg-slate-50 border border-slate-300 rounded p-1.5 text-xs text-center outline-none focus:border-green-600">
+                                <div id="sim-auth-err" class="text-[10px] text-red-600 font-bold hidden">Ungültiges Passwort!</div>
+                                <div class="flex gap-1.5">
+                                    <button type="button" onclick="submitSimPhoneAuth()" class="flex-1 bg-green-700 text-white font-bold py-1 rounded text-xs hover:opacity-90 transition">Entsperren</button>
+                                    <button type="button" onclick="toggleSimPhoneLockModal()" class="px-2 py-1 bg-slate-200 text-slate-700 rounded text-xs hover:bg-slate-300 transition">Abbruch</button>
                                 </div>
                             </div>
-
-                            <!-- Einziges Simuliertes Admin-Passwort Modal im Smartphone mit Enter-Support -->
-                            <div id="sim-auth-dialog" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 hidden">
-                                <div class="bg-white rounded-lg p-3 w-full max-w-[240px] shadow-xl text-center space-y-2">
-                                    <span class="text-xs font-bold text-slate-800 block">Erweitertes Menü</span>
-                                    <input type="password" id="sim-admin-pass-input" placeholder="Passwort (stag2026)"
-                                           onkeydown="if(event.key==='Enter') submitSimPhoneAuth()"
-                                           class="w-full bg-slate-50 border border-slate-300 rounded p-1.5 text-xs text-center outline-none focus:border-green-600">
-                                    <div id="sim-auth-err" class="text-[10px] text-red-600 font-bold hidden">Ungültiges Passwort!</div>
-                                    <div class="flex gap-1.5">
-                                        <button type="button" onclick="submitSimPhoneAuth()" class="flex-1 bg-green-700 text-white font-bold py-1 rounded text-xs hover:opacity-90 transition">Entsperren</button>
-                                        <button type="button" onclick="toggleSimPhoneLockModal()" class="px-2 py-1 bg-slate-200 text-slate-700 rounded text-xs hover:bg-slate-300 transition">Abbruch</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                        </div> <!-- Ende #sim-portal-scroll -->
-                        <!-- Smartphone Home Bar -->
-                        <div class="h-3 bg-white flex justify-center items-center shrink-0">
-                            <div class="w-24 h-1 bg-slate-300 rounded-full"></div>
                         </div>
+
+                    </div> <!-- Ende #sim-portal-scroll -->
+                    <!-- Smartphone Home Bar -->
+                    <div class="h-3 bg-white flex justify-center items-center shrink-0">
+                        <div class="w-24 h-1 bg-slate-300 rounded-full"></div>
                     </div>
-                </div>
-
-                <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & SCHNELL-NAVIGATION -->
-                <!-- Breadcrumb: 2026-10-04 16:45 - LTE Battery Conservation & Offline Retrieval Fallbacks -->
-                <!-- [CRITICAL FEATURE - SUPPORT GUIDE OFFLINE MODES]:
-         1. Guidance to deactivate LTE module if no reception/coverage exists after test.
-         2. Clarified that no mobile data precludes automatic background sync.
-         3. Two explicit retrieval paths: SD extraction (3s safe shutdown) vs. local Wi-Fi + double-tap sync.
-         Dismissed: Outdated static 3-bullet text lacking offline data retrieval procedures. -->
-                <div class="w-full lg:w-88 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
-                    <div class="space-y-3.5">
-                        <div class="flex items-center justify-between pb-2.5 border-b border-slate-200">
-                            <div class="flex items-center gap-2">
-                                <span class="text-base">🧭</span>
-                                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800">Support-Leitfaden</h3>
-                            </div>
-                            <button type="button" onclick="closePhoneSimulatorModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
-                        </div>
-
-                        <p class="text-[11px] text-slate-600 leading-relaxed">
-                            Telefonische Schritt-für-Schritt-Anleitung für Service-Mitarbeiter vor Ort:
-                        </p>
-
-                        <!-- Schnellnavigation -->
-                        <div class="space-y-1.5">
-                            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Direktsprung im Simulator</span>
-                            <button type="button" onclick="switchSimPhoneTab('conn')"
-                                    class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
-                                <span>1. Schritt: SIM & LTE testen</span>
-                                <span class="text-blue-700 font-bold text-[10px]">Konnektivität ➔</span>
-                            </button>
-                            <button type="button" onclick="unlockAndShowWifiSetup()"
-                                    class="w-full text-left bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between">
-                                <span>2. Schritt: Lokales WLAN eintragen</span>
-                                <span class="text-emerald-700 font-bold text-[10px]">WLAN ➔</span>
-                            </button>
-                            <button type="button" onclick="switchSimPhoneTab('term')"
-                                    class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
-                                <span>3. Schritt: Seriellen Log einsehen</span>
-                                <span class="text-purple-700 font-bold text-[10px]">Terminal ➔</span>
-                            </button>
-                        </div>
-
-                        <!-- 1. Kein Empfang / Akkuschonung -->
-                        <div class="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[11px] text-amber-900 space-y-1">
-                            <span class="font-bold flex items-center gap-1.5 text-amber-800">
-                                <span>⚠️</span> Kein LTE-Empfang nach Test?
-                            </span>
-                            <p class="leading-relaxed">
-                                Wird kein Netz gefunden (CSQ 99 / Fehler), im Reiter <strong>Konnektivität</strong> das LTE-Modul auf <strong class="text-red-700">DEAKTIVIERT</strong> schalten. Das trennt das Modem hardwareseitig vom Strom und schützt den Akku vor dauerhaften Suchzyklen.
-                            </p>
-                        </div>
-
-                        <!-- 2. Datenabruf-Strategie bei fehlendem Mobilfunk -->
-                        <div class="bg-slate-50 border border-slate-200 p-3 rounded-lg text-[11px] text-slate-800 space-y-2">
-                            <span class="font-bold block text-slate-900">
-                                🔄 Datenabruf ohne Mobilfunkverbindung:
-                            </span>
-                            <p class="text-slate-600 leading-relaxed">
-                                Ohne LTE ist eine <strong>automatische Cloud-Synchronisation nicht möglich</strong>. Die Datenrettung erfolgt über zwei alternative Pfade:
-                            </p>
-                            <div class="space-y-1.5 pt-1">
-                                <div class="bg-white p-2 rounded border border-slate-200">
-                                    <span class="font-bold text-slate-900 block">Pfad A: Physische SD-Entnahme</span>
-                                    <p class="text-slate-600 text-[10px] mt-0.5">
-                                        Taster am Gerät <strong>3 s gedrückt halten</strong> (Safe Shutdown: LEDs leuchten dauerhaft Bernstein/Rot). Danach SD-Karte gefahrlos entnehmen und am PC auslesen.
-                                    </p>
-                                </div>
-                                <div class="bg-white p-2 rounded border border-slate-200">
-                                    <span class="font-bold text-slate-900 block">Pfad B: Lokales WLAN & Taster-Doppelklick</span>
-                                    <p class="text-slate-600 text-[10px] mt-0.5">
-                                        Im Captive Portal unter <strong>Admin (stag2026)</strong> das Firmen-WLAN oder einen Smartphone-Hotspot hinterlegen. Im Messbetrieb periodisch einen <strong>Doppelklick auf den Taster</strong> ausführen: Das Gerät verbindet sich mit dem bekannten WLAN und lädt den Rückstau vollständig in die Cloud.
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Anweisung Captive Portal Aufbau -->
-                        <div class="bg-blue-50 border border-blue-200 p-2.5 rounded-lg text-[11px] text-blue-900 space-y-1">
-                            <span class="font-bold block">💡 Verbindung zum Portal:</span>
-                            <p>1. Taster <strong>1.5 s halten</strong> (WLAN-Wellen-LEDs aktiv).</p>
-                            <p>2. Smartphone mit WLAN <strong>STAG IMU-1</strong> verbinden (Passwort: <code class="font-bold">stag2026</code>).</p>
-                            <p>3. Browser öffnen: <code class="font-bold">http://10.10.10.1/</code>.</p>
-                        </div>
-                    </div>
-
-                    <button type="button" onclick="closePhoneSimulatorModal()"
-                            class="w-full mt-4 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold py-2 rounded-lg text-xs transition">
-                        Simulator schließen
-                    </button>
                 </div>
             </div>
+
+            <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & SCHNELL-NAVIGATION -->
+            <div class="w-full lg:w-88 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
+                <div class="space-y-3.5">
+                    <div class="flex items-center justify-between pb-2.5 border-b border-slate-200">
+                        <div class="flex items-center gap-2">
+                            <span class="text-base">🧭</span>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800">Support-Leitfaden</h3>
+                        </div>
+                        <button type="button" onclick="closePhoneSimulatorModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
+                    </div>
+
+                    <p class="text-[11px] text-slate-600 leading-relaxed">
+                        Telefonische Schritt-für-Schritt-Anleitung für Service-Mitarbeiter vor Ort:
+                    </p>
+
+                    <!-- Schnellnavigation -->
+                    <div class="space-y-1.5">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Direktsprung im Simulator</span>
+                        <button type="button" onclick="switchSimPhoneTab('conn')"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                            <span>1. Schritt: SIM & LTE testen</span>
+                            <span class="text-blue-700 font-bold text-[10px]">Konnektivität ➔</span>
+                        </button>
+                        <button type="button" onclick="unlockAndShowWifiSetup()"
+                                class="w-full text-left bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between">
+                            <span>2. Schritt: Lokales WLAN eintragen</span>
+                            <span class="text-emerald-700 font-bold text-[10px]">WLAN ➔</span>
+                        </button>
+                        <button type="button" onclick="switchSimPhoneTab('term')"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                            <span>3. Schritt: Seriellen Log einsehen</span>
+                            <span class="text-purple-700 font-bold text-[10px]">Terminal ➔</span>
+                        </button>
+                    </div>
+
+                    <!-- 1. Kein Empfang / Akkuschonung -->
+                    <div class="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[11px] text-amber-900 space-y-1">
+                        <span class="font-bold flex items-center gap-1.5 text-amber-800">
+                            <span>⚠️️</span> Kein LTE-Empfang nach Test?
+                        </span>
+                        <p class="leading-relaxed">
+                            Wird kein Netz gefunden (CSQ 99 / Fehler), im Reiter <strong>Konnektivität</strong> das LTE-Modul auf <strong class="text-red-700">DEAKTIVIERT</strong> schalten. Das trennt das Modem hardwareseitig vom Strom und schützt den Akku vor dauerhaften Suchzyklen.
+                        </p>
+                    </div>
+
+                    <!-- 2. Datenabruf-Strategie bei fehlendem Mobilfunk -->
+                    <div class="bg-slate-50 border border-slate-200 p-3 rounded-lg text-[11px] text-slate-800 space-y-2">
+                        <span class="font-bold block text-slate-900">
+                            🔄 Datenabruf ohne Mobilfunkverbindung:
+                        </span>
+                        <p class="text-slate-600 leading-relaxed">
+                            Ohne LTE ist eine <strong>automatische Cloud-Synchronisation nicht möglich</strong>. Die Datenrettung erfolgt über zwei alternative Pfade:
+                        </p>
+                        <div class="space-y-1.5 pt-1">
+                            <div class="bg-white p-2 rounded border border-slate-200">
+                                <span class="font-bold text-slate-900 block">Pfad A: Physische SD-Entnahme</span>
+                                <p class="text-slate-600 text-[10px] mt-0.5">
+                                    Taster am Gerät <strong>3 s gedrückt halten</strong> (Safe Shutdown: LEDs leuchten dauerhaft Bernstein/Rot). Danach SD-Karte gefahrlos entnehmen und am PC auslesen.
+                                </p>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-slate-200">
+                                <span class="font-bold text-slate-900 block">Pfad B: Lokales WLAN & Taster-Doppelklick</span>
+                                <p class="text-slate-600 text-[10px] mt-0.5">
+                                    Im Captive Portal unter <strong>Admin (stag2026)</strong> das Firmen-WLAN oder einen Smartphone-Hotspot hinterlegen. Im Messbetrieb periodisch einen <strong>Doppelklick auf den Taster</strong> ausführen: Das Gerät verbindet sich mit dem bekannten WLAN und lädt den Rückstau vollständig in die Cloud.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Anweisung Captive Portal Aufbau -->
+                    <div class="bg-blue-50 border border-blue-200 p-2.5 rounded-lg text-[11px] text-blue-900 space-y-1">
+                        <span class="font-bold block">💡 Verbindung zum Portal:</span>
+                        <p>1. Taster <strong>1.5 s halten</strong> (WLAN-Wellen-LEDs aktiv).</p>
+                        <p>2. Smartphone mit WLAN <strong>STAG IMU-1</strong> verbinden (Passwort: <code class="font-bold">stag2026</code>).</p>
+                        <p>3. Browser öffnen: <code class="font-bold">http://10.10.10.1/</code>.</p>
+                    </div>
+                </div>
+
+                <button type="button" onclick="closePhoneSimulatorModal()"
+                        class="w-full mt-4 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold py-2 rounded-lg text-xs transition">
+                    Simulator schließen
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Einbindung des neuen modularen Skripts -->
