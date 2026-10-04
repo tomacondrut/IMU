@@ -386,12 +386,27 @@
         </div>
     </main>
 
+
     <!-- TAB 3: PARAMETER & SLEEP -->
     <main id="tab-settings" class="hidden">
+        <!-- Kopfzeile im Parameter-Menü mit Simulator-Trigger -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 bg-white p-3.5 rounded-lg border border-slate-300 shadow-sm">
+            <div>
+                <h2 class="text-xs font-bold uppercase tracking-wider text-slate-800">Geräte- & Funkparameter</h2>
+                <p class="text-[11px] text-slate-500 font-mono">Synchronisation mit Flash-NVS und Cloud-Schnittstelle</p>
+            </div>
+            <button type="button" onclick="openPhoneSimulatorModal()"
+                    class="flex items-center gap-2 bg-gradient-to-r from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 text-white px-3.5 py-2 rounded-lg text-xs font-bold shadow transition group">
+                <span class="text-sm group-hover:scale-110 transition-transform">📱</span>
+                <span>Smartphone-Simulator (Captive Portal)</span>
+            </button>
+        </div>
+
         <!-- Dynamisches Status-Banner für Passwortschutz -->
         <div id="settings-lock-banner"></div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+            <!-- LINKER BLOCK: Schwellenwerte & Sleep-Verhalten -->
             <section class="card p-5 rounded-lg bg-white border border-slate-300 shadow-sm">
                 <h2 class="text-sm font-bold uppercase text-slate-800 mb-4 pb-2 border-b border-slate-200">Schwellenwerte & Sleep-Verhalten</h2>
                 <div class="mb-4">
@@ -405,11 +420,6 @@
                     <p class="text-[11px] text-slate-500 mt-1">Dauer der Bewegungslosigkeit vor dem Abschalten (5 bis 60 s).</p>
                 </div>
 
-                <!--
-      Breadcrumb: 2026-09-21 19:50 - Aligned Wake Sensitivity Slider Floor to 0.05 m/s²
-      [CRITICAL UI PARITY - MATCH CAPTIVE PORTAL & FIRMWARE V3]:
-      Lowered min from 0.20 to 0.05, refined step to 0.01, and aligned default display.
-    -->
                 <div class="mb-4">
                     <div class="flex justify-between text-xs mb-1">
                         <span class="text-slate-700 font-semibold">Aufwach-Empfindlichkeit (Schwelle)</span>
@@ -431,6 +441,7 @@
                 </div>
             </section>
 
+            <!-- RECHTER BLOCK: Abtastraten & Konnektivität -->
             <section class="card p-5 rounded-lg bg-white border border-slate-300 shadow-sm flex flex-col justify-between">
                 <div>
                     <h2 class="text-sm font-bold uppercase text-slate-800 mb-4 pb-2 border-b border-slate-200">Abtastraten & Konnektivität</h2>
@@ -454,22 +465,37 @@
                                class="w-full h-2 bg-slate-300 rounded-lg cursor-pointer">
                     </div>
 
+                    <!-- Ausgelagerte Mobilfunk-Konfiguration mit separatem Modal -->
                     <div class="p-3.5 bg-slate-100 rounded-lg border border-slate-300 mb-4">
-                        <p class="text-xs font-bold text-slate-800 mb-2">Mobilfunk Konfiguration (SIM & LTE)</p>
-                        <div class="grid grid-cols-2 gap-3 mb-2">
+                        <div class="flex justify-between items-center mb-2.5">
                             <div>
-                                <label class="block text-[11px] text-slate-600 mb-1">SIM PIN</label>
-                                <input type="password" id="cfg-sim-pin" placeholder="1234" maxlength="8"
-                                       class="w-full bg-white border border-slate-300 rounded p-1.5 text-xs text-slate-900 font-mono outline-none focus:border-green-600">
+                                <p class="text-xs font-bold text-slate-800">Mobilfunk & SIM-Konfiguration</p>
+                                <p class="text-[11px] text-slate-500 font-mono">Zugangspunkt (APN) und PIN-Schutz</p>
+                            </div>
+                            <button type="button" onclick="openSimConfigModal()"
+                                    class="bg-white hover:bg-slate-200 border border-slate-300 text-slate-800 px-2.5 py-1.5 rounded text-xs font-bold shadow-sm transition flex items-center gap-1.5">
+                                <span>⚙️ Konfigurieren</span>
+                            </button>
+                        </div>
+
+                        <!-- Statusanzeige der hinterlegten Daten -->
+                        <div class="grid grid-cols-2 gap-2 text-xs font-mono bg-white p-2.5 rounded border border-slate-200 mb-3">
+                            <div>
+                                <span class="text-[10px] text-slate-400 block uppercase">APN</span>
+                                <span id="cfg-sim-apn-badge" class="font-bold text-slate-800 truncate block">gprs.swisscom.ch</span>
                             </div>
                             <div>
-                                <label class="block text-[11px] text-slate-600 mb-1">APN</label>
-                                <input type="text" id="cfg-sim-apn" placeholder="gprs.swisscom.ch"
-                                       class="w-full bg-white border border-slate-300 rounded p-1.5 text-xs text-slate-900 outline-none focus:border-green-600">
+                                <span class="text-[10px] text-slate-400 block uppercase">SIM-PIN</span>
+                                <span id="cfg-sim-pin-badge" class="font-bold text-slate-700">•••• (Gesetzt)</span>
                             </div>
                         </div>
-                        <!-- LTE-Diagnosetest Trigger -->
-                        <div class="mt-3 pt-2.5 border-t border-slate-200 flex items-center justify-between">
+
+                        <!-- Unsichtbare Input-Felder für Supabase fetchConfig / saveConfigToCloud -->
+                        <input type="hidden" id="cfg-sim-pin" value="">
+                        <input type="hidden" id="cfg-sim-apn" value="gprs.swisscom.ch">
+
+                        <!-- LTE-Diagnosetest Trigger direkt auf der Hauptseite -->
+                        <div class="pt-2.5 border-t border-slate-200 flex items-center justify-between">
                             <div>
                                 <span class="text-xs font-bold text-slate-800">Modem-Diagnose</span>
                                 <p class="text-[11px] text-slate-500">Prüft SIM, Netzregistrierung, Signal (CSQ) und Datenkanal.</p>
@@ -763,6 +789,371 @@
         </div>
     </div>
 
+
+
+
+    <!-- ========================================================================== -->
+    <!-- MODAL: SEPARATE MOBILFUNK- & SIM-KONFIGURATION                            -->
+    <!-- ========================================================================== -->
+    <div id="sim-config-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-white border border-slate-300 rounded-xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+            <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div class="flex items-center gap-2">
+                    <span class="text-base text-blue-600">📶</span>
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800">Mobilfunk & SIM-Konfiguration</h3>
+                </div>
+                <button type="button" onclick="closeSimConfigModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
+            </div>
+
+            <form onsubmit="handleSaveSimConfigModal(event)" class="p-4 space-y-3.5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 mb-1">Schweizer Provider / APN-Preset</label>
+                    <select id="modal-sim-preset" onchange="applySimPreset(this.value)"
+                            class="w-full bg-slate-50 border border-slate-300 rounded p-2 text-xs text-slate-900 font-mono outline-none focus:border-green-600">
+                        <option value="gprs.swisscom.ch">Swisscom Standard (gprs.swisscom.ch)</option>
+                        <option value="corporate.swisscom.ch">Swisscom Corporate M2M (corporate.swisscom.ch)</option>
+                        <option value="internet">Sunrise / Salt / Universell (internet)</option>
+                        <option value="iot.sunrise.ch">Sunrise IoT (iot.sunrise.ch)</option>
+                        <option value="iot.1nce.net">1NCE Global IoT (iot.1nce.net)</option>
+                        <option value="CUSTOM">-- Benutzerdefiniert --</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 mb-1">APN (Zugangspunkt)</label>
+                    <input type="text" id="modal-sim-apn" placeholder="gprs.swisscom.ch" required
+                           class="w-full bg-white border border-slate-300 rounded p-2 text-xs text-slate-900 font-mono outline-none focus:border-green-600">
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="text-xs font-semibold text-slate-700">SIM PIN</label>
+                        <span class="text-[10px] text-slate-400 font-mono">Leer lassen falls PIN deaktiviert</span>
+                    </div>
+                    <div class="relative">
+                        <input type="password" id="modal-sim-pin" placeholder="z. B. 1234" maxlength="8"
+                               class="w-full bg-white border border-slate-300 rounded p-2 pr-9 text-xs text-slate-900 font-mono outline-none focus:border-green-600">
+                        <button type="button" onclick="toggleSimPinVisibility()"
+                                class="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 text-xs select-none">
+                            👁️
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-amber-50 border border-amber-200 p-2.5 rounded text-[11px] text-amber-800 leading-relaxed">
+                    ⚠️ <strong>Wichtig:</strong> Falsche PINs sperren die SIM nach 3 Fehlversuchen (PUK-Sperre). Nur numerische PINs (4-8 Ziffern) eingeben.
+                </div>
+
+                <div class="flex gap-2 pt-2 border-t border-slate-200">
+                    <button type="submit" class="flex-1 bg-stag-green text-white font-bold py-2 rounded text-xs hover:opacity-90 shadow-sm transition">
+                        In Konfiguration übernehmen
+                    </button>
+                    <button type="button" onclick="closeSimConfigModal()" class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-xs text-slate-700 font-semibold transition">
+                        Abbrechen
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================================================== -->
+    <!-- MODAL: INTERAKTIVER SMARTPHONE-SIMULATOR (CAPTIVE PORTAL PARITY)          -->
+    <!-- ========================================================================== -->
+    <div id="phone-simulator-modal" class="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4 hidden select-none">
+        <div class="flex flex-col lg:flex-row items-center gap-5 max-h-[96vh]">
+
+            <!-- SMARTPHONE GEHÄUSE (Realistic Bezel / Dynamic Notch) -->
+            <div class="relative w-[340px] sm:w-[375px] h-[670px] bg-slate-950 rounded-[44px] p-3.5 border-4 border-slate-700 shadow-2xl flex flex-col shrink-0 ring-1 ring-white/10">
+                <!-- Hardware Buttons & Speaker Notch -->
+                <div class="absolute top-0 left-1/2 -translate-x-1/2 w-28 h-5 bg-slate-950 rounded-b-xl z-30 flex items-center justify-center">
+                    <div class="w-10 h-1 bg-slate-800 rounded-full mb-1"></div>
+                </div>
+
+                <!-- SIMULATOR SCREEN -->
+                <div class="relative w-full h-full bg-[#e2e8f0] rounded-[32px] overflow-hidden flex flex-col text-slate-900 font-sans shadow-inner">
+
+                    <!-- Statusleiste (iOS / Android Look) -->
+                    <div class="h-6 bg-white px-5 pt-1.5 flex justify-between items-center text-[10px] font-semibold text-slate-700 shrink-0 border-b border-slate-200 select-none">
+                        <span id="sim-phone-clock">10:45</span>
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[9px] font-mono">WLAN: STAG IMU</span>
+                            <span>📶</span>
+                            <span>🔋 96%</span>
+                        </div>
+                    </div>
+
+                    <!-- Browser URL-Bar -->
+                    <div class="bg-slate-100 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] font-mono text-slate-600 shrink-0">
+                        <span class="truncate">🔒 http://10.10.10.1/</span>
+                        <span class="text-[10px] text-green-700 font-bold">Captive Portal</span>
+                    </div>
+
+                    <!-- CAPTIVE PORTAL INHALT (1:1 PARITÄT ZU DASHBOARD_PAGE) -->
+                    <div class="flex-1 overflow-y-auto p-2.5 text-xs space-y-2.5" id="sim-portal-scroll">
+                        <!-- Header -->
+                        <div class="bg-white p-2.5 rounded-lg border border-slate-300 shadow-sm flex justify-between items-center">
+                            <h1 class="text-xs font-bold text-green-700 tracking-wide">STAG AG • TELEMETRIE</h1>
+                            <div class="flex items-center gap-2">
+                                <button id="sim-lock-btn" onclick="toggleSimPhoneLockModal()" class="text-slate-400 hover:text-slate-600 p-0.5 text-xs" title="Admin">
+                                    🔒
+                                </button>
+                                <span id="sim-online-badge" class="text-[10px] font-bold text-green-700">ONLINE</span>
+                            </div>
+                        </div>
+
+                        <!-- Navigation Tabs -->
+                        <div class="flex gap-1 overflow-x-auto pb-0.5 select-none" id="sim-tab-bar">
+                            <button onclick="switchSimPhoneTab('sensors')" id="sim-btn-sensors" class="flex-1 py-1.5 px-2 bg-green-700 text-white rounded text-[10px] font-bold whitespace-nowrap shadow-sm">Sensoren</button>
+                            <button onclick="switchSimPhoneTab('data')" id="sim-btn-data" class="flex-1 py-1.5 px-2 bg-white text-slate-700 border border-slate-300 rounded text-[10px] font-bold whitespace-nowrap">Daten & Logs</button>
+                            <button onclick="switchSimPhoneTab('conn')" id="sim-btn-conn" class="flex-1 py-1.5 px-2 bg-white text-slate-700 border border-slate-300 rounded text-[10px] font-bold whitespace-nowrap">Konnektivität</button>
+                            <button onclick="switchSimPhoneTab('term')" id="sim-btn-term" class="flex-1 py-1.5 px-2 bg-white text-slate-700 border border-slate-300 rounded text-[10px] font-bold whitespace-nowrap">Terminal</button>
+                        </div>
+
+                        <!-- TAB 1: SENSOREN -->
+                        <div id="sim-tab-sensors" class="space-y-2.5">
+                            <div class="h-28 bg-[#dbe2ea] rounded-lg border border-slate-300 relative flex items-center justify-center overflow-hidden">
+                                <!-- Schematischer 3D Enclosure Simulator -->
+                                <div id="sim-3d-box" class="w-24 h-12 bg-slate-800 border-t-4 border-green-600 rounded shadow-lg transform transition-transform duration-200 flex items-center justify-center text-white text-[9px] font-mono">
+                                    STAG IMU-01
+                                </div>
+                                <div class="absolute bottom-1 left-1.5 bg-white/90 px-1.5 py-0.5 rounded text-[8px] font-mono text-slate-800 border border-slate-200">
+                                    ROT: W:1.00 X:0.00 Y:0.00 Z:0.00<br>ACC: 0.02 m/s²
+                                </div>
+                            </div>
+
+                            <!-- Mini Waveforms -->
+                            <div class="bg-white p-2 rounded-lg border border-slate-300 space-y-1">
+                                <span class="text-[10px] font-bold text-slate-700 uppercase block">Beschleunigungsdynamik</span>
+                                <canvas id="sim-cv-acc" class="w-full h-10 bg-slate-50 border border-slate-200 rounded block"></canvas>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2 text-[11px]">
+                                <div class="bg-white p-2 rounded border border-slate-300">
+                                    <span class="text-[9px] font-bold text-slate-500 uppercase block">Akku</span>
+                                    <span class="text-sm font-bold text-slate-900">96%</span>
+                                    <span class="text-[9px] text-green-700 block">4.14 V • Normal</span>
+                                </div>
+                                <div class="bg-white p-2 rounded border border-slate-300">
+                                    <span class="text-[9px] font-bold text-slate-500 uppercase block">SD-Karte</span>
+                                    <span class="text-sm font-bold text-slate-900">14.8 GB</span>
+                                    <span class="text-[9px] text-slate-500 block">FatFS Gemountet</span>
+                                </div>
+                            </div>
+
+                            <!-- Schwellenwerte -->
+                            <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px]">
+                                <span class="font-bold text-slate-800 uppercase text-[10px] block">Schwellenwerte & Dynamik</span>
+                                <div>
+                                    <div class="flex justify-between text-[10px] text-slate-600 mb-0.5">
+                                        <span>Aufwach-Empfindlichkeit</span>
+                                        <span id="sim-sens-val" class="font-bold text-green-700 font-mono">0.05 m/s²</span>
+                                    </div>
+                                    <input type="range" min="0.05" max="2.00" step="0.01" value="0.05"
+                                           oninput="document.getElementById('sim-sens-val').innerText = Number(this.value).toFixed(2)+' m/s²'"
+                                           class="w-full h-1.5 bg-slate-300 rounded cursor-pointer accent-green-600">
+                                </div>
+                                <div>
+                                    <div class="flex justify-between text-[10px] text-slate-600 mb-0.5">
+                                        <span>Inaktivität bis Sleep</span>
+                                        <span id="sim-idle-val" class="font-bold text-green-700 font-mono">10 s</span>
+                                    </div>
+                                    <input type="range" min="5" max="60" value="10"
+                                           oninput="document.getElementById('sim-idle-val').innerText = this.value+' s'"
+                                           class="w-full h-1.5 bg-slate-300 rounded cursor-pointer accent-green-600">
+                                </div>
+                                <button type="button" class="w-full bg-green-700 text-white font-bold py-1.5 rounded text-[10px] hover:opacity-90 transition">
+                                    Sensoreinstellungen speichern
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- TAB 2: DATEN & LOGS -->
+                        <div id="sim-tab-data" class="space-y-2.5 hidden">
+                            <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2">
+                                <span class="text-[10px] font-bold text-slate-700 uppercase block">SD-Explorer & Dateimanager</span>
+                                <div class="flex justify-between items-center bg-slate-100 p-1.5 rounded border border-slate-200 text-[10px] font-mono">
+                                    <span class="text-green-700 font-bold">Pfad: /Logs/</span>
+                                    <button type="button" class="bg-white border border-slate-300 px-1.5 py-0.5 rounded text-[9px]">Ordner hoch ⬆</button>
+                                </div>
+                                <div class="space-y-1 text-[10px] font-mono">
+                                    <div class="p-1.5 bg-slate-50 border border-slate-200 rounded flex justify-between items-center">
+                                        <span>📁 2026-10-04</span>
+                                        <span class="text-green-700 font-bold">Öffnen ➔</span>
+                                    </div>
+                                    <div class="p-1.5 bg-slate-50 border border-slate-200 rounded flex justify-between items-center">
+                                        <span>📄 battery_log.csv (14.2 KB)</span>
+                                        <span class="text-blue-600">Download</span>
+                                    </div>
+                                    <div class="p-1.5 bg-slate-50 border border-slate-200 rounded flex justify-between items-center">
+                                        <span>📄 lte_log.txt (4.8 KB)</span>
+                                        <span class="text-blue-600">Download</span>
+                                    </div>
+                                </div>
+                                <div id="sim-admin-data-sec" class="hidden pt-2 border-t border-slate-200 space-y-1.5">
+                                    <span class="text-[10px] font-bold text-amber-700 uppercase block">Admin Aktionen</span>
+                                    <button type="button" class="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-1 rounded text-[10px]">Datei hochladen</button>
+                                    <button type="button" class="w-full bg-red-600 text-white font-bold py-1 rounded text-[10px]">SD formatieren</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TAB 3: KONNEKTIVITÄT -->
+                        <div id="sim-tab-conn" class="space-y-2.5 hidden">
+                            <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px]">
+                                <span class="text-[10px] font-bold text-slate-700 uppercase block">Mobilfunk & SIM-Karte (Schweiz)</span>
+
+                                <div>
+                                    <label class="text-[10px] text-slate-500 block mb-0.5">Signalstärke (LTE / CSQ)</label>
+                                    <div class="flex justify-between items-center text-[10px] font-mono text-green-700 font-bold mb-1">
+                                        <span>CSQ 22 (-69 dBm)</span>
+                                        <span>71%</span>
+                                    </div>
+                                    <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                        <div class="h-full bg-green-600 w-[71%]"></div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="text-[10px] text-slate-600 block mb-0.5">Provider Preset</label>
+                                    <select onchange="document.getElementById('sim-input-apn').value=this.value"
+                                            class="w-full bg-slate-50 border border-slate-300 rounded p-1 text-[10px] outline-none">
+                                        <option value="gprs.swisscom.ch">Swisscom (gprs.swisscom.ch)</option>
+                                        <option value="corporate.swisscom.ch">Swisscom Corporate</option>
+                                        <option value="internet">Sunrise / Salt (internet)</option>
+                                        <option value="iot.1nce.net">1NCE IoT</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label class="text-[10px] text-slate-600 block mb-0.5">APN (Zugangspunkt)</label>
+                                    <input type="text" id="sim-input-apn" value="gprs.swisscom.ch" class="w-full bg-white border border-slate-300 rounded p-1 text-[10px] font-mono">
+                                </div>
+
+                                <div>
+                                    <label class="text-[10px] text-slate-600 block mb-0.5">SIM-PIN</label>
+                                    <input type="password" value="1234" placeholder="Keine PIN" class="w-full bg-white border border-slate-300 rounded p-1 text-[10px] font-mono">
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-1.5 pt-1">
+                                    <button type="button" class="bg-green-700 text-white font-bold py-1.5 rounded text-[10px]">SIM Speichern</button>
+                                    <button type="button" onclick="simTriggerTest()" class="bg-blue-600 text-white font-bold py-1.5 rounded text-[10px]">⚡ LTE Testen</button>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5 text-[11px]">
+                                <span class="text-[10px] font-bold text-slate-700 uppercase block">Telemetrie Übertragung</span>
+                                <div class="flex justify-between items-center">
+                                    <span>Live-Modus</span>
+                                    <span class="bg-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded text-[9px]">AUS</span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span>LTE-Modul</span>
+                                    <span class="bg-green-100 text-green-800 font-bold px-2 py-0.5 rounded text-[9px]">AKTIV</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TAB 4: TERMINAL -->
+                        <div id="sim-tab-term" class="space-y-2.5 hidden">
+                            <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-[10px] font-bold text-slate-700 uppercase">Live Serieller Log</span>
+                                    <div class="flex gap-1 text-[9px]">
+                                        <button type="button" onclick="clearSimConsole()" class="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded">Löschen</button>
+                                    </div>
+                                </div>
+                                <pre id="sim-phone-console" class="p-2 font-mono text-[9px] text-green-700 bg-slate-50 border border-slate-200 rounded h-64 overflow-y-auto leading-relaxed select-text">[BOOT] STAG IMU Firmware 3.0.1
+[POWER] USB-Netzteil aktiv (Laden)
+[BNO085] Reports 0x08 & 0x04 synchronisiert (25 Hz)
+[SD INFO] SD FatFS gemountet (16 MHz)
+[WIFI AP] SSID: 'STAG IMU-1' bereit
+[WIFI] Smartphone verbunden (10.10.10.1)
+[LTE TEST] Einbuchung Cat-M1 erfolgreich (CSQ 22)
+[HTTP] Auslieferung Dashboard an Client...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Simuliertes Admin-Passwort Modal im Smartphone -->
+                    <div id="sim-auth-dialog" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 hidden">
+                        <div class="bg-white rounded-lg p-3 w-full max-w-[240px] shadow-xl text-center space-y-2">
+                            <span class="text-xs font-bold text-slate-800 block">Erweitertes Menü</span>
+                            <input type="password" id="sim-admin-pass-input" placeholder="Passwort (stag2026)" class="w-full bg-slate-50 border border-slate-300 rounded p-1.5 text-xs text-center outline-none">
+                            <div id="sim-auth-err" class="text-[10px] text-red-600 font-bold hidden">Ungültig!</div>
+                            <div class="flex gap-1.5">
+                                <button type="button" onclick="submitSimPhoneAuth()" class="flex-1 bg-green-700 text-white font-bold py-1 rounded text-xs">Entsperren</button>
+                                <button type="button" onclick="toggleSimPhoneLockModal()" class="px-2 py-1 bg-slate-200 text-slate-700 rounded text-xs">Abbruch</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Smartphone Home Bar -->
+                    <div class="h-3 bg-white flex justify-center items-center shrink-0">
+                        <div class="w-24 h-1 bg-slate-300 rounded-full"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & SCHNELL-NAVIGATION -->
+            <div class="w-full lg:w-80 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
+                <div>
+                    <div class="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-base">🧭</span>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800">Support-Leitfaden</h3>
+                        </div>
+                        <button type="button" onclick="closePhoneSimulatorModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
+                    </div>
+
+                    <p class="text-[11px] text-slate-600 mb-3 leading-relaxed">
+                        Nutze diesen Simulator, um Service-Personal telefonisch oder vor Ort Schritt für Schritt durch das Captive Portal auf dem Smartphone zu leiten:
+                    </p>
+
+                    <!-- Schnellnavigation / Sprungmarken -->
+                    <div class="space-y-2 mb-4">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Schnell-Navigation</span>
+                        <button type="button" onclick="switchSimPhoneTab('sensors')"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                            <span>1. Schritt: Sensoren & Akku prüfen</span>
+                            <span class="text-green-700 font-bold text-[10px]">Sensoren ➔</span>
+                        </button>
+                        <button type="button" onclick="switchSimPhoneTab('conn')"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                            <span>2. Schritt: APN eintragen & PIN sichern</span>
+                            <span class="text-blue-700 font-bold text-[10px]">Konnektivität ➔</span>
+                        </button>
+                        <button type="button" onclick="switchSimPhoneTab('term')"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                            <span>3. Schritt: LTE-Verbindungstest & Log</span>
+                            <span class="text-purple-700 font-bold text-[10px]">Terminal ➔</span>
+                        </button>
+                        <button type="button" onclick="switchSimPhoneTab('data')"
+                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
+                            <span>4. Schritt: SD-Dateien & Logs laden</span>
+                            <span class="text-amber-700 font-bold text-[10px]">Daten & Logs ➔</span>
+                        </button>
+                    </div>
+
+                    <!-- Hilfetext für Telefonat -->
+                    <div class="bg-blue-50 border border-blue-200 p-3 rounded-lg text-[11px] text-blue-900 space-y-1.5">
+                        <span class="font-bold block">💡 Anweisung für Servicemitarbeiter:</span>
+                        <p>1. Taster am Gerät <strong>1.5 s gedrückt halten</strong> (WLAN-Welle aktiv).</p>
+                        <p>2. Smartphone mit WLAN <strong>STAG IMU-1</strong> verbinden (Passwort: <code class="font-bold">stag2026</code>).</p>
+                        <p>3. Falls Popup nicht öffnet, im Browser <code class="font-bold">http://10.10.10.1/</code> aufrufen.</p>
+                    </div>
+                </div>
+
+                <button type="button" onclick="closePhoneSimulatorModal()"
+                        class="w-full mt-4 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold py-2 rounded-lg text-xs transition">
+                    Simulator schließen
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Einbindung des neuen modularen Skripts -->
+    <script src="js/phone-simulator.js"></script>
+
     <!-- ========================================== -->
     <!-- MODULARE SKRIPTE (REIHENFOLGE GEPRÜFT)     -->
     <!-- ========================================== -->
@@ -776,5 +1167,8 @@
     <script src="js/gps-modal.js"></script>
     <script src="js/firmware.js"></script>
     <script src="js/main.js"></script>
+
+
+
 </body>
 </html>
