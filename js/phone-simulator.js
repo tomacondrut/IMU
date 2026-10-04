@@ -148,6 +148,15 @@ function switchSimPhoneTab(tabKey) {
  * 3. simSaveWifi(): Replicates websocket payload {wifi_ssid, wifi_pass} and writes /settings/wifi.json to terminal log.
  */
 
+/*
+ * Breadcrumb: 2026-10-04 13:00 - Auto-Tab Switch & Viewport Scroll on Wi-Fi Unlock
+ * [CRITICAL BUGFIX FLAG - ELIMINATE HIDDEN WI-FI PROVISIONING]:
+ * 1. Automatically switches to 'conn' tab upon successful admin authentication.
+ * 2. Smoothly scrolls #sim-admin-wifi-sec into phone viewport center with a green highlight ring.
+ * 3. Uses querySelectorAll to guarantee unhiding even if duplicate modal IDs exist in DOM.
+ * 4. Adds direct inline unlock trigger inside locked hint banner.
+ */
+
 function toggleSimPhoneLockModal() {
     const dialog = document.getElementById('sim-auth-dialog');
     if (!dialog) return;
@@ -155,52 +164,80 @@ function toggleSimPhoneLockModal() {
     if (simPhoneIsAdmin) {
         // Bei erneutem Klick abmelden
         simPhoneIsAdmin = false;
-        document.getElementById('sim-lock-btn').innerText = '🔒';
-        document.getElementById('sim-admin-data-sec')?.classList.add('hidden');
-        document.getElementById('sim-admin-wifi-sec')?.classList.add('hidden');
-        document.getElementById('sim-wifi-locked-hint')?.classList.remove('hidden');
+        document.querySelectorAll('#sim-lock-btn').forEach(btn => btn.innerText = '🔒');
+        document.querySelectorAll('#sim-admin-data-sec').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('#sim-admin-wifi-sec').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('#sim-wifi-locked-hint').forEach(el => el.classList.remove('hidden'));
         return;
     }
 
-    document.getElementById('sim-admin-pass-input').value = '';
-    document.getElementById('sim-auth-err')?.classList.add('hidden');
+    const passInput = document.getElementById('sim-admin-pass-input');
+    if (passInput) {
+        passInput.value = '';
+        setTimeout(() => passInput.focus(), 50);
+    }
+    document.querySelectorAll('#sim-auth-err').forEach(el => el.classList.add('hidden'));
     dialog.classList.toggle('hidden');
 }
 
 function submitSimPhoneAuth() {
-    const pass = document.getElementById('sim-admin-pass-input')?.value;
+    const pass = document.getElementById('sim-admin-pass-input')?.value.trim();
+
     if (pass === 'stag2026') {
         simPhoneIsAdmin = true;
-        document.getElementById('sim-lock-btn').innerText = '🔓';
-        document.getElementById('sim-admin-data-sec')?.classList.remove('hidden');
-        document.getElementById('sim-admin-wifi-sec')?.classList.remove('hidden');
-        document.getElementById('sim-wifi-locked-hint')?.classList.add('hidden');
-        document.getElementById('sim-auth-dialog')?.classList.add('hidden');
 
-        // Logeintrag im Simulator-Terminal
+        // 1. Schloss-Icon auf geöffnet setzen
+        document.querySelectorAll('#sim-lock-btn').forEach(btn => btn.innerText = '🔓');
+
+        // 2. Alle geschützten Bereiche im Smartphone freischalten
+        document.querySelectorAll('#sim-admin-data-sec').forEach(el => el.classList.remove('hidden'));
+        document.querySelectorAll('#sim-admin-wifi-sec').forEach(el => el.classList.remove('hidden'));
+        document.querySelectorAll('#sim-wifi-locked-hint').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('#sim-auth-dialog').forEach(el => el.classList.add('hidden'));
+
+        // 3. ZWINGEND: Sofort auf den Reiter 'Konnektivität' springen
+        switchSimPhoneTab('conn');
+
+        // 4. Sanft zum WLAN-Eingabefeld scrollen & visuell hervorheben
+        setTimeout(() => {
+            const wifiSec = document.getElementById('sim-admin-wifi-sec');
+            if (wifiSec) {
+                wifiSec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                wifiSec.classList.add('ring-2', 'ring-green-600');
+                setTimeout(() => wifiSec.classList.remove('ring-2', 'ring-green-600'), 1500);
+            }
+        }, 120);
+
+        // 5. Eintrag im Simulator-Terminal
         const cEl = document.getElementById('sim-phone-console');
         if (cEl) {
             cEl.innerText += '\n[AUTH] Admin-Modus autorisiert (stag2026). Vertrauliche Menüs freigegeben.';
+            cEl.scrollTop = cEl.scrollHeight;
         }
     } else {
-        document.getElementById('sim-auth-err')?.classList.remove('hidden');
+        document.querySelectorAll('#sim-auth-err').forEach(el => el.classList.remove('hidden'));
     }
 }
 
-// Direktsprung aus dem Support-Leitfaden: Entsperrt Admin sofort und öffnet den WLAN-Bereich
+// Direktsprung aus dem Support-Leitfaden (1-Klick ohne Passworteingabe)
 function unlockAndShowWifiSetup() {
-    switchSimPhoneTab('conn');
     simPhoneIsAdmin = true;
-    document.getElementById('sim-lock-btn').innerText = '🔓';
-    document.getElementById('sim-admin-data-sec')?.classList.remove('hidden');
-    document.getElementById('sim-admin-wifi-sec')?.classList.remove('hidden');
-    document.getElementById('sim-wifi-locked-hint')?.classList.add('hidden');
+    document.querySelectorAll('#sim-lock-btn').forEach(btn => btn.innerText = '🔓');
+    document.querySelectorAll('#sim-admin-data-sec').forEach(el => el.classList.remove('hidden'));
+    document.querySelectorAll('#sim-admin-wifi-sec').forEach(el => el.classList.remove('hidden'));
+    document.querySelectorAll('#sim-wifi-locked-hint').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('#sim-auth-dialog').forEach(el => el.classList.add('hidden'));
 
-    // Nach unten zum WLAN-Formular scrollen
+    switchSimPhoneTab('conn');
+
     setTimeout(() => {
         const wifiSec = document.getElementById('sim-admin-wifi-sec');
-        if (wifiSec) wifiSec.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
+        if (wifiSec) {
+            wifiSec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            wifiSec.classList.add('ring-2', 'ring-green-600');
+            setTimeout(() => wifiSec.classList.remove('ring-2', 'ring-green-600'), 1500);
+        }
+    }, 120);
 }
 
 function toggleSimWifiPassVisibility() {
