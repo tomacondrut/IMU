@@ -998,16 +998,8 @@
                         </div>
 
                         <!-- TAB 3: KONNEKTIVITÄT -->
-                        <!--
-      Breadcrumb: 2026-10-04 12:50 - Captive Portal Parity: Confidential Wi-Fi Provisioning
-      [CRITICAL FEATURE - TRUSTED WI-FI CREDENTIAL MANAGEMENT IN SIMULATOR]:
-      1. Replicates #admin-wifi-sec from ESP32 DASHBOARD_PAGE 1:1.
-      2. Gated behind admin authentication (stag2026) via #sim-lock-btn.
-      3. Displays guidance hint when locked and reveals SSID / Pass inputs upon unlocking.
-      4. Includes interactive 'WLAN-Zugang auf SD sichern' simulation writing to /settings/wifi.json.
-    -->
                         <div id="sim-tab-conn" class="space-y-2.5 hidden">
-                            <!-- Mobilfunk & SIM Karte -->
+                            <!-- Mobilfunk & SIM-Karte -->
                             <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px]">
                                 <span class="text-[10px] font-bold text-slate-700 uppercase block">Mobilfunk & SIM-Karte (Schweiz)</span>
 
@@ -1049,8 +1041,8 @@
                                 </div>
                             </div>
 
-                            <!-- NEU: Vertrauliches WLAN konfigurieren (Original Parität zu DASHBOARD_PAGE #admin-wifi-sec) -->
-                            <div id="sim-admin-wifi-sec" class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px] hidden">
+                            <!-- Vertrauliches WLAN konfigurieren -->
+                            <div id="sim-admin-wifi-sec" class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-2 text-[11px] hidden transition-all duration-300">
                                 <div class="flex items-center justify-between">
                                     <span class="text-[10px] font-bold text-slate-700 uppercase">Vertrauliches WLAN konfigurieren</span>
                                     <span class="text-[9px] bg-green-100 text-green-800 font-bold px-1.5 py-0.5 rounded">Admin aktiv</span>
@@ -1078,12 +1070,16 @@
                                 <div id="sim-wifi-save-status" class="text-[10px] text-green-700 font-bold text-center hidden"></div>
                             </div>
 
-                            <!-- Schlosshinweis, wenn Admin-Modus noch nicht entsperrt ist -->
-                            <div id="sim-wifi-locked-hint" class="bg-slate-50 border border-dashed border-slate-300 p-2.5 rounded-lg text-center text-[10px] text-slate-500">
-                                🔒 <span>WLAN-Konfiguration ist geschützt. Oben auf das <strong>Schloss 🔒</strong> tippen (Passwort: <code class="font-bold text-slate-700">stag2026</code>).</span>
+                            <!-- Schlosshinweis mit Direkt-Button -->
+                            <div id="sim-wifi-locked-hint" class="bg-slate-50 border border-dashed border-slate-300 p-2.5 rounded-lg text-center text-[10px] text-slate-600 space-y-1.5">
+                                <div>🔒 <span>WLAN-Konfiguration ist geschützt.</span></div>
+                                <button type="button" onclick="toggleSimPhoneLockModal()"
+                                        class="bg-white hover:bg-slate-200 border border-slate-300 text-slate-800 font-bold px-2.5 py-1 rounded text-[10px] shadow-sm transition">
+                                    Jetzt entsperren (stag2026)
+                                </button>
                             </div>
 
-                            <!-- Telemetrie Übertragungsmodus -->
+                            <!-- Telemetrie Übertragung -->
                             <div class="bg-white p-2.5 rounded-lg border border-slate-300 space-y-1.5 text-[11px]">
                                 <span class="text-[10px] font-bold text-slate-700 uppercase block">Telemetrie Übertragung</span>
                                 <div class="flex justify-between items-center">
@@ -1116,21 +1112,23 @@
 [HTTP] Auslieferung Dashboard an Client...</pre>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Simuliertes Admin-Passwort Modal im Smartphone -->
-                    <div id="sim-auth-dialog" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 hidden">
-                        <div class="bg-white rounded-lg p-3 w-full max-w-[240px] shadow-xl text-center space-y-2">
-                            <span class="text-xs font-bold text-slate-800 block">Erweitertes Menü</span>
-                            <input type="password" id="sim-admin-pass-input" placeholder="Passwort (stag2026)" class="w-full bg-slate-50 border border-slate-300 rounded p-1.5 text-xs text-center outline-none">
-                            <div id="sim-auth-err" class="text-[10px] text-red-600 font-bold hidden">Ungültig!</div>
-                            <div class="flex gap-1.5">
-                                <button type="button" onclick="submitSimPhoneAuth()" class="flex-1 bg-green-700 text-white font-bold py-1 rounded text-xs">Entsperren</button>
-                                <button type="button" onclick="toggleSimPhoneLockModal()" class="px-2 py-1 bg-slate-200 text-slate-700 rounded text-xs">Abbruch</button>
+                        <!-- Einziges Simuliertes Admin-Passwort Modal im Smartphone mit Enter-Support -->
+                        <div id="sim-auth-dialog" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 hidden">
+                            <div class="bg-white rounded-lg p-3 w-full max-w-[240px] shadow-xl text-center space-y-2">
+                                <span class="text-xs font-bold text-slate-800 block">Erweitertes Menü</span>
+                                <input type="password" id="sim-admin-pass-input" placeholder="Passwort (stag2026)"
+                                       onkeydown="if(event.key==='Enter') submitSimPhoneAuth()"
+                                       class="w-full bg-slate-50 border border-slate-300 rounded p-1.5 text-xs text-center outline-none focus:border-green-600">
+                                <div id="sim-auth-err" class="text-[10px] text-red-600 font-bold hidden">Ungültiges Passwort!</div>
+                                <div class="flex gap-1.5">
+                                    <button type="button" onclick="submitSimPhoneAuth()" class="flex-1 bg-green-700 text-white font-bold py-1 rounded text-xs hover:opacity-90 transition">Entsperren</button>
+                                    <button type="button" onclick="toggleSimPhoneLockModal()" class="px-2 py-1 bg-slate-200 text-slate-700 rounded text-xs hover:bg-slate-300 transition">Abbruch</button>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
+                    </div> <!-- Ende #sim-portal-scroll -->
                     <!-- Smartphone Home Bar -->
                     <div class="h-3 bg-white flex justify-center items-center shrink-0">
                         <div class="w-24 h-1 bg-slate-300 rounded-full"></div>
@@ -1153,7 +1151,6 @@
                         Nutze diesen Simulator, um Service-Personal telefonisch oder vor Ort Schritt für Schritt durch das Captive Portal auf dem Smartphone zu leiten:
                     </p>
 
-                    <!-- Schnellnavigation / Sprungmarken -->
                     <!-- Schnellnavigation / Sprungmarken -->
                     <div class="space-y-2 mb-4">
                         <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Schnell-Navigation</span>
