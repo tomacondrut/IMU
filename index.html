@@ -1147,9 +1147,16 @@
             </div>
 
             <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & SCHNELL-NAVIGATION -->
-            <div class="w-full lg:w-88 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
+            <!-- Breadcrumb: 2026-10-04 17:15 - Restructured Support Guide Workflow
+         [CRITICAL FEATURE - LOGICAL TROUBLESHOOTING SEQUENCE]:
+         1. Sequence: 1. LTE Test -> 2. Terminal Log Check (Standard path finished if OK).
+         2. Fallback path (No LTE): 1. Turn LTE off for battery save -> 2. Optional Wi-Fi provisioning.
+         3. Field operation: Periodic double-tap sync trigger.
+         4. Live verification: Check data ingress & battery status directly on GitHub Pages portal. -->
+            <div class="w-full lg:w-96 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
                 <div class="space-y-3.5">
-                    <div class="flex items-center justify-between pb-2.5 border-b border-slate-200">
+                    <!-- Header -->
+                    <div class="flex items-center justify-between pb-2 border-b border-slate-200">
                         <div class="flex items-center gap-2">
                             <span class="text-base">🧭</span>
                             <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800">Support-Leitfaden</h3>
@@ -1157,75 +1164,103 @@
                         <button type="button" onclick="closePhoneSimulatorModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
                     </div>
 
-                    <p class="text-[11px] text-slate-600 leading-relaxed">
-                        Telefonische Schritt-für-Schritt-Anleitung für Service-Mitarbeiter vor Ort:
-                    </p>
+                    <!-- Vorbereitung: Portal-Einstieg -->
+                    <div class="bg-blue-50/80 border border-blue-200 p-2.5 rounded-lg text-[11px] text-blue-900 leading-snug">
+                        <span class="font-bold flex items-center gap-1 text-blue-950 mb-1">
+                            <span>📱</span> Portal-Einstieg vor Ort:
+                        </span>
+                        <p>1. Taster <strong>1.5 s halten</strong> (LEDs: Cyan / WLAN-Welle).</p>
+                        <p>2. Smartphone mit WLAN <strong>STAG IMU-1</strong> verbinden (<code class="font-bold">stag2026</code>).</p>
+                        <p>3. Browser öffnen: <code class="font-bold">http://10.10.10.1/</code></p>
+                    </div>
 
-                    <!-- Schnellnavigation -->
+                    <!-- Schnellnavigation / Direkt-Sprünge -->
                     <div class="space-y-1.5">
-                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Direktsprung im Simulator</span>
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Schnell-Navigation</span>
+
                         <button type="button" onclick="switchSimPhoneTab('conn')"
                                 class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
-                            <span>1. Schritt: SIM & LTE testen</span>
+                            <span>1. LTE-Test ausführen</span>
                             <span class="text-blue-700 font-bold text-[10px]">Konnektivität ➔</span>
                         </button>
-                        <button type="button" onclick="unlockAndShowWifiSetup()"
-                                class="w-full text-left bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between">
-                            <span>2. Schritt: Lokales WLAN eintragen</span>
-                            <span class="text-emerald-700 font-bold text-[10px]">WLAN ➔</span>
-                        </button>
+
                         <button type="button" onclick="switchSimPhoneTab('term')"
-                                class="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-medium text-slate-800 transition flex items-center justify-between">
-                            <span>3. Schritt: Seriellen Log einsehen</span>
+                                class="w-full text-left bg-purple-50/70 hover:bg-purple-100/70 border border-purple-200 p-2 rounded-lg text-xs font-medium text-purple-900 transition flex items-center justify-between">
+                            <span>2. Seriellen Log prüfen</span>
                             <span class="text-purple-700 font-bold text-[10px]">Terminal ➔</span>
                         </button>
+
+                        <button type="button" onclick="unlockAndShowWifiSetup()"
+                                class="w-full text-left bg-emerald-50/80 hover:bg-emerald-100/80 border border-emerald-200 p-2 rounded-lg text-xs font-medium text-emerald-900 transition flex items-center justify-between">
+                            <span>3. Fallback: WLAN eintragen (optional)</span>
+                            <span class="text-emerald-700 font-bold text-[10px]">WLAN ➔</span>
+                        </button>
                     </div>
 
-                    <!-- 1. Kein Empfang / Akkuschonung -->
-                    <div class="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[11px] text-amber-900 space-y-1">
-                        <span class="font-bold flex items-center gap-1.5 text-amber-800">
-                            <span>⚠️️</span> Kein LTE-Empfang nach Test?
-                        </span>
-                        <p class="leading-relaxed">
-                            Wird kein Netz gefunden (CSQ 99 / Fehler), im Reiter <strong>Konnektivität</strong> das LTE-Modul auf <strong class="text-red-700">DEAKTIVIERT</strong> schalten. Das trennt das Modem hardwareseitig vom Strom und schützt den Akku vor dauerhaften Suchzyklen.
-                        </p>
-                    </div>
-
-                    <!-- 2. Datenabruf-Strategie bei fehlendem Mobilfunk -->
-                    <div class="bg-slate-50 border border-slate-200 p-3 rounded-lg text-[11px] text-slate-800 space-y-2">
-                        <span class="font-bold block text-slate-900">
-                            🔄 Datenabruf ohne Mobilfunkverbindung:
+                    <!-- 1. STANDARD-ABLAUF: LTE TEST & TERMINAL -->
+                    <div class="bg-slate-50 border border-slate-200 p-3 rounded-lg text-[11px] text-slate-800 space-y-1.5">
+                        <span class="font-bold text-slate-900 flex items-center gap-1.5">
+                            <span>📶</span> 1. Standard: LTE-Test & Log-Prüfung
                         </span>
                         <p class="text-slate-600 leading-relaxed">
-                            Ohne LTE ist eine <strong>automatische Cloud-Synchronisation nicht möglich</strong>. Die Datenrettung erfolgt über zwei alternative Pfade:
+                            1. Im Reiter <strong>Konnektivität</strong> auf <strong class="text-blue-700">⚡ LTE Testen</strong> tippen.<br>
+                            2. <strong>Direkt ins Terminal wechseln</strong> und den Verbindungsaufbau verifizieren:
                         </p>
-                        <div class="space-y-1.5 pt-1">
-                            <div class="bg-white p-2 rounded border border-slate-200">
-                                <span class="font-bold text-slate-900 block">Pfad A: Physische SD-Entnahme</span>
-                                <p class="text-slate-600 text-[10px] mt-0.5">
-                                    Taster am Gerät <strong>3 s gedrückt halten</strong> (Safe Shutdown: LEDs leuchten dauerhaft Bernstein/Rot). Danach SD-Karte gefahrlos entnehmen und am PC auslesen.
-                                </p>
-                            </div>
-                            <div class="bg-white p-2 rounded border border-slate-200">
-                                <span class="font-bold text-slate-900 block">Pfad B: Lokales WLAN & Taster-Doppelklick</span>
-                                <p class="text-slate-600 text-[10px] mt-0.5">
-                                    Im Captive Portal unter <strong>Admin (stag2026)</strong> das Firmen-WLAN oder einen Smartphone-Hotspot hinterlegen. Im Messbetrieb periodisch einen <strong>Doppelklick auf den Taster</strong> ausführen: Das Gerät verbindet sich mit dem bekannten WLAN und lädt den Rückstau vollständig in die Cloud.
-                                </p>
-                            </div>
+                        <div class="bg-slate-900 text-green-400 p-2 rounded font-mono text-[9px] leading-tight space-y-0.5">
+                            <div>+CPIN: READY &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ SIM entsperrt</div>
+                            <div>+CEREG: 0,1 / 0,5 &nbsp;&nbsp;→ Cat-M1 eingebucht</div>
+                            <div>HTTP 200 / 201 &nbsp;&nbsp;&nbsp;&nbsp;→ Upload erfolgreich</div>
                         </div>
+                        <p class="text-emerald-700 font-semibold text-[10px] pt-0.5">
+                            ✓ Wenn Test erfolgreich: Fertig! Das Gerät sendet seine Daten künftig vollautomatisch per Mobilfunk.
+                        </p>
                     </div>
 
-                    <!-- Anweisung Captive Portal Aufbau -->
-                    <div class="bg-blue-50 border border-blue-200 p-2.5 rounded-lg text-[11px] text-blue-900 space-y-1">
-                        <span class="font-bold block">💡 Verbindung zum Portal:</span>
-                        <p>1. Taster <strong>1.5 s halten</strong> (WLAN-Wellen-LEDs aktiv).</p>
-                        <p>2. Smartphone mit WLAN <strong>STAG IMU-1</strong> verbinden (Passwort: <code class="font-bold">stag2026</code>).</p>
-                        <p>3. Browser öffnen: <code class="font-bold">http://10.10.10.1/</code>.</p>
+                    <!-- 2. FALLBACK-ABLAUF: KEIN LTE-EMPFANG -->
+                    <div class="bg-amber-50/90 border border-amber-200 p-3 rounded-lg text-[11px] text-amber-950 space-y-2">
+                        <span class="font-bold flex items-center gap-1.5 text-amber-900">
+                            <span>⚠️</span> 2. Fallback: Kein LTE-Empfang (CSQ 99 / Fehler)
+                        </span>
+                        <p class="text-amber-900/90 leading-relaxed">
+                            Ohne Mobilfunk ist <strong>keine automatische Hintergrundübertragung möglich</strong>. In diesem Fall:
+                        </p>
+
+                        <!-- A. LTE Abschalten -->
+                        <div class="bg-white p-2 rounded border border-amber-200">
+                            <span class="font-bold text-slate-900 block">Schritt A: LTE-Modul abschalten (Akkuschutz)</span>
+                            <p class="text-slate-600 text-[10px] mt-0.5">
+                                Im Reiter <em>Konnektivität</em> das LTE-Modul auf <strong class="text-red-600">DEAKTIVIERT</strong> schalten. Das trennt das Modem vom Strom und verhindert, dass endlose Suchläufe die Batterie leeren.
+                            </p>
+                        </div>
+
+                        <!-- B. Lokales WLAN & Taster-Doppeltippen -->
+                        <div class="bg-white p-2 rounded border border-amber-200 space-y-1">
+                            <span class="font-bold text-slate-900 block">Schritt B: Lokales WLAN & Taster-Doppeltipp</span>
+                            <p class="text-slate-600 text-[10px] leading-relaxed">
+                                • Im Portal unter <strong>Admin (<code class="font-bold">stag2026</code>)</strong> das Firmen-WLAN oder einen Smartphone-Hotspot hinterlegen.<br>
+                                • <strong>Im Messbetrieb vor Ort:</strong> Periodisch einen <strong>Doppelklick auf den Taster</strong> ausführen. Das Board verbindet sich mit dem bekannten WLAN und lädt den gesamten Mess-Rückstau in die Cloud.
+                            </p>
+                        </div>
+
+                        <!-- C. Verifikation auf GitHub Pages -->
+                        <div class="bg-emerald-50 border border-emerald-300 p-2 rounded text-[10px] text-emerald-950">
+                            <span class="font-bold text-emerald-900 block">Schritt C: Live-Prüfung auf GitHub Pages:</span>
+                            <p class="text-emerald-800 mt-0.5 leading-relaxed">
+                                Nach dem Doppelklick das Dashboard auf <strong>GitHub Pages</strong> öffnen:
+                                <br>1. Im Reiter <strong>Cloud IMU</strong> erscheint der übertragene Mess-Chunk in der Tageszeitleiste.
+                                <br>2. Im Header aktualisiert sich der Zeitstempel und die Batteriespannung.
+                            </p>
+                        </div>
+
+                        <!-- D. Alternative: Physische SD-Entnahme -->
+                        <div class="text-[10px] text-slate-500 pt-0.5 leading-snug">
+                            <em>Alternative ohne jedes WLAN:</em> Taster <strong>3 s halten</strong> (Safe Shutdown: LEDs leuchten durchgehend Bernstein/Rot). Erst danach die SD-Karte gefahrlos entnehmen und am Computer auslesen.
+                        </div>
                     </div>
                 </div>
 
                 <button type="button" onclick="closePhoneSimulatorModal()"
-                        class="w-full mt-4 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold py-2 rounded-lg text-xs transition">
+                        class="w-full mt-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold py-2 rounded-lg text-xs transition">
                     Simulator schließen
                 </button>
             </div>
