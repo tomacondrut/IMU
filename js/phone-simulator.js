@@ -387,3 +387,25 @@ function highlightSimLteToggle() {
         }
     }, 100);
 }
+
+/*
+* Breadcrumb: 2026-10-04 17:50 - Header Lock Highlighting Controller
+* [CRITICAL FEATURE - VISUAL GUIDANCE FOR EXTENDED ADMIN MENU]:
+* Scrolls to the top of the simulated phone screen and flashes a pulsing 
+* highlight ring around #sim-lock-btn in the header bar.
+*/
+function highlightSimLock() {
+    const scrollContainer = document.getElementById('sim-portal-scroll');
+    if (scrollContainer) {
+        scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    setTimeout(() => {
+        const lockBtn = document.getElementById('sim-lock-btn');
+        if (lockBtn) {
+            lockBtn.classList.add('ring-4', 'ring-amber-400', 'scale-125');
+            setTimeout(() => {
+                lockBtn.classList.remove('ring-4', 'ring-amber-400', 'scale-125');
+            }, 1800);
+        }
+    }, 100);
+}
