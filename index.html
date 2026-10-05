@@ -209,8 +209,17 @@
 
             <!-- Hauptbereich: 3D-Viewport (links) & Waveform-Canvas mit Zoom (rechts) -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-                <!-- 3D Canvas -->
+                <!-- 3D Canvas im Replay-Deck -->
                 <div class="lg:col-span-1 rounded-lg border border-slate-300 relative overflow-hidden h-60" style="background-color: #dbe2ea;">
+                    <!-- Schnellauswahl Blickwinkel -->
+                    <div class="absolute top-2 right-2 flex items-center gap-1 z-10 bg-white/90 backdrop-blur-sm border border-slate-300 rounded-lg p-1 shadow-sm select-none">
+                        <button onclick="setReplayCameraView('iso')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Isometrische 3D-Ansicht">🎲 3D Iso</button>
+                        <button onclick="setReplayCameraView('top')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Draufsicht">🔝 Oben</button>
+                        <button onclick="setReplayCameraView('front')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Frontansicht">📐 Front</button>
+                        <button onclick="setReplayCameraView('side')" class="px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition" title="Seitenansicht (Kippbewegung)">↔ Seite</button>
+                        <button onclick="setReplayCameraView('reset')" class="px-1.5 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-500 transition" title="Reset">🔄</button>
+                    </div>
+
                     <div id="replay-canvas-container" class="w-full h-full"></div>
                     <div id="replay-overlay-hud" class="absolute bottom-2 left-2 bg-white/95 backdrop-blur-sm border border-slate-300 px-2.5 py-1 rounded text-[10px] font-mono text-slate-800 pointer-events-none shadow-sm">
                         ROT: W:1.00 X:0.00 Y:0.00 Z:0.00
