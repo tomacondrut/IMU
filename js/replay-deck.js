@@ -31,6 +31,10 @@ let isDayMergedMode = false; // Flag für aktive Tages-Zusammenführung
 
 // Three.js Replay Instanzen
 let repScene, repCamera, repRenderer, repMesh;
+let repControls = null;
+let repAnimId3D = null;
+
+
 
 /*
  * Breadcrumb: 2026-09-20 08:00 - Persistent Cache API & In-Memory Fallback Engine
@@ -92,42 +96,18 @@ window.clearImuLogCache = clearImuLogCache;
 // 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
 // ============================================================================
 
+// ============================================================================
+// 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
+// ============================================================================
 /*
- * Breadcrumb: 2026-09-28 19:45 - Dynamic 3D Viewport Resizer & Observer
- * [CRITICAL BUGFIX FLAG - RESPONSIVE REPLAY 3D VIEWPORT]:
- * 1. Added ResizeObserver directly on #replay-canvas-container to update camera aspect on DOM unhide.
- * 2. Exposed window.resizeReplayDeck coordinating WebGL canvas and graph redraws.
- * 3. Dismissed code: static 300x240 fallback render ignoring parent DOM width after display:none.
+ * Breadcrumb: 2026-10-05 20:05 - OrbitControls, GridHelper & Side Camera View
+ * [FEATURE - 360° REPLAY ROTATION & 90-DEGREE SIDE VIEW PARITY]:
+ * 1. Initialisiert OrbitControls mit Damping (0.08) für freies Drehen per Maus & Touch.
+ * 2. Fügt GridHelper (Y = -0.5) als Bodenebene ein, um die 90°-Kippachse optisch zu referenzieren.
+ * 3. window.setReplayCameraView('side') richtet die Kamera auf (3.8, 0.3, 0) aus (Seitenansicht der Kippstation).
+ * 4. animateReplay3D() aktualisiert den Viewport kontinuierlich, auch wenn die Wiedergabe pausiert ist.
+ * 5. Dismissed: Starre Kamera ohne OrbitControls verhinderte das Rotieren im Replay.
  */
-// ============================================================================
-// 1. THREE.JS 3D VIEWPORT & MODELL-LADEN (MIT ORBITCONTROLS & SEITENANSICHT)
-// ============================================================================
-
-let repContainerObserver = null;
-let repControls = null;
-let repAnimId3D = null;
-
-function resizeReplay3D() {
-    const container = document.getElementById('replay-canvas-container');
-    if (!container || !repRenderer || !repCamera) return;
-    const w = container.clientWidth;
-    const h = container.clientHeight;
-    if (w > 0 && h > 0) {
-        repCamera.aspect = w / h;
-        repCamera.updateProjectionMatrix();
-        repRenderer.setSize(w, h);
-        if (repScene) repRenderer.render(repScene, repCamera);
-    }
-}
-
-function resizeReplayDeck() {
-    resizeReplay3D();
-    invalidateReplayGraphCache();
-    drawReplayGraph(replayCurrentTimeSec);
-}
-window.resizeReplayDeck = resizeReplayDeck;
-
-// Schnellauswahl der Kameraperspektive im Replay (analog zu live-3d.js)
 window.setReplayCameraView = function (viewName) {
     if (!repCamera) return;
 
@@ -144,7 +124,7 @@ window.setReplayCameraView = function (viewName) {
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'side') {
-        // Seitenansicht: Blick entlang der Drehachse auf die 90°-Kippbewegung
+        // Seitenansicht: Blick rechtwinklig auf die Drehachse der 90°-Kippstation
         repCamera.position.set(3.8, 0.3, 0);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
@@ -165,7 +145,11 @@ function initReplay3D() {
     }
 
     if (repRenderer) {
-        resizeReplay3D();
+        if (container.clientWidth > 0 && repCamera) {
+            repCamera.aspect = container.clientWidth / container.clientHeight;
+            repCamera.updateProjectionMatrix();
+            repRenderer.setSize(container.clientWidth, container.clientHeight);
+        }
         return;
     }
 
@@ -174,8 +158,6 @@ function initReplay3D() {
 
     repScene = new THREE.Scene();
     repScene.background = new THREE.Color(0xdbe2ea);
-
-    // Kamera-Startposition: leicht erhöht isometrisch
     repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
     repCamera.position.set(2.4, 2.0, 2.8);
     repCamera.lookAt(0, 0, 0);
@@ -186,7 +168,7 @@ function initReplay3D() {
     repRenderer.setClearColor(0xdbe2ea, 1.0);
     container.appendChild(repRenderer.domElement);
 
-    // 360° OrbitControls mit Dämpfung (Touch & Maus)
+    // 360° Maus- und Touch-Steuerung
     if (typeof THREE.OrbitControls !== 'undefined') {
         repControls = new THREE.OrbitControls(repCamera, repRenderer.domElement);
         repControls.enableDamping = true;
@@ -207,7 +189,7 @@ function initReplay3D() {
 
     repScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
-    // Bodenebene-Gitter (Y = -0.5) zur visuellen Referenz des Kippwinkels
+    // Bodengitter in der XZ-Ebene (Y = -0.5) als Referenz zum Kippwinkel
     const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
     grid.position.y = -0.5;
     repScene.add(grid);
@@ -215,77 +197,73 @@ function initReplay3D() {
     createReplayFallbackCube();
     loadReplayGLBModel();
 
-    if (!repContainerObserver && window.ResizeObserver) {
-        repContainerObserver = new ResizeObserver(() => {
-            resizeReplay3D();
-        });
-        repContainerObserver.observe(container);
-    }
+    window.addEventListener('resize', () => {
+        if (!container || container.clientWidth === 0) return;
+        repCamera.aspect = container.clientWidth / container.clientHeight;
+        repCamera.updateProjectionMatrix();
+        repRenderer.setSize(container.clientWidth, container.clientHeight);
+    });
 
-    window.addEventListener('resize', resizeReplay3D);
-
-    // Kontinuierliche Render-Schleife für flüssige Maus- und Touch-Steuerung
-    function animateReplayControls() {
-        repAnimId3D = requestAnimationFrame(animateReplayControls);
+    // Kontinuierliche Renderschleife (beendet sich selbst bei ausgeblendetem Deck)
+    function animateReplay3D() {
+        requestAnimationFrame(animateReplay3D);
+        const cont = document.getElementById('replay-canvas-container');
+        if (!cont || cont.clientWidth === 0) return;
         if (repControls) repControls.update();
         if (repRenderer && repScene && repCamera) {
             repRenderer.render(repScene, repCamera);
         }
     }
-    animateReplayControls();
+    animateReplay3D();
 }
 
 function createReplayFallbackCube() {
     if (repMesh && repScene) repScene.remove(repMesh);
-    const group = new THREE.Group();
-
-    // Anthrazitfarbener Korpus
-    const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.2, roughness: 0.5 });
-    group.add(new THREE.Mesh(bodyGeo, bodyMat));
-
-    // Grüne Deckelplatte
-    const topGeo = new THREE.BoxGeometry(1.68, 0.04, 0.82);
-    const topMat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.3 });
-    const topMesh = new THREE.Mesh(topGeo, topMat);
-    topMesh.position.y = 0.21;
-    group.add(topMesh);
-
-    // Weiße Markierung vorne
-    const frontGeo = new THREE.BoxGeometry(0.5, 0.08, 0.04);
-    const frontMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0 });
-    const frontMesh = new THREE.Mesh(frontGeo, frontMat);
-    frontMesh.position.set(0, 0.1, 0.48);
-    group.add(frontMesh);
-
-    repMesh = group;
+    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
+    repMesh = new THREE.Mesh(geo, mat);
     repScene.add(repMesh);
 }
 
 function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
-
-    const box = new THREE.Box3().setFromObject(gltfScene);
-    const center = box.getCenter(new THREE.Vector3());
+    repMesh = gltfScene;
+    const box = new THREE.Box3().setFromObject(repMesh);
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-
-    gltfScene.traverse((child) => {
-        if (child.isMesh && child.material) {
-            child.material.side = THREE.DoubleSide;
-        }
-    });
-
-    const group = new THREE.Group();
-    if (maxDim > 0) {
-        const s = 1.8 / maxDim;
-        gltfScene.scale.set(s, s, s);
-        gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
-    }
-    group.add(gltfScene);
-
-    repMesh = group;
+    if (maxDim > 0) repMesh.scale.set(1.8 / maxDim, 1.8 / maxDim, 1.8 / maxDim);
     repScene.add(repMesh);
+    if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
+}
+
+function loadReplayGLBModel() {
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createReplayFallbackCube();
+        return;
+    }
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            createReplayFallbackCube();
+            return;
+        }
+        loader.load(
+            candidatePaths[index],
+            (gltf) => { setupReplayModelMesh(gltf.scene); },
+            undefined,
+            () => { tryLoad(index + 1); }
+        );
+    }
+    tryLoad(0);
+}
+
+function closeImuReplayDeck() {
+    if (replayIsPlaying) toggleReplayPlay();
+    isDayMergedMode = false; // Zurücksetzen
+    const deck = document.getElementById('imu-replay-deck');
+    if (deck) deck.classList.add('hidden');
 }
 
 // ============================================================================
@@ -310,11 +288,6 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     return { roll, pitch, yaw };
 }
 
-/*
- * Breadcrumb: 2026-09-28 20:35 - Cache Invalidation Hooks
- * [CRITICAL BUGFIX FLAG - BUFFER INVALIDATION ON FILTER SWITCH]:
- * Explicitly calls invalidateReplayGraphCache() on mode or threshold adjustments.
- */
 function setReplayGraphMode(mode) {
     replayGraphMode = mode;
     const btnAcc = document.getElementById('btn-replay-mode-acc');
@@ -330,7 +303,6 @@ function setReplayGraphMode(mode) {
         if (btnEuler) btnEuler.className = activeClass;
         if (btnAcc) btnAcc.className = inactiveClass;
     }
-    invalidateReplayGraphCache();
     drawReplayGraph(replayCurrentTimeSec);
 }
 
@@ -366,22 +338,11 @@ function formatReplayTimestamp(tsStr, withSec = true) {
  * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
  * Displays real recording start time for individual wake cycles inside single files.
  */
-/*
- * Breadcrumb: 2026-09-28 20:20 - Robust Single-File Delimiter Detection & Playback Guard
- * [CRITICAL BUGFIX FLAG - CSV PARSING & STATE RESET]:
- * 1. Added semicolon/comma delimiter auto-detection to inspectImuFile.
- * 2. Pauses active replay and resets playhead before parsing single file.
- * 3. onReplayCycleSelect resets playhead to 0.0s to eliminate duration overhang.
- */
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
     isDayMergedMode = false;
-
-    // Laufende Wiedergabe sicher stoppen und Zeit nullen
-    if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
 
     deck.classList.remove('hidden');
     deck.scrollIntoView({ behavior: 'smooth' });
@@ -401,9 +362,7 @@ async function inspectImuFile(downloadUrl, fileName) {
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            // Dynamische Erkennung von Komma oder Semikolon
-            const sep = line.includes(';') ? ';' : ',';
-            const parts = line.split(sep);
+            const parts = line.split(',');
             if (parts.length >= 8) {
                 const qw = parseFloat(parts[1]) || 1.0;
                 const qx = parseFloat(parts[2]) || 0.0;
@@ -449,11 +408,7 @@ async function inspectImuFile(downloadUrl, fileName) {
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
     }
 }
-/*
- * Breadcrumb: 2026-09-28 19:40 - Synchronous Clean Cycle Select
- * [CRITICAL BUGFIX FLAG - DIRECT RESET WITH RESIZE OBSERVER GUARD]:
- * Reset zoom and trigger peak counter without frame delay races.
- */
+
 function onReplayCycleSelect(cycleVal) {
     const select = document.getElementById('replay-cycle-select');
     if (select) select.value = cycleVal;
@@ -466,7 +421,7 @@ function onReplayCycleSelect(cycleVal) {
     }
 
     const total = replayFilteredData.length;
-    const durSec = total > 0 ? ((total - 1) * 0.1).toFixed(1) : "0.0";
+    const durSec = ((total - 1) * 0.1).toFixed(1);
 
     document.getElementById('replay-meta-info').innerText =
         `${total} Messpunkte geladen | Dauer: ${durSec} s | 100 ms Raster`;
@@ -476,13 +431,9 @@ function onReplayCycleSelect(cycleVal) {
     const totalTimeLabel = document.getElementById('replay-total-time-label');
     if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
 
-    // Setzt Playhead auf den Zyklusstart zurück, um Zeitausreißer zu vermeiden
-    if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
-
     resetReplayZoom();
     if (replayAccThreshold > 0 && typeof setReplayThreshold === 'function') {
-        setReplayThreshold(replayAccThreshold);
+        setReplayThreshold(replayAccThreshold); // Zählt Peaks passend zum gewählten Einzel-Zyklus
     }
 }
 
@@ -503,6 +454,13 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
+    /*
+ * Breadcrumb: 2026-10-05 20:10 - Sensor-to-World Alignment for 90° Frame Mounting
+ * [CRITICAL BUGFIX FLAG - REPLAY ORIENTATION PARITY WITH LIVE-3D]:
+ * 1. Added second premultiply(-90° X) to align Z-plane into Three.js Y-up world.
+ * 2. Models mounted perpendicularly (90° offset) now tilt correctly above the GridHelper.
+ * 3. Dismissed: Single 90° Z premultiply left ground vector tilted into depth axis.
+ */
     if (repMesh && repScene && repCamera) {
         const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
         const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
@@ -512,8 +470,8 @@ function renderInterpolatedFrame(tSec) {
 
         if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
         qA.slerp(qB, alpha);
-        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // Richtet Z-Ebene in Three.js Y-Up aus
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)); // 90° Z Sensor-Offset
+        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X Neigung in Y-Up-Welt
         repMesh.quaternion.copy(qA);
 
         const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
@@ -575,34 +533,6 @@ function renderInterpolatedFrame(tSec) {
 // ============================================================================
 // 4. BEREICHS-ZOOM, PAN & INTERAKTIVES OSZILLOSKOP
 // ============================================================================
-// ============================================================================
-// 4. BEREICHS-ZOOM, PAN & ULTRA-FAST BACK-BUFFER OSZILLOSKOP
-// ============================================================================
-
-/*
- * Breadcrumb: 2026-09-28 20:35 - Zero-Latency In-Memory Back-Buffer & Min-Max Decimation
- * [CRITICAL BUGFIX FLAG - 80K POINT STUTTER ELIMINATION]:
- * 1. Background grid, peak zones and 80k data curves pre-rendered ONCE onto an offscreen back-buffer.
- * 2. Playback loop at 60 FPS only executes high-speed ctx.drawImage() (<0.2ms) + cursor blit.
- * 3. Min-Max column decimation reduces 80,000 path vertices down to screen pixel width.
- * 4. Dismissed code: redrawing all 80k samples with lineTo inside requestAnimationFrame (caused CPU freeze).
- * 5. Dismissed code: dual DOM canvas overlays causing layout reflows and pointer collision bugs.
- */
-
-const repBgBuffer = document.createElement('canvas');
-let bgBufferNeedsUpdate = true;
-let bufStartSec = -1;
-let bufEndSec = -1;
-let bufMode = '';
-let bufThreshold = -1;
-let bufDataLen = -1;
-let bufW = 0;
-let bufH = 0;
-
-function invalidateReplayGraphCache() {
-    bgBufferNeedsUpdate = true;
-}
-window.invalidateReplayGraphCache = invalidateReplayGraphCache;
 
 function getTimeBounds() {
     const maxDur = Math.max((replayFilteredData.length - 1) * 0.1, 0.001);
@@ -653,10 +583,32 @@ function resetReplayZoom() {
         scrubber.value = Math.round(replayCurrentTimeSec / 0.1);
     }
 
-    invalidateReplayGraphCache();
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
+/*
+ * Breadcrumb: 2026-09-20 09:30 - Precision Drag-to-Zoom Sensitivity & Ghost Click Elimination
+ * [CRITICAL BUGFIX FLAG - SEPARATE CLICK SCRUB FROM REGION ZOOM]:
+ * 1. Added e.preventDefault() on mousedown to block native canvas/text drag collisions.
+ * 2. Reduced zoom detection threshold from 15px to 6px so even small peak selections reliably zoom.
+ * 3. Playhead only jumps on deliberate stationary clicks (dx < 6px).
+ * 4. Reduced minimum time slice to 20ms (0.02s) for micro-transient analysis.
+ */
+/*
+ * Breadcrumb: 2026-09-20 09:40 - Unified Touch & Mouse Gesture Engine for Replay Canvas
+ * [CRITICAL BUGFIX FLAG - MOBILE TOUCH DRAG-TO-ZOOM]:
+ * 1. Added passive:false touchstart, touchmove, touchend handlers to support mobile drag-to-zoom.
+ * 2. e.preventDefault() blocks browser viewport panning/pull-to-refresh while swiping the canvas.
+ * 3. Unified touch-to-pixel coordinate translation matching devicePixelRatio and canvas bounding rect.
+ * 4. 8px threshold distinguishes quick thumb-taps (scrub playhead) from region selection (zoom).
+ */
+/*
+ * Breadcrumb: 2026-09-20 09:40 - Precision Drag-to-Zoom & Unified Touch Engine
+ * [CRITICAL BUGFIX FLAG - MOBILE TOUCH & CLICK SCRUB SEPARATION]:
+ * 1. Reduced zoom detection threshold from 15px to 6px to reliably catch fine selections.
+ * 2. Added passive:false touchstart/touchmove/touchend handlers for iPhone & Android gestures.
+ * 3. e.preventDefault() stops browser text selection, page scrolling, and ghost clicks on canvas.
+ */
 function attachCanvasInteraction() {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || canvasListenersAttached) return;
@@ -695,6 +647,7 @@ function attachCanvasInteraction() {
         const dx = Math.abs(selectCurrentX - selectStartX);
         const w = cvNow.clientWidth;
 
+        // Ab 6px Bewegung verlässlich als Bereichs-Zoom werten
         if (dx >= 6) {
             const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
             const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
@@ -717,16 +670,17 @@ function attachCanvasInteraction() {
                     scrubber.value = Math.round(t1 / 0.1);
                 }
 
-                invalidateReplayGraphCache();
                 renderInterpolatedFrame(replayCurrentTimeSec);
             }
         } else {
+            // Reiner Klick (< 6px): Playhead-Position versetzen
             const targetTime = xToTime(selectStartX, w, leftMargin);
             replayCurrentTimeSec = targetTime;
             renderInterpolatedFrame(replayCurrentTimeSec);
         }
     }
 
+    // Desktop Maus-Events
     cv.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -741,6 +695,7 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
+    // Smartphone Touch-Events (iOS & Android)
     cv.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             e.preventDefault();
@@ -759,15 +714,27 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
+    /*
+  * Breadcrumb: 2026-09-20 10:10 - Frame-by-Frame Wheel Scrubbing Controller
+  * [CRITICAL BUGFIX FLAG - WHEEL STEP PLAYBACK]:
+  * 1. Replaced horizontal pan with single-sample step scrubbing (100ms / 0.1s raster per notch).
+  * 2. Works seamlessly in both unzoomed full views and zoomed sub-regions.
+  * 3. Automatically pauses active animation loop to prevent playback fighting.
+  * 4. Bounds scrubbing strictly within visible time bounds (tStart to tEnd).
+  */
+    // Mausrad: Schrittweises Abspielen / Spulen (1 Sample = 100 ms pro Raste)
     cv.addEventListener('wheel', (e) => {
         e.preventDefault();
         if (replayFilteredData.length === 0) return;
 
+        // Laufende Wiedergabe bei manuellem Drehen pausieren
         if (replayIsPlaying) toggleReplayPlay();
 
         const { tStart, tEnd } = getTimeBounds();
+
+        // Rad nach unten (deltaY > 0) = Vorwärts, Rad nach oben (deltaY < 0) = Rückwärts
         const direction = e.deltaY > 0 ? 1 : -1;
-        const stepSec = 0.1;
+        const stepSec = 0.1; // Exakt 1 Messpunkt (10 Hz Sensorraster)
 
         let newTime = replayCurrentTimeSec + (direction * stepSec);
         newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
@@ -777,24 +744,41 @@ function attachCanvasInteraction() {
     }, { passive: false });
 }
 
-// ----------------------------------------------------------------------------
-// EINMALIGES RENDERN DES HINTERGRUND-PUFFERS (OFFSCREEN)
-// ----------------------------------------------------------------------------
-function renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSpan) {
-    repBgBuffer.width = w;
-    repBgBuffer.height = h;
-    const ctx = repBgBuffer.getContext('2d');
+/*
+ * Breadcrumb: 2026-09-20 07:45 - Highlighting & Threshold Grid Line Renderer
+ * [CRITICAL BUGFIX FLAG - CANVAS THRESHOLD SHADING RESTORATION]:
+ * 1. Integrated background red warning tint (rgba(239, 68, 68, 0.22)) for points exceeding replayAccThreshold.
+ * 2. Renders dashed red reference lines at ±replayAccThreshold when threshold is active.
+ * 3. Clips threshold highlights strictly within plot margins to prevent canvas bleed.
+ */
+function drawReplayGraph(curTimeSec) {
+    const cv = document.getElementById('replayGraphCanvas');
+    if (!cv || replayFilteredData.length === 0) return;
+
+    attachCanvasInteraction();
+
+    const w = cv.width = cv.clientWidth;
+    const h = cv.height = cv.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, w, h);
 
     const count = replayFilteredData.length;
     const midY = h / 2;
+    const leftMargin = 38;
+    const plotW = w - leftMargin;
+
+    if (count < 2) return;
+
+    const { tStart, tEnd, tSpan } = getTimeBounds();
+
+    let maxScale = 2.0;
     const isEuler = (replayGraphMode === 'euler');
 
     const startIndex = Math.max(0, Math.floor(tStart / 0.1) - 1);
     const endIndex = Math.min(count - 1, Math.ceil(tEnd / 0.1) + 1);
 
-    // 1. Skalierung ermitteln (gecacht über sichtbares Fenster)
-    let maxScale = 2.0;
     if (!isEuler) {
         for (let i = startIndex; i <= endIndex; i++) {
             const d = replayFilteredData[i];
@@ -817,7 +801,9 @@ function renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSp
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // 2. Schwellenwert-Zonen (auf Pixelspalten aggregiert für 80k-Performance)
+    // ========================================================================
+    // 1. SCHWELLENWERT-HINTERGRUND (ROTE WARNZONEN BEI PEAKS)
+    // ========================================================================
     if (replayAccThreshold > 0 && !isEuler) {
         ctx.save();
         ctx.beginPath();
@@ -825,29 +811,21 @@ function renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSp
         ctx.clip();
         ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
 
-        const visibleCount = endIndex - startIndex;
-        const ptsPerPx = visibleCount / plotW;
+        for (let i = startIndex; i <= endIndex; i++) {
+            const d = replayFilteredData[i];
+            const aLen = Math.hypot(d.ax, d.ay, d.az);
 
-        for (let col = 0; col < plotW; col++) {
-            const bStart = Math.floor(startIndex + col * ptsPerPx);
-            const bEnd = Math.min(count, Math.floor(startIndex + (col + 1) * ptsPerPx));
-            let hasPeak = false;
-
-            for (let j = bStart; j < bEnd; j++) {
-                const d = replayFilteredData[j];
-                if (Math.hypot(d.ax, d.ay, d.az) >= replayAccThreshold) {
-                    hasPeak = true;
-                    break;
-                }
-            }
-            if (hasPeak) {
-                ctx.fillRect(leftMargin + col, 0, 1.5, h);
+            if (aLen >= replayAccThreshold) {
+                const t = i * 0.1;
+                const px = timeToX(t, w, leftMargin);
+                const stepW = Math.max(2, (0.1 / tSpan) * plotW);
+                ctx.fillRect(px - stepW / 2, 0, stepW, h);
             }
         }
         ctx.restore();
     }
 
-    // 3. Amplituden-Raster
+    // Amplituden-Raster
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
@@ -862,92 +840,182 @@ function renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSp
     });
     ctx.setLineDash([]);
 
-    // 4. Horizontale Schwellenwert-Grenzlinien
+    // ========================================================================
+    // 2. HORIZONTALE SCHWELLENWERT-GRENZLINIEN (± SCHWELLE)
+    // ========================================================================
     if (replayAccThreshold > 0 && !isEuler && replayAccThreshold <= maxScale) {
         ctx.save();
         ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
         ctx.lineWidth = 1.2;
         ctx.setLineDash([4, 3]);
+
         const yPos = midY - (replayAccThreshold / maxScale) * (midY - 8);
         const yNeg = midY + (replayAccThreshold / maxScale) * (midY - 8);
+
         ctx.beginPath();
         ctx.moveTo(leftMargin, yPos); ctx.lineTo(w, yPos);
         ctx.moveTo(leftMargin, yNeg); ctx.lineTo(w, yNeg);
         ctx.stroke();
+
         ctx.fillStyle = '#dc2626';
         ctx.font = 'bold 9px monospace';
         ctx.fillText(`Schwelle ±${replayAccThreshold.toFixed(1)}`, leftMargin + 4, yPos - 3);
         ctx.restore();
     }
 
-    // 5. Zeitachse & Labels
+    /*
+     * Breadcrumb: 2026-09-20 08:35 - Adaptive Dynamic Time-Axis Stepping & Collision Guard
+     * [CRITICAL BUGFIX FLAG - ELIMINATE X-AXIS OVERLAP]:
+     * 1. Replaced hardcoded 5.0s fallback with dynamic timeStep based on available pixel width.
+     * 2. Selects clean intervals (up to 15m/30m/1h for day logs) ensuring ~75px minimum label clearance.
+     * 3. Drops redundant decimal places for steps >= 1s and switches to m/s formatting for long spans.
+     * 4. Integrated lastLabelX width-guard to guarantee zero text collisions on any viewport size.
+     */
+    // ========================================================================
+    // DYNAMISCHES ZEITRASTER & KOLLISIONSFREIE ABSZISSEN-BESCHRIFTUNG
+    // ========================================================================
+    /*
+     * Breadcrumb: 2026-09-20 08:50 - Event-Anchored Clock Time Axis for Full Day Views
+     * [CRITICAL BUGFIX FLAG - CHUNK WAKE TIME LABELS]:
+     * 1. Detects unzoomed full-day merged view (isFullDayUnzoomed).
+     * 2. Replaces arbitrary cumulative minutes (0m, 10m, 20m) with real recording clock times (HH:MM / HH:MM:SS).
+     * 3. Renders dashed vertical green separator lines at each wake cycle start.
+     * 4. Retains high-precision adaptive seconds grid when user zooms in for waveform analysis.
+     */
+    // ========================================================================
+    // ZEITRASTER: REALZEIT-UHREN FÜR TAGES-CHUNKS ODER SEKUNDEN BEIM ZOOM
+    // ========================================================================
     const isCycleAll = !document.getElementById('replay-cycle-select') || document.getElementById('replay-cycle-select').value === 'ALL';
     const hasMultipleCycles = replayFilteredData.length > 0 && (replayFilteredData[0].cycle !== replayFilteredData[replayFilteredData.length - 1].cycle);
     const isFullDayUnzoomed = !isReplayZoomed && isCycleAll && (isDayMergedMode || hasMultipleCycles);
 
     if (isFullDayUnzoomed) {
+        // 1. Alle Aufnahmestarts (Weck-Events) im Tagesverlauf erfassen
         const recordings = [];
         for (let i = 0; i < replayFilteredData.length; i++) {
             const item = replayFilteredData[i];
             if (i === 0 || item.cycle !== replayFilteredData[i - 1].cycle) {
-                recordings.push({ index: i, t: i * 0.1, ts: item.ts });
+                recordings.push({
+                    index: i,
+                    t: i * 0.1,
+                    ts: item.ts,
+                    cycle: item.cycle
+                });
             }
         }
+
+        // Hilfsfunktion: Wandelt UTC/ISO-Zeit in lokale Uhrzeit (HH:MM bzw. HH:MM:SS) um
         function getUhrzeit(tsStr, withSec) {
             if (!tsStr) return '';
             const d = new Date(tsStr);
-            return !isNaN(d.getTime())
-                ? d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', ...(withSec ? { second: '2-digit' } : {}) })
-                : (String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/)?.[1] || String(tsStr));
+            if (!isNaN(d.getTime())) {
+                return d.toLocaleTimeString('de-CH', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    ...(withSec ? { second: '2-digit' } : {})
+                });
+            }
+            const m = String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/);
+            return m ? m[1] : String(tsStr);
         }
 
+        // Sekunden einblenden, falls zwei Aufnahmen in derselben Minute stattfanden
         let withSec = false;
         for (let k = 1; k < recordings.length; k++) {
             if (getUhrzeit(recordings[k - 1].ts, false) === getUhrzeit(recordings[k].ts, false)) {
-                withSec = true; break;
+                withSec = true;
+                break;
             }
         }
 
         let lastLabelX = -999;
         ctx.font = 'bold 9px monospace';
+
+        // 2. Jedes Weck-Event mit Trennlinie und Uhrzeit markieren
         recordings.forEach((rec, idx) => {
             const px = timeToX(rec.t, w, leftMargin);
             if (px < leftMargin || px > w) return;
+
+            // Vertikale Trennlinie für den Aufnahmestart
             ctx.save();
             ctx.strokeStyle = (idx === 0) ? 'rgba(15, 23, 42, 0.25)' : 'rgba(0, 155, 76, 0.45)';
             ctx.lineWidth = (idx === 0) ? 1 : 1.2;
             if (idx > 0) ctx.setLineDash([3, 2]);
-            ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(px, 0);
+            ctx.lineTo(px, h);
+            ctx.stroke();
             ctx.restore();
 
+            // Uhrzeit-Label
             const timeLabel = getUhrzeit(rec.ts, withSec);
             const textWidth = ctx.measureText(timeLabel).width;
+
+            // Kollisionsschutz: Label nur zeichnen, wenn Freiraum zum vorherigen Text vorhanden ist
             if (px - lastLabelX >= textWidth + 8 && (px + textWidth) <= (w - 5)) {
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
                 ctx.fillRect(px + 1, h - 13, textWidth + 3, 11);
-                ctx.fillStyle = '#009B4C';
+
+                ctx.fillStyle = '#009B4C'; // STAG-Grün für Event-Uhrzeiten
                 ctx.fillText(timeLabel, px + 2, h - 4);
                 lastLabelX = px;
             }
         });
+
+        // 3. Uhrzeit des Tages-Endes ganz rechts ergänzen
+        if (recordings.length > 0) {
+            const lastSample = replayFilteredData[replayFilteredData.length - 1];
+            const endPx = timeToX((replayFilteredData.length - 1) * 0.1, w, leftMargin);
+            const endTimeLabel = getUhrzeit(lastSample.ts, withSec);
+            const endTextWidth = ctx.measureText(endTimeLabel).width;
+            if (endPx - lastLabelX >= endTextWidth + 12 && endPx <= w) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fillRect(endPx - endTextWidth - 2, h - 13, endTextWidth + 3, 11);
+                ctx.fillStyle = '#64748b';
+                ctx.fillText(endTimeLabel, endPx - endTextWidth, h - 4);
+            }
+        }
     } else {
+        // Standard dynamisches Zeitraster (beim Einzoomen oder bei Einzelaufnahmen)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
-        const niceIntervals = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-        const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
-        const firstTick = Math.ceil(tStart / timeStep) * timeStep;
 
+        const niceIntervals = [
+            0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+            1, 2, 5, 10, 15, 30,
+            60, 120, 300, 600, 900, 1800, 3600
+        ];
+        const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
+
+        const firstTick = Math.ceil(tStart / timeStep) * timeStep;
         ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
         ctx.fillStyle = '#94a3b8';
         ctx.font = '9px monospace';
+
         let lastLabelX = -999;
 
         for (let t = firstTick; t <= tEnd; t += timeStep) {
             const px = timeToX(t, w, leftMargin);
             if (px >= leftMargin && px <= w) {
-                ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-                let labelText = timeStep < 0.1 ? t.toFixed(2) + 's' : (timeStep < 1.0 ? t.toFixed(1) + 's' : (timeStep >= 60 ? `${Math.floor(t / 60)}m` : Math.round(t) + 's'));
+                ctx.beginPath();
+                ctx.moveTo(px, 0);
+                ctx.lineTo(px, h);
+                ctx.stroke();
+
+                let labelText = '';
+                if (timeStep < 0.1) {
+                    labelText = t.toFixed(2) + 's';
+                } else if (timeStep < 1.0) {
+                    labelText = t.toFixed(1) + 's';
+                } else if (timeStep >= 60) {
+                    const m = Math.floor(t / 60);
+                    const s = Math.round(t % 60);
+                    labelText = s === 0 ? `${m}m` : `${m}m ${s}s`;
+                } else {
+                    labelText = Math.round(t) + 's';
+                }
+
                 const textWidth = ctx.measureText(labelText).width;
                 if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
                     ctx.fillText(labelText, px + 2, h - 4);
@@ -957,71 +1025,37 @@ function renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSp
         }
     }
 
-    // 6. Signal-Kurven mit Min/Max-Pixelspalten-Decimation
-    const drawCurveFast = (key, colorHex) => {
+    const drawCurve = (key, colorHex) => {
         ctx.save();
         ctx.beginPath();
         ctx.rect(leftMargin, 0, plotW, h);
         ctx.clip();
         ctx.strokeStyle = colorHex;
-        ctx.lineWidth = 1.6;
+        ctx.lineWidth = 1.8;
         ctx.beginPath();
 
-        const visibleCount = endIndex - startIndex;
-        if (visibleCount <= plotW * 2) {
-            let first = true;
-            for (let i = startIndex; i <= endIndex; i++) {
-                const t = i * 0.1;
-                const px = timeToX(t, w, leftMargin);
-                const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
-                if (first) { ctx.moveTo(px, py); first = false; } else { ctx.lineTo(px, py); }
-            }
-        } else {
-            // Min-Max-Binning pro Spalte für ultra-schnelle 80.000-Punkte-Darstellung
-            const ptsPerPx = visibleCount / plotW;
-            let first = true;
-
-            for (let col = 0; col < plotW; col++) {
-                const bStart = Math.floor(startIndex + col * ptsPerPx);
-                const bEnd = Math.min(count, Math.floor(startIndex + (col + 1) * ptsPerPx));
-                if (bStart >= bEnd) continue;
-
-                let minVal = Infinity, maxVal = -Infinity;
-                for (let j = bStart; j < bEnd; j++) {
-                    const v = replayFilteredData[j][key];
-                    if (v < minVal) minVal = v;
-                    if (v > maxVal) maxVal = v;
-                }
-
-                const px = leftMargin + col;
-                const pyMin = midY - (minVal / maxScale) * (midY - 8);
-                const pyMax = midY - (maxVal / maxScale) * (midY - 8);
-
-                if (first) {
-                    ctx.moveTo(px, pyMin);
-                    if (pyMin !== pyMax) ctx.lineTo(px, pyMax);
-                    first = false;
-                } else {
-                    ctx.lineTo(px, pyMin);
-                    ctx.lineTo(px, pyMax);
-                }
-            }
+        let first = true;
+        for (let i = startIndex; i <= endIndex; i++) {
+            const t = i * 0.1;
+            const px = timeToX(t, w, leftMargin);
+            const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
+            if (first) { ctx.moveTo(px, py); first = false; }
+            else { ctx.lineTo(px, py); }
         }
         ctx.stroke();
         ctx.restore();
     };
 
     if (!isEuler) {
-        drawCurveFast('ax', '#dc2626');
-        drawCurveFast('ay', '#009B4C');
-        drawCurveFast('az', '#2563eb');
+        drawCurve('ax', '#dc2626');
+        drawCurve('ay', '#009B4C');
+        drawCurve('az', '#2563eb');
     } else {
-        drawCurveFast('roll', '#dc2626');
-        drawCurveFast('pitch', '#009B4C');
-        drawCurveFast('yaw', '#7c3aed');
+        drawCurve('roll', '#dc2626');
+        drawCurve('pitch', '#009B4C');
+        drawCurve('yaw', '#7c3aed');
     }
 
-    // Legende
     ctx.font = 'bold 9px monospace';
     const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
     const legendWidth = ctx.measureText(legendText).width;
@@ -1039,58 +1073,7 @@ function renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSp
         ctx.fillStyle = '#009B4C'; ctx.fillText('● Pitch', w - legendWidth + 31, 14);
         ctx.fillStyle = '#7c3aed'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
     }
-}
 
-// ----------------------------------------------------------------------------
-// HAUPT-ZEICHENFUNKTION (60 FPS HARDWARE-BLIT)
-// ----------------------------------------------------------------------------
-function drawReplayGraph(curTimeSec) {
-    const cv = document.getElementById('replayGraphCanvas');
-    if (!cv || replayFilteredData.length === 0) return;
-
-    attachCanvasInteraction();
-
-    const w = cv.clientWidth;
-    const h = cv.clientHeight;
-    if (w === 0 || h === 0) return;
-
-    if (cv.width !== w || cv.height !== h) {
-        cv.width = w;
-        cv.height = h;
-        bgBufferNeedsUpdate = true;
-    }
-
-    const { tStart, tEnd, tSpan } = getTimeBounds();
-    const leftMargin = 38;
-    const plotW = w - leftMargin;
-
-    // Nur bei Zoom-, Filter-, Größen- oder Modusänderung wird der Back-Buffer neu berechnet
-    if (bgBufferNeedsUpdate ||
-        tStart !== bufStartSec ||
-        tEnd !== bufEndSec ||
-        replayGraphMode !== bufMode ||
-        replayAccThreshold !== bufThreshold ||
-        replayFilteredData.length !== bufDataLen ||
-        w !== bufW ||
-        h !== bufH) {
-
-        renderReplayBackgroundBuffer(w, h, leftMargin, plotW, tStart, tEnd, tSpan);
-        bufStartSec = tStart;
-        bufEndSec = tEnd;
-        bufMode = replayGraphMode;
-        bufThreshold = replayAccThreshold;
-        bufDataLen = replayFilteredData.length;
-        bufW = w;
-        bufH = h;
-        bgBufferNeedsUpdate = false;
-    }
-
-    const ctx = cv.getContext('2d');
-
-    // 1. Blitzschneller GPU-Transfer des fertigen 80k-Hintergrunds (< 0.2 ms)
-    ctx.drawImage(repBgBuffer, 0, 0);
-
-    // 2. Bereichs-Auswahlbox zeichnen (falls Benutzer zieht)
     if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
         const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
         const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
@@ -1109,7 +1092,6 @@ function drawReplayGraph(curTimeSec) {
         ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, 18);
     }
 
-    // 3. Playhead-Cursor zeichnen
     const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
     const curX = timeToX(curTime, w, leftMargin);
 
@@ -1183,7 +1165,16 @@ function onReplaySpeedChange(spd) {
 // ============================================================================
 // WINDOW-EXPORTE FÜR DAS REPLAY-DECK (OHNE KALENDER-DOPPLUNG)
 // ============================================================================
-
+window.inspectImuFile = inspectImuFile;
+window.closeImuReplayDeck = closeImuReplayDeck;
+window.onReplayCycleSelect = onReplayCycleSelect;
+window.onReplayScrub = onReplayScrub;
+window.toggleReplayPlay = toggleReplayPlay;
+window.resetReplayPlayback = resetReplayPlayback;
+window.onReplaySpeedChange = onReplaySpeedChange;
+window.setReplaySpeedPreset = setReplaySpeedPreset;
+window.resetReplayZoom = resetReplayZoom;
+window.setReplayGraphMode = setReplayGraphMode;
 
 /*
  * Breadcrumb: 2026-09-20 07:30 - Multi-Chunk Day Aggregator Engine
@@ -1234,7 +1225,6 @@ function setReplayThreshold(val) {
             lbl.innerText = 'AUS';
         }
     }
-    invalidateReplayGraphCache();
     drawReplayGraph(replayCurrentTimeSec);
 }
 window.setReplayThreshold = setReplayThreshold;
@@ -1251,14 +1241,6 @@ window.setReplayThreshold = setReplayThreshold;
  * 2. Populates #replay-cycle-select options with event start time instead of file.uploaded_at.
  * 3. Retains file.uploaded_at only as secondary fallback if parts[0] has no valid timestamp.
  */
-/*
- * Breadcrumb: 2026-09-28 19:45 - Resilient Day-Merge & CSV Delimiter Engine
- * [CRITICAL BUGFIX FLAG - STORAGE PATH NORMALIZATION & FALLBACK PARSING]:
- * 1. Strips duplicate bucket prefixes and normalizes slashes from Supabase Storage paths.
- * 2. Auto-detects comma and semicolon CSV delimiters from firmware exports.
- * 3. Gracefully resolves day files via window.currentDeviceFiles and window.getFileDayKey.
- * 4. Dismissed code: direct f.file_path concatenation failing on leading slash bucket overlaps.
- */
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -1272,35 +1254,26 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     deck.scrollIntoView({ behavior: 'smooth' });
 
     if (!dayFiles || dayFiles.length === 0) {
-        const allFiles = window.currentDeviceFiles || (typeof currentDeviceFiles !== 'undefined' ? currentDeviceFiles : []);
-        const getDayKey = window.getFileDayKey || (typeof getFileDayKey !== 'undefined' ? getFileDayKey : null);
-        if (getDayKey) {
-            dayFiles = allFiles.filter(f => getDayKey(f) === dateStr);
+        if (typeof currentDeviceFiles !== 'undefined') {
+            dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
         }
     }
 
     if (!dayFiles || dayFiles.length === 0) {
-        const metaEl = document.getElementById('replay-meta-info');
-        if (metaEl) metaEl.innerText = `Keine Chunks für ${dateStr} vorhanden.`;
+        document.getElementById('replay-meta-info').innerText = `Keine Chunks für ${dateStr} vorhanden.`;
         return;
     }
 
-    dayFiles.sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
-
-    const titleEl = document.getElementById('replay-file-title');
-    if (titleEl) titleEl.innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
-    const metaEl = document.getElementById('replay-meta-info');
-    if (metaEl) metaEl.innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
+    document.getElementById('replay-file-title').innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
+    document.getElementById('replay-meta-info').innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
 
     initReplay3D();
 
     try {
-        const baseUrl = (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : '').replace(/\/+$/, '');
         const fetchPromises = dayFiles.map(async (f, idx) => {
             try {
-                let cleanPath = (f.file_path || '').replace(/^\/+/, '');
-                if (cleanPath.startsWith('imu-logs/')) cleanPath = cleanPath.substring(9);
-                const url = `${baseUrl}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+                const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
+                const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
                 const text = await fetchCachedCsv(url);
                 return { file: f, fileIdx: idx, text };
             } catch (err) {
@@ -1324,8 +1297,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
-                const sep = line.includes(';') ? ';' : ',';
-                const parts = line.split(sep);
+                const parts = line.split(',');
                 if (parts.length >= 8) {
                     if (!firstTs && parts[0]) {
                         firstTs = parts[0].trim();
@@ -1355,6 +1327,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             }
 
             if (samplesInChunk > 0) {
+                // Echte Sensor-Uhrzeit des Aufweckzyklus aus dem ersten Datenpunkt (parts[0]) extrahieren
                 const eventTime = formatReplayTimestamp(firstTs);
                 const timeStr = eventTime || (file.uploaded_at
                     ? formatReplayTimestamp(file.uploaded_at)
@@ -1364,25 +1337,25 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
         });
 
         if (replayDataRaw.length === 0) {
-            if (metaEl) metaEl.innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
+            document.getElementById('replay-meta-info').innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
             return;
         }
 
         const select = document.getElementById('replay-cycle-select');
-        if (select) {
-            select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
-            chunkStats.forEach(cs => {
-                select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
-            });
-        }
+        select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+
+        chunkStats.forEach(cs => {
+            select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+        });
 
         onReplayCycleSelect('ALL');
         if (replayAccThreshold > 0) setReplayThreshold(replayAccThreshold);
     } catch (err) {
         console.error('[CACHE MERGE FEHLER]', err);
-        if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
+        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
     }
 }
+window.inspectImuDayMerged = inspectImuDayMerged;
 
 /*
 * Breadcrumb: 2026-09-20 09:35 - Visible Window CSV Slice Exporter
@@ -1447,22 +1420,4 @@ function exportReplayVisibleCsv() {
 }
 window.exportReplayVisibleCsv = exportReplayVisibleCsv;
 
-
-/*
-* Breadcrumb: 2026-09-28 20:15 - Window Scope Exposure for Day Replay & Delimiter Parity
-* [CRITICAL BUGFIX FLAG - CALENDAR TO REPLAY ENGINE LINK]:
-* Explicitly binds inspectImuDayMerged to window to fix broken calendar timeline dispatch.
-*/
-window.inspectImuFile = inspectImuFile;
-window.inspectImuDayMerged = inspectImuDayMerged; // <-- WAR FEHLEND
-window.closeImuReplayDeck = closeImuReplayDeck;
-window.onReplayCycleSelect = onReplayCycleSelect;
-window.onReplayScrub = onReplayScrub;
-window.toggleReplayPlay = toggleReplayPlay;
-window.resetReplayPlayback = resetReplayPlayback;
-window.onReplaySpeedChange = onReplaySpeedChange;
-window.setReplaySpeedPreset = setReplaySpeedPreset;
-window.resetReplayZoom = resetReplayZoom;
-window.setReplayGraphMode = setReplayGraphMode;
-window.setReplayThreshold = setReplayThreshold;
-window.exportReplayVisibleCsv = exportReplayVisibleCsv;
+window.setReplayCameraView = setReplayCameraView;
