@@ -115,11 +115,14 @@ window.setReplayCameraView = function (viewName) {
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'front') {
-        repCamera.position.set(0, 0.3, 3.8);
+        // Blick auf die Frontfläche des Rahmens
+        repCamera.position.set(3.8, 0.3, 0);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'side') {
-        repCamera.position.set(3.8, 0.3, 0);
+        // SEITENANSICHT: Blick direkt entlang der Dreh-/Kippachse (Z-Achse)
+        // Zeigt die Hebel- und Kippbewegung der 90°-Montage perfekt im Profil!
+        repCamera.position.set(0, 0.3, 3.8);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     }
@@ -557,44 +560,30 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
+    /*
+ * 3D-MODELL: Echte, absolute Ausrichtung im Raum (KEIN Tare)
+ * Zeigt das Gehäuse exakt in der realen 90°-Montage am Rahmen.
+ */
     if (repMesh && repScene && repCamera) {
-        let wA = ptA.qw, xA = ptA.qx, yA = ptA.qy, zA = ptA.qz;
-        let wB = ptB.qw, xB = ptB.qx, yB = ptB.qy, zB = ptB.qz;
+        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
+        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
 
-        // Wenn Tare aktiv ist: relatives Quaternion berechnen
-        if (replayTareQuat) {
-            const tw = replayTareQuat.w, tx = replayTareQuat.x, ty = replayTareQuat.y, tz = replayTareQuat.z;
-            const rA_w = tw * wA + tx * xA + ty * yA + tz * zA;
-            const rA_x = tw * xA - tx * wA - ty * zA + tz * yA;
-            const rA_y = tw * yA + tx * zA - ty * wA - tz * xA;
-            const rA_z = tw * zA - tx * yA + ty * xA - tz * wA;
-            wA = rA_w; xA = rA_x; yA = rA_y; zA = rA_z;
-
-            const rB_w = tw * wB + tx * xB + ty * yB + tz * zB;
-            const rB_x = tw * xB - tx * wB - ty * zB + tz * yB;
-            const rB_y = tw * yB + tx * zB - ty * wB - tz * xB;
-            const rB_z = tw * zB - tx * yB + ty * xB - tz * wB;
-            wB = rB_w; xB = rB_x; yB = rB_y; zB = rB_z;
-        }
-
-        const normA = Math.hypot(wA, xA, yA, zA) || 1.0;
-        const normB = Math.hypot(wB, xB, yB, zB) || 1.0;
-
-        const qA = new THREE.Quaternion(-yA / normA, xA / normA, zA / normA, wA / normA);
-        const qB = new THREE.Quaternion(-yB / normB, xB / normB, zB / normB, wB / normB);
+        // Absolute Sensordaten ohne Nulllagen-Offset:
+        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
+        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
 
         if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
         qA.slerp(qB, alpha);
 
-        // Sensor-to-World Mapping
-        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)); // 90° Z Sensor-Offset
-        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X in Y-Up-Welt
+        // Sensor-Offset in die Y-Up-Welt (Gehäuse steht bei 90° senkrecht im Raum)
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)); // 90° Z
+        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
         repMesh.quaternion.copy(qA);
 
+        // Translationsauslenkung bei Vibration
         const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
         const ay = ptA.ay + (ptB.ay - ptA.ay) * alpha;
         const az = ptA.az + (ptB.az - ptA.az) * alpha;
-
         const aLen = Math.hypot(ax, ay, az);
         const axF = (aLen > 0.20) ? ax : 0;
         const ayF = (aLen > 0.20) ? ay : 0;
