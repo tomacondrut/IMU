@@ -1,11 +1,11 @@
 /*
- * Breadcrumb: 2026-09-14 20:45 - Complete Unified Replay Deck Engine
- * [CRITICAL BUGFIX FLAG - FULL REPLAY ENGINE RESTORATION]:
- * 1. Restored missing 3D Viewport engine (initReplay3D, loadReplayGLBModel, setupReplayModelMesh).
- * 2. Restored CSV file inspector (inspectImuFile) and cycle selector (onReplayCycleSelect).
- * 3. Restored sub-sample SLERP frame interpolation (renderInterpolatedFrame).
- * 4. Region Drag-to-Zoom, Wheel Panning & 0.1x Slow-Mo integrated without function duplicates.
- * 5. Collapsible Daily Log Accordion and bulk controls fully functional.
+ * Breadcrumb: 2026-10-05 20:30 - Live Tare Re-Calculation & Side-View OrbitControls
+ * [CRITICAL BUGFIX FLAG - DYNAMIC ZERO & SMOOTH TILT REPLAY]:
+ * 1. recalculateAllEuler() recomputes Roll/Pitch/Yaw across all raw data points on Tare.
+ * 2. Removed broken invalidateReplayGraphCache reference; drawReplayGraph updates immediately.
+ * 3. Restored resizeReplay3D() and window.resizeReplayDeck lifecycle hooks.
+ * 4. 3D Model maps relative rotation when tared, starting level and pitching +42.5°.
+ * 5. Window-scope camera view presets (iso, top, front, side, reset) with functional OrbitControls.
  */
 
 // Globaler Status für Replay-Deck
@@ -17,7 +17,7 @@ let replaySpeed = 1.0;
 let replayAnimId = null;
 let replayLastFrameTime = 0;
 let replayGraphMode = 'accel';
-let replayAccThreshold = 0.0; // <-- HIERHER verschoben (Standard: 0.0 = AUS)
+let replayAccThreshold = 0.0;
 
 // Zoom- und Interaktionsstatus
 let replayZoomStartSec = 0.0;
@@ -27,31 +27,23 @@ let isSelectingZoom = false;
 let selectStartX = 0;
 let selectCurrentX = 0;
 let canvasListenersAttached = false;
-let isDayMergedMode = false; // Flag für aktive Tages-Zusammenführung
+let isDayMergedMode = false;
 
 // Three.js Replay Instanzen
 let repScene, repCamera, repRenderer, repMesh;
 let repControls = null;
 let repAnimId3D = null;
+let repContainerObserver = null;
 
+// Globales Tare-Quaternion (Standard: null = Rohdaten)
+let replayTareQuat = null;
 
-
-/*
- * Breadcrumb: 2026-09-20 08:00 - Persistent Cache API & In-Memory Fallback Engine
- * [CRITICAL BUGFIX FLAG - ZERO LATENCY LOG CACHING]:
- * 1. Uses window.caches (Cache Storage API) to persist downloaded CSV logs across browser sessions.
- * 2. In-memory Map fallback if Cache API is unavailable or restricted.
- * 3. Prevents repeated Supabase Storage bandwidth usage and eliminates download wait times.
- */
 const imuMemoryCache = new Map();
 
 async function fetchCachedCsv(url) {
-    // 1. Sofortige Rückgabe aus dem RAM-Puffer
     if (imuMemoryCache.has(url)) {
         return imuMemoryCache.get(url);
     }
-
-    // 2. Persistente Cache Storage API des Browsers prüfen
     if ('caches' in window) {
         try {
             const cache = await caches.open('stag-imu-csv-cache-v1');
@@ -61,8 +53,6 @@ async function fetchCachedCsv(url) {
                 imuMemoryCache.set(url, text);
                 return text;
             }
-
-            // Datei noch nicht im Cache: Herunterladen und im Cache klonen
             const netResponse = await fetch(url);
             if (!netResponse.ok) throw new Error(`HTTP ${netResponse.status}`);
             await cache.put(url, netResponse.clone());
@@ -70,11 +60,9 @@ async function fetchCachedCsv(url) {
             imuMemoryCache.set(url, text);
             return text;
         } catch (e) {
-            console.warn('[CACHE] Cache API nicht verfügbar oder blockiert, nutze Fallback:', e);
+            console.warn('[CACHE] Cache API Fallback:', e);
         }
     }
-
-    // 3. Fallback: Standard-Fetch ohne persistenten Cache
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
@@ -82,13 +70,12 @@ async function fetchCachedCsv(url) {
     return text;
 }
 
-// Globaler Befehl zum Leeren des Caches über die Browser-Konsole falls nötig
 async function clearImuLogCache() {
     imuMemoryCache.clear();
     if ('caches' in window) {
         await caches.delete('stag-imu-csv-cache-v1');
     }
-    console.log('[CACHE] Lokaler IMU-Log Cache wurde vollständig geleert.');
+    console.log('[CACHE] Lokaler IMU-Log Cache geleert.');
 }
 window.clearImuLogCache = clearImuLogCache;
 
@@ -96,18 +83,26 @@ window.clearImuLogCache = clearImuLogCache;
 // 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
 // ============================================================================
 
-// ============================================================================
-// 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
-// ============================================================================
-/*
- * Breadcrumb: 2026-10-05 20:05 - OrbitControls, GridHelper & Side Camera View
- * [FEATURE - 360° REPLAY ROTATION & 90-DEGREE SIDE VIEW PARITY]:
- * 1. Initialisiert OrbitControls mit Damping (0.08) für freies Drehen per Maus & Touch.
- * 2. Fügt GridHelper (Y = -0.5) als Bodenebene ein, um die 90°-Kippachse optisch zu referenzieren.
- * 3. window.setReplayCameraView('side') richtet die Kamera auf (3.8, 0.3, 0) aus (Seitenansicht der Kippstation).
- * 4. animateReplay3D() aktualisiert den Viewport kontinuierlich, auch wenn die Wiedergabe pausiert ist.
- * 5. Dismissed: Starre Kamera ohne OrbitControls verhinderte das Rotieren im Replay.
- */
+function resizeReplay3D() {
+    const container = document.getElementById('replay-canvas-container');
+    if (!container || !repRenderer || !repCamera) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w > 0 && h > 0) {
+        repCamera.aspect = w / h;
+        repCamera.updateProjectionMatrix();
+        repRenderer.setSize(w, h);
+        if (repScene) repRenderer.render(repScene, repCamera);
+    }
+}
+
+function resizeReplayDeck() {
+    resizeReplay3D();
+    drawReplayGraph(replayCurrentTimeSec);
+}
+window.resizeReplayDeck = resizeReplayDeck;
+
+// Schnellauswahl der Kameraperspektive (inkl. Seitenansicht der Kippachse)
 window.setReplayCameraView = function (viewName) {
     if (!repCamera) return;
 
@@ -124,7 +119,6 @@ window.setReplayCameraView = function (viewName) {
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'side') {
-        // Seitenansicht: Blick rechtwinklig auf die Drehachse der 90°-Kippstation
         repCamera.position.set(3.8, 0.3, 0);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
@@ -145,11 +139,7 @@ function initReplay3D() {
     }
 
     if (repRenderer) {
-        if (container.clientWidth > 0 && repCamera) {
-            repCamera.aspect = container.clientWidth / container.clientHeight;
-            repCamera.updateProjectionMatrix();
-            repRenderer.setSize(container.clientWidth, container.clientHeight);
-        }
+        resizeReplay3D();
         return;
     }
 
@@ -178,7 +168,6 @@ function initReplay3D() {
         repControls.minDistance = 1.2;
     }
 
-    // Beleuchtung
     const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
     l1.position.set(5, 10, 7);
     repScene.add(l1);
@@ -189,7 +178,7 @@ function initReplay3D() {
 
     repScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
-    // Bodengitter in der XZ-Ebene (Y = -0.5) als Referenz zum Kippwinkel
+    // Bodengitter in der XZ-Ebene als Referenzebene
     const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
     grid.position.y = -0.5;
     repScene.add(grid);
@@ -197,16 +186,17 @@ function initReplay3D() {
     createReplayFallbackCube();
     loadReplayGLBModel();
 
-    window.addEventListener('resize', () => {
-        if (!container || container.clientWidth === 0) return;
-        repCamera.aspect = container.clientWidth / container.clientHeight;
-        repCamera.updateProjectionMatrix();
-        repRenderer.setSize(container.clientWidth, container.clientHeight);
-    });
+    if (!repContainerObserver && window.ResizeObserver) {
+        repContainerObserver = new ResizeObserver(() => {
+            resizeReplay3D();
+        });
+        repContainerObserver.observe(container);
+    }
 
-    // Kontinuierliche Renderschleife (beendet sich selbst bei ausgeblendetem Deck)
+    window.addEventListener('resize', resizeReplay3D);
+
     function animateReplay3D() {
-        requestAnimationFrame(animateReplay3D);
+        repAnimId3D = requestAnimationFrame(animateReplay3D);
         const cont = document.getElementById('replay-canvas-container');
         if (!cont || cont.clientWidth === 0) return;
         if (repControls) repControls.update();
@@ -219,19 +209,51 @@ function initReplay3D() {
 
 function createReplayFallbackCube() {
     if (repMesh && repScene) repScene.remove(repMesh);
-    const geo = new THREE.BoxGeometry(1.8, 0.35, 0.9);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.4 });
-    repMesh = new THREE.Mesh(geo, mat);
+    const group = new THREE.Group();
+
+    const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.2, roughness: 0.5 });
+    group.add(new THREE.Mesh(bodyGeo, bodyMat));
+
+    const topGeo = new THREE.BoxGeometry(1.68, 0.04, 0.82);
+    const topMat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.3 });
+    const topMesh = new THREE.Mesh(topGeo, topMat);
+    topMesh.position.y = 0.21;
+    group.add(topMesh);
+
+    const frontGeo = new THREE.BoxGeometry(0.5, 0.08, 0.04);
+    const frontMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0 });
+    const frontMesh = new THREE.Mesh(frontGeo, frontMat);
+    frontMesh.position.set(0, 0.1, 0.48);
+    group.add(frontMesh);
+
+    repMesh = group;
     repScene.add(repMesh);
 }
 
 function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
-    repMesh = gltfScene;
-    const box = new THREE.Box3().setFromObject(repMesh);
+
+    const box = new THREE.Box3().setFromObject(gltfScene);
+    const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) repMesh.scale.set(1.8 / maxDim, 1.8 / maxDim, 1.8 / maxDim);
+
+    gltfScene.traverse((child) => {
+        if (child.isMesh && child.material) {
+            child.material.side = THREE.DoubleSide;
+        }
+    });
+
+    const group = new THREE.Group();
+    if (maxDim > 0) {
+        const s = 1.8 / maxDim;
+        gltfScene.scale.set(s, s, s);
+        gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
+    }
+    group.add(gltfScene);
+
+    repMesh = group;
     repScene.add(repMesh);
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
 }
@@ -261,76 +283,26 @@ function loadReplayGLBModel() {
 
 function closeImuReplayDeck() {
     if (replayIsPlaying) toggleReplayPlay();
-    isDayMergedMode = false; // Zurücksetzen
+    if (repAnimId3D) {
+        cancelAnimationFrame(repAnimId3D);
+        repAnimId3D = null;
+    }
+    isDayMergedMode = false;
+    replayCurrentTimeSec = 0.0;
     const deck = document.getElementById('imu-replay-deck');
     if (deck) deck.classList.add('hidden');
 }
 
 // ============================================================================
-// 2. MATHEMATIK & REPLAY INSPEKTOR (DATEIEN ÖFFNEN)
+// 2. MATHEMATIK, TARE & REPLAY INSPEKTOR
 // ============================================================================
 
-// Globales Tare-Quaternion (Standard: Keine Drehung)
-let replayTareQuat = null;
-
-// Tare auf den aktuellen Stand des Playheads setzen
-function setReplayTareCurrentFrame() {
-    if (!replayFilteredData || replayFilteredData.length === 0) return;
-
-    const sampleInterval = 0.1;
-    const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
-    const pt = replayFilteredData[exactIndex];
-
-    const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz) || 1.0;
-    replayTareQuat = {
-        w: pt.qw / norm,
-        x: pt.qx / norm,
-        y: pt.qy / norm,
-        z: pt.qz / norm
-    };
-
-    // Im Browser für dieses Gerät merken
-    if (typeof selectedDeviceId !== 'undefined') {
-        localStorage.setItem(`stag_tare_${selectedDeviceId}`, JSON.stringify(replayTareQuat));
-    }
-
-    updateTareUI(true);
-    invalidateReplayGraphCache();
-    drawReplayGraph(replayCurrentTimeSec);
-}
-
-function resetReplayTare() {
-    replayTareQuat = null;
-    if (typeof selectedDeviceId !== 'undefined') {
-        localStorage.removeItem(`stag_tare_${selectedDeviceId}`);
-    }
-    updateTareUI(false);
-    invalidateReplayGraphCache();
-    drawReplayGraph(replayCurrentTimeSec);
-}
-
-function updateTareUI(isTared) {
-    const btnSet = document.getElementById('btn-replay-tare');
-    const btnReset = document.getElementById('btn-replay-tare-reset');
-    if (btnSet) {
-        btnSet.className = isTared
-            ? 'px-2.5 py-1 text-[11px] font-bold rounded bg-emerald-600 text-white transition'
-            : 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition';
-        btnSet.innerText = isTared ? '✓ Genullt' : '🎯 Nulllage hier setzen';
-    }
-    if (btnReset) {
-        btnReset.classList.toggle('hidden', !isTared);
-    }
-}
-
-// Universelle relative Euler-Berechnung (Tare-Multiplikation)
 function quatToEulerDeg(qw, qx, qy, qz) {
     let w = qw, x = qx, y = qy, z = qz;
 
-    // Falls Tare aktiv ist: q_rel = q_tare^-1 * q_raw
+    // Relative Drehung berechnen falls Nulllage aktiv: q_rel = q_tare^-1 * q_raw
     if (replayTareQuat) {
         const tw = replayTareQuat.w, tx = replayTareQuat.x, ty = replayTareQuat.y, tz = replayTareQuat.z;
-        // Konjugiertes Tare-Quaternion (-x, -y, -z) multiplizieren
         w = tw * qw + tx * qx + ty * qy + tz * qz;
         x = tw * qx - tx * qw - ty * qz + tz * qy;
         y = tw * qy + tx * qz - ty * qw - tz * qx;
@@ -354,8 +326,82 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     return { roll, pitch, yaw };
 }
 
-window.setReplayTareCurrentFrame = setReplayTareCurrentFrame;
-window.resetReplayTare = resetReplayTare;
+// Berechnet alle Kurvenpunkte im RAM blitzschnell neu
+function recalculateAllEuler() {
+    for (let i = 0; i < replayDataRaw.length; i++) {
+        const item = replayDataRaw[i];
+        const e = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
+        item.roll = e.roll;
+        item.pitch = e.pitch;
+        item.yaw = e.yaw;
+    }
+}
+
+function setReplayTareCurrentFrame() {
+    if (!replayFilteredData || replayFilteredData.length === 0) return;
+
+    const sampleInterval = 0.1;
+    const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
+    const pt = replayFilteredData[exactIndex];
+
+    const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz) || 1.0;
+    replayTareQuat = {
+        w: pt.qw / norm,
+        x: pt.qx / norm,
+        y: pt.qy / norm,
+        z: pt.qz / norm
+    };
+
+    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
+    localStorage.setItem(`stag_tare_${devId}`, JSON.stringify(replayTareQuat));
+
+    recalculateAllEuler();
+    updateTareUI(true);
+    drawReplayGraph(replayCurrentTimeSec);
+    renderInterpolatedFrame(replayCurrentTimeSec);
+}
+
+function resetReplayTare() {
+    replayTareQuat = null;
+    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
+    localStorage.removeItem(`stag_tare_${devId}`);
+
+    recalculateAllEuler();
+    updateTareUI(false);
+    drawReplayGraph(replayCurrentTimeSec);
+    renderInterpolatedFrame(replayCurrentTimeSec);
+}
+
+function updateTareUI(isTared) {
+    const btnSet = document.getElementById('btn-replay-tare');
+    const btnReset = document.getElementById('btn-replay-tare-reset');
+    if (btnSet) {
+        btnSet.className = isTared
+            ? 'px-2.5 py-1 text-[11px] font-bold rounded bg-emerald-600 text-white transition'
+            : 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition flex items-center gap-1';
+        btnSet.innerText = isTared ? '✓ Genullt' : '🎯 Nulllage hier setzen';
+    }
+    if (btnReset) {
+        btnReset.classList.toggle('hidden', !isTared);
+    }
+}
+
+function checkAndApplySavedTare() {
+    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
+    const saved = localStorage.getItem(`stag_tare_${devId}`);
+    if (saved) {
+        try {
+            replayTareQuat = JSON.parse(saved);
+            recalculateAllEuler();
+            updateTareUI(true);
+            return;
+        } catch (e) {
+            replayTareQuat = null;
+        }
+    }
+    replayTareQuat = null;
+    updateTareUI(false);
+}
 
 function setReplayGraphMode(mode) {
     replayGraphMode = mode;
@@ -375,19 +421,6 @@ function setReplayGraphMode(mode) {
     drawReplayGraph(replayCurrentTimeSec);
 }
 
-/*
- * Breadcrumb: 2026-09-20 08:05 - Cached Single File Inspector
- * [CRITICAL BUGFIX FLAG - CACHED CSV LOADING]:
- * Replaces direct fetch() with fetchCachedCsv() to eliminate redundant downloads.
- */
-/*
- * Breadcrumb: 2026-09-20 21:05 - Wake-Cycle Timestamp Synchronization in Selector
- * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
- * 1. Replaced upload timestamp (file.uploaded_at) with actual sample recording time (parts[0] / firstTs).
- * 2. Formats ISO/UTC sample timestamp to local Swiss time (HH:MM:SS) with regex fallback.
- * 3. Applied to both inspectImuDayMerged() and inspectImuFile() cycle selectors.
- * 4. Dismissed code: const timeStr = file.uploaded_at ? new Date(file.uploaded_at)... (showed upload time, not measurement time).
- */
 function formatReplayTimestamp(tsStr, withSec = true) {
     if (!tsStr) return '';
     const d = new Date(tsStr);
@@ -402,16 +435,13 @@ function formatReplayTimestamp(tsStr, withSec = true) {
     return m ? m[1] : String(tsStr);
 }
 
-/*
- * Breadcrumb: 2026-09-20 21:05 - Single File Inspector with Cycle Timestamps
- * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
- * Displays real recording start time for individual wake cycles inside single files.
- */
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
     isDayMergedMode = false;
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
 
     deck.classList.remove('hidden');
     deck.scrollIntoView({ behavior: 'smooth' });
@@ -423,7 +453,6 @@ async function inspectImuFile(downloadUrl, fileName) {
 
     try {
         const text = await fetchCachedCsv(downloadUrl);
-
         const lines = text.split('\n');
         replayDataRaw = [];
         const cyclesMap = new Set();
@@ -431,7 +460,8 @@ async function inspectImuFile(downloadUrl, fileName) {
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            const parts = line.split(',');
+            const sep = line.includes(';') ? ';' : ',';
+            const parts = line.split(sep);
             if (parts.length >= 8) {
                 const qw = parseFloat(parts[1]) || 1.0;
                 const qx = parseFloat(parts[2]) || 0.0;
@@ -472,6 +502,7 @@ async function inspectImuFile(downloadUrl, fileName) {
             select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${timeLabel}${count} Samples)</option>`;
         });
 
+        checkAndApplySavedTare();
         onReplayCycleSelect('ALL');
     } catch (err) {
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
@@ -490,7 +521,7 @@ function onReplayCycleSelect(cycleVal) {
     }
 
     const total = replayFilteredData.length;
-    const durSec = ((total - 1) * 0.1).toFixed(1);
+    const durSec = total > 0 ? ((total - 1) * 0.1).toFixed(1) : "0.0";
 
     document.getElementById('replay-meta-info').innerText =
         `${total} Messpunkte geladen | Dauer: ${durSec} s | 100 ms Raster`;
@@ -500,9 +531,12 @@ function onReplayCycleSelect(cycleVal) {
     const totalTimeLabel = document.getElementById('replay-total-time-label');
     if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
 
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
+
     resetReplayZoom();
     if (replayAccThreshold > 0 && typeof setReplayThreshold === 'function') {
-        setReplayThreshold(replayAccThreshold); // Zählt Peaks passend zum gewählten Einzel-Zyklus
+        setReplayThreshold(replayAccThreshold);
     }
 }
 
@@ -523,24 +557,38 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    /*
- * Breadcrumb: 2026-10-05 20:10 - Sensor-to-World Alignment for 90° Frame Mounting
- * [CRITICAL BUGFIX FLAG - REPLAY ORIENTATION PARITY WITH LIVE-3D]:
- * 1. Added second premultiply(-90° X) to align Z-plane into Three.js Y-up world.
- * 2. Models mounted perpendicularly (90° offset) now tilt correctly above the GridHelper.
- * 3. Dismissed: Single 90° Z premultiply left ground vector tilted into depth axis.
- */
     if (repMesh && repScene && repCamera) {
-        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
-        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
+        let wA = ptA.qw, xA = ptA.qx, yA = ptA.qy, zA = ptA.qz;
+        let wB = ptB.qw, xB = ptB.qx, yB = ptB.qy, zB = ptB.qz;
 
-        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
-        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
+        // Wenn Tare aktiv ist: relatives Quaternion berechnen
+        if (replayTareQuat) {
+            const tw = replayTareQuat.w, tx = replayTareQuat.x, ty = replayTareQuat.y, tz = replayTareQuat.z;
+            const rA_w = tw * wA + tx * xA + ty * yA + tz * zA;
+            const rA_x = tw * xA - tx * wA - ty * zA + tz * yA;
+            const rA_y = tw * yA + tx * zA - ty * wA - tz * xA;
+            const rA_z = tw * zA - tx * yA + ty * xA - tz * wA;
+            wA = rA_w; xA = rA_x; yA = rA_y; zA = rA_z;
+
+            const rB_w = tw * wB + tx * xB + ty * yB + tz * zB;
+            const rB_x = tw * xB - tx * wB - ty * zB + tz * yB;
+            const rB_y = tw * yB + tx * zB - ty * wB - tz * xB;
+            const rB_z = tw * zB - tx * yB + ty * xB - tz * wB;
+            wB = rB_w; xB = rB_x; yB = rB_y; zB = rB_z;
+        }
+
+        const normA = Math.hypot(wA, xA, yA, zA) || 1.0;
+        const normB = Math.hypot(wB, xB, yB, zB) || 1.0;
+
+        const qA = new THREE.Quaternion(-yA / normA, xA / normA, zA / normA, wA / normA);
+        const qB = new THREE.Quaternion(-yB / normB, xB / normB, zB / normB, wB / normB);
 
         if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
         qA.slerp(qB, alpha);
+
+        // Sensor-to-World Mapping
         qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)); // 90° Z Sensor-Offset
-        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X Neigung in Y-Up-Welt
+        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X in Y-Up-Welt
         repMesh.quaternion.copy(qA);
 
         const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
@@ -583,7 +631,6 @@ function renderInterpolatedFrame(tSec) {
         if (ptA.ts && ptA.ts.includes('T') && ptA.ts.endsWith('Z')) {
             const d = new Date(ptA.ts);
             if (!isNaN(d)) {
-                // Konvertiert UTC zu lokaler Schweizer Zeit (HH:MM:SS.mmm)
                 localTime = d.toLocaleTimeString('de-CH', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
             }
         }
@@ -655,29 +702,6 @@ function resetReplayZoom() {
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
-/*
- * Breadcrumb: 2026-09-20 09:30 - Precision Drag-to-Zoom Sensitivity & Ghost Click Elimination
- * [CRITICAL BUGFIX FLAG - SEPARATE CLICK SCRUB FROM REGION ZOOM]:
- * 1. Added e.preventDefault() on mousedown to block native canvas/text drag collisions.
- * 2. Reduced zoom detection threshold from 15px to 6px so even small peak selections reliably zoom.
- * 3. Playhead only jumps on deliberate stationary clicks (dx < 6px).
- * 4. Reduced minimum time slice to 20ms (0.02s) for micro-transient analysis.
- */
-/*
- * Breadcrumb: 2026-09-20 09:40 - Unified Touch & Mouse Gesture Engine for Replay Canvas
- * [CRITICAL BUGFIX FLAG - MOBILE TOUCH DRAG-TO-ZOOM]:
- * 1. Added passive:false touchstart, touchmove, touchend handlers to support mobile drag-to-zoom.
- * 2. e.preventDefault() blocks browser viewport panning/pull-to-refresh while swiping the canvas.
- * 3. Unified touch-to-pixel coordinate translation matching devicePixelRatio and canvas bounding rect.
- * 4. 8px threshold distinguishes quick thumb-taps (scrub playhead) from region selection (zoom).
- */
-/*
- * Breadcrumb: 2026-09-20 09:40 - Precision Drag-to-Zoom & Unified Touch Engine
- * [CRITICAL BUGFIX FLAG - MOBILE TOUCH & CLICK SCRUB SEPARATION]:
- * 1. Reduced zoom detection threshold from 15px to 6px to reliably catch fine selections.
- * 2. Added passive:false touchstart/touchmove/touchend handlers for iPhone & Android gestures.
- * 3. e.preventDefault() stops browser text selection, page scrolling, and ghost clicks on canvas.
- */
 function attachCanvasInteraction() {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || canvasListenersAttached) return;
@@ -716,7 +740,6 @@ function attachCanvasInteraction() {
         const dx = Math.abs(selectCurrentX - selectStartX);
         const w = cvNow.clientWidth;
 
-        // Ab 6px Bewegung verlässlich als Bereichs-Zoom werten
         if (dx >= 6) {
             const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
             const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
@@ -742,14 +765,12 @@ function attachCanvasInteraction() {
                 renderInterpolatedFrame(replayCurrentTimeSec);
             }
         } else {
-            // Reiner Klick (< 6px): Playhead-Position versetzen
             const targetTime = xToTime(selectStartX, w, leftMargin);
             replayCurrentTimeSec = targetTime;
             renderInterpolatedFrame(replayCurrentTimeSec);
         }
     }
 
-    // Desktop Maus-Events
     cv.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -764,7 +785,6 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
-    // Smartphone Touch-Events (iOS & Android)
     cv.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             e.preventDefault();
@@ -783,27 +803,15 @@ function attachCanvasInteraction() {
         if (isSelectingZoom) handleEnd();
     });
 
-    /*
-  * Breadcrumb: 2026-09-20 10:10 - Frame-by-Frame Wheel Scrubbing Controller
-  * [CRITICAL BUGFIX FLAG - WHEEL STEP PLAYBACK]:
-  * 1. Replaced horizontal pan with single-sample step scrubbing (100ms / 0.1s raster per notch).
-  * 2. Works seamlessly in both unzoomed full views and zoomed sub-regions.
-  * 3. Automatically pauses active animation loop to prevent playback fighting.
-  * 4. Bounds scrubbing strictly within visible time bounds (tStart to tEnd).
-  */
-    // Mausrad: Schrittweises Abspielen / Spulen (1 Sample = 100 ms pro Raste)
     cv.addEventListener('wheel', (e) => {
         e.preventDefault();
         if (replayFilteredData.length === 0) return;
 
-        // Laufende Wiedergabe bei manuellem Drehen pausieren
         if (replayIsPlaying) toggleReplayPlay();
 
         const { tStart, tEnd } = getTimeBounds();
-
-        // Rad nach unten (deltaY > 0) = Vorwärts, Rad nach oben (deltaY < 0) = Rückwärts
         const direction = e.deltaY > 0 ? 1 : -1;
-        const stepSec = 0.1; // Exakt 1 Messpunkt (10 Hz Sensorraster)
+        const stepSec = 0.1;
 
         let newTime = replayCurrentTimeSec + (direction * stepSec);
         newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
@@ -813,13 +821,6 @@ function attachCanvasInteraction() {
     }, { passive: false });
 }
 
-/*
- * Breadcrumb: 2026-09-20 07:45 - Highlighting & Threshold Grid Line Renderer
- * [CRITICAL BUGFIX FLAG - CANVAS THRESHOLD SHADING RESTORATION]:
- * 1. Integrated background red warning tint (rgba(239, 68, 68, 0.22)) for points exceeding replayAccThreshold.
- * 2. Renders dashed red reference lines at ±replayAccThreshold when threshold is active.
- * 3. Clips threshold highlights strictly within plot margins to prevent canvas bleed.
- */
 function drawReplayGraph(curTimeSec) {
     const cv = document.getElementById('replayGraphCanvas');
     if (!cv || replayFilteredData.length === 0) return;
@@ -870,9 +871,6 @@ function drawReplayGraph(curTimeSec) {
         maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
     }
 
-    // ========================================================================
-    // 1. SCHWELLENWERT-HINTERGRUND (ROTE WARNZONEN BEI PEAKS)
-    // ========================================================================
     if (replayAccThreshold > 0 && !isEuler) {
         ctx.save();
         ctx.beginPath();
@@ -894,7 +892,6 @@ function drawReplayGraph(curTimeSec) {
         ctx.restore();
     }
 
-    // Amplituden-Raster
     const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
     ctx.font = '9px monospace';
     gridPoints.forEach(ratio => {
@@ -909,9 +906,6 @@ function drawReplayGraph(curTimeSec) {
     });
     ctx.setLineDash([]);
 
-    // ========================================================================
-    // 2. HORIZONTALE SCHWELLENWERT-GRENZLINIEN (± SCHWELLE)
-    // ========================================================================
     if (replayAccThreshold > 0 && !isEuler && replayAccThreshold <= maxScale) {
         ctx.save();
         ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
@@ -932,34 +926,11 @@ function drawReplayGraph(curTimeSec) {
         ctx.restore();
     }
 
-    /*
-     * Breadcrumb: 2026-09-20 08:35 - Adaptive Dynamic Time-Axis Stepping & Collision Guard
-     * [CRITICAL BUGFIX FLAG - ELIMINATE X-AXIS OVERLAP]:
-     * 1. Replaced hardcoded 5.0s fallback with dynamic timeStep based on available pixel width.
-     * 2. Selects clean intervals (up to 15m/30m/1h for day logs) ensuring ~75px minimum label clearance.
-     * 3. Drops redundant decimal places for steps >= 1s and switches to m/s formatting for long spans.
-     * 4. Integrated lastLabelX width-guard to guarantee zero text collisions on any viewport size.
-     */
-    // ========================================================================
-    // DYNAMISCHES ZEITRASTER & KOLLISIONSFREIE ABSZISSEN-BESCHRIFTUNG
-    // ========================================================================
-    /*
-     * Breadcrumb: 2026-09-20 08:50 - Event-Anchored Clock Time Axis for Full Day Views
-     * [CRITICAL BUGFIX FLAG - CHUNK WAKE TIME LABELS]:
-     * 1. Detects unzoomed full-day merged view (isFullDayUnzoomed).
-     * 2. Replaces arbitrary cumulative minutes (0m, 10m, 20m) with real recording clock times (HH:MM / HH:MM:SS).
-     * 3. Renders dashed vertical green separator lines at each wake cycle start.
-     * 4. Retains high-precision adaptive seconds grid when user zooms in for waveform analysis.
-     */
-    // ========================================================================
-    // ZEITRASTER: REALZEIT-UHREN FÜR TAGES-CHUNKS ODER SEKUNDEN BEIM ZOOM
-    // ========================================================================
     const isCycleAll = !document.getElementById('replay-cycle-select') || document.getElementById('replay-cycle-select').value === 'ALL';
     const hasMultipleCycles = replayFilteredData.length > 0 && (replayFilteredData[0].cycle !== replayFilteredData[replayFilteredData.length - 1].cycle);
     const isFullDayUnzoomed = !isReplayZoomed && isCycleAll && (isDayMergedMode || hasMultipleCycles);
 
     if (isFullDayUnzoomed) {
-        // 1. Alle Aufnahmestarts (Weck-Events) im Tagesverlauf erfassen
         const recordings = [];
         for (let i = 0; i < replayFilteredData.length; i++) {
             const item = replayFilteredData[i];
@@ -973,7 +944,6 @@ function drawReplayGraph(curTimeSec) {
             }
         }
 
-        // Hilfsfunktion: Wandelt UTC/ISO-Zeit in lokale Uhrzeit (HH:MM bzw. HH:MM:SS) um
         function getUhrzeit(tsStr, withSec) {
             if (!tsStr) return '';
             const d = new Date(tsStr);
@@ -988,7 +958,6 @@ function drawReplayGraph(curTimeSec) {
             return m ? m[1] : String(tsStr);
         }
 
-        // Sekunden einblenden, falls zwei Aufnahmen in derselben Minute stattfanden
         let withSec = false;
         for (let k = 1; k < recordings.length; k++) {
             if (getUhrzeit(recordings[k - 1].ts, false) === getUhrzeit(recordings[k].ts, false)) {
@@ -1000,12 +969,10 @@ function drawReplayGraph(curTimeSec) {
         let lastLabelX = -999;
         ctx.font = 'bold 9px monospace';
 
-        // 2. Jedes Weck-Event mit Trennlinie und Uhrzeit markieren
         recordings.forEach((rec, idx) => {
             const px = timeToX(rec.t, w, leftMargin);
             if (px < leftMargin || px > w) return;
 
-            // Vertikale Trennlinie für den Aufnahmestart
             ctx.save();
             ctx.strokeStyle = (idx === 0) ? 'rgba(15, 23, 42, 0.25)' : 'rgba(0, 155, 76, 0.45)';
             ctx.lineWidth = (idx === 0) ? 1 : 1.2;
@@ -1016,22 +983,18 @@ function drawReplayGraph(curTimeSec) {
             ctx.stroke();
             ctx.restore();
 
-            // Uhrzeit-Label
             const timeLabel = getUhrzeit(rec.ts, withSec);
             const textWidth = ctx.measureText(timeLabel).width;
 
-            // Kollisionsschutz: Label nur zeichnen, wenn Freiraum zum vorherigen Text vorhanden ist
             if (px - lastLabelX >= textWidth + 8 && (px + textWidth) <= (w - 5)) {
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
                 ctx.fillRect(px + 1, h - 13, textWidth + 3, 11);
-
-                ctx.fillStyle = '#009B4C'; // STAG-Grün für Event-Uhrzeiten
+                ctx.fillStyle = '#009B4C';
                 ctx.fillText(timeLabel, px + 2, h - 4);
                 lastLabelX = px;
             }
         });
 
-        // 3. Uhrzeit des Tages-Endes ganz rechts ergänzen
         if (recordings.length > 0) {
             const lastSample = replayFilteredData[replayFilteredData.length - 1];
             const endPx = timeToX((replayFilteredData.length - 1) * 0.1, w, leftMargin);
@@ -1045,7 +1008,6 @@ function drawReplayGraph(curTimeSec) {
             }
         }
     } else {
-        // Standard dynamisches Zeitraster (beim Einzoomen oder bei Einzelaufnahmen)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
@@ -1231,47 +1193,6 @@ function onReplaySpeedChange(spd) {
     replaySpeed = parseFloat(spd);
 }
 
-// ============================================================================
-// WINDOW-EXPORTE FÜR DAS REPLAY-DECK (OHNE KALENDER-DOPPLUNG)
-// ============================================================================
-window.inspectImuFile = inspectImuFile;
-window.closeImuReplayDeck = closeImuReplayDeck;
-window.onReplayCycleSelect = onReplayCycleSelect;
-window.onReplayScrub = onReplayScrub;
-window.toggleReplayPlay = toggleReplayPlay;
-window.resetReplayPlayback = resetReplayPlayback;
-window.onReplaySpeedChange = onReplaySpeedChange;
-window.setReplaySpeedPreset = setReplaySpeedPreset;
-window.resetReplayZoom = resetReplayZoom;
-window.setReplayGraphMode = setReplayGraphMode;
-
-/*
- * Breadcrumb: 2026-09-20 07:30 - Multi-Chunk Day Aggregator Engine
- * [CRITICAL BUGFIX FLAG - DAY LOG CONCATENATION]:
- * 1. Fetches all CSV chunks of a single date in parallel via Promise.all.
- * 2. Merges CSV rows preserving sample order and normalizing wake cycles.
- * 3. Populates cycle selector with both full-day and single-cycle drilldowns.
- */
-/*
- * Breadcrumb: 2026-09-20 07:45 - Robust Multi-Chunk Day Aggregator & Threshold Counter
- * [CRITICAL BUGFIX FLAG - DAY LOG CONCATENATION & PEAK COUNTER]:
- * 1. Resets active playback and current scrubber position before populating day data.
- * 2. Normalizes storage paths (strips leading slashes) and catches per-file HTTP errors.
- * 3. Builds detailed event options in cycle selector with timestamp and sample count.
- * 4. Counts live threshold exceedances in real-time when adjusting threshold slider.
- */
-/*
- * Breadcrumb: 2026-09-20 09:15 - Replay Threshold Controller & Live Peak Counter
- * [CRITICAL BUGFIX FLAG - ELIMINATED DUPLICATE LET DECLARATION]:
- * Removed duplicate 'let replayAccThreshold' to resolve fatal JS SyntaxError.
- */
-
-/*
- * Breadcrumb: 2026-09-20 10:00 - Fixed Width Threshold Controller & Compact Counter
- * [CRITICAL BUGFIX FLAG - ELIMINATE SLIDER JUMPING]:
- * 1. Compacts peak counts >= 10000 to 'X.Xk' format to guarantee consistent label width.
- * 2. Pairs with HTML w-28/w-32 fixed-width span to eliminate flexbox horizontal layout shift.
- */
 function setReplayThreshold(val) {
     replayAccThreshold = parseFloat(val) || 0.0;
     const lbl = document.getElementById('replay-threshold-val');
@@ -1298,24 +1219,11 @@ function setReplayThreshold(val) {
 }
 window.setReplayThreshold = setReplayThreshold;
 
-/*
- * Breadcrumb: 2026-09-20 08:10 - Multi-Chunk Day Aggregator with Cache Engine
- * [CRITICAL BUGFIX FLAG - DAY LOG CACHED MERGE]:
- * Uses fetchCachedCsv() inside Promise.all to fetch/load all day chunks instantly from browser cache.
- */
-/*
- * Breadcrumb: 2026-09-20 21:05 - Multi-Chunk Day Aggregator with Sample-Accurate Wake Times
- * [CRITICAL BUGFIX FLAG - REAL WAKE EVENT CLOCK TIME IN DROPDOWN]:
- * 1. Captures firstTs from first data row (parts[0]) of each CSV chunk during concatenation.
- * 2. Populates #replay-cycle-select options with event start time instead of file.uploaded_at.
- * 3. Retains file.uploaded_at only as secondary fallback if parts[0] has no valid timestamp.
- */
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
     isDayMergedMode = true;
-
     if (replayIsPlaying) toggleReplayPlay();
     replayCurrentTimeSec = 0.0;
 
@@ -1366,7 +1274,8 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
-                const parts = line.split(',');
+                const sep = line.includes(';') ? ';' : ',';
+                const parts = line.split(sep);
                 if (parts.length >= 8) {
                     if (!firstTs && parts[0]) {
                         firstTs = parts[0].trim();
@@ -1396,7 +1305,6 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             }
 
             if (samplesInChunk > 0) {
-                // Echte Sensor-Uhrzeit des Aufweckzyklus aus dem ersten Datenpunkt (parts[0]) extrahieren
                 const eventTime = formatReplayTimestamp(firstTs);
                 const timeStr = eventTime || (file.uploaded_at
                     ? formatReplayTimestamp(file.uploaded_at)
@@ -1417,8 +1325,8 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
         });
 
+        checkAndApplySavedTare();
         onReplayCycleSelect('ALL');
-        if (replayAccThreshold > 0) setReplayThreshold(replayAccThreshold);
     } catch (err) {
         console.error('[CACHE MERGE FEHLER]', err);
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
@@ -1426,14 +1334,6 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
 }
 window.inspectImuDayMerged = inspectImuDayMerged;
 
-/*
-* Breadcrumb: 2026-09-20 09:35 - Visible Window CSV Slice Exporter
-* [CRITICAL BUGFIX FLAG - DYNAMIC CSV EXPORT]:
-* 1. Checks if zoomed (isReplayZoomed): slices only samples between replayZoomStartSec and replayZoomEndSec.
-* 2. If unzoomed: exports complete replayFilteredData.
-* 3. Generates standards-compliant CSV with header: timestamp,qw,qx,qy,qz,ax,ay,az,cycle.
-* 4. Creates instant client-side download Blob without backend roundtrips.
-*/
 function exportReplayVisibleCsv() {
     if (!replayFilteredData || replayFilteredData.length === 0) {
         alert('Keine Messdaten im Oszilloskop zum Exportieren vorhanden.');
@@ -1456,13 +1356,11 @@ function exportReplayVisibleCsv() {
         return;
     }
 
-    // CSV Header & Zeilen erzeugen
     const header = 'timestamp,qw,qx,qy,qz,ax,ay,az,cycle\n';
     const csvContent = header + exportRows.map(r =>
         `${r.ts},${r.qw.toFixed(4)},${r.qx.toFixed(4)},${r.qy.toFixed(4)},${r.qz.toFixed(4)},${r.ax.toFixed(3)},${r.ay.toFixed(3)},${r.az.toFixed(3)},${r.cycle}`
     ).join('\n');
 
-    // Dateinamen ableiten (Gerätename + Zeitspanne oder Dateiname)
     const titleEl = document.getElementById('replay-file-title');
     let baseName = titleEl ? titleEl.innerText.replace(/[^a-zA-Z0-9_\-]/g, '_') : 'IMU_Export';
     if (baseName.endsWith('.csv')) baseName = baseName.replace('.csv', '');
@@ -1472,7 +1370,6 @@ function exportReplayVisibleCsv() {
         : '_full';
     const targetFilename = `${baseName}${rangeSuffix}.csv`;
 
-    // Download über Browser-Blob initiieren
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1489,4 +1386,17 @@ function exportReplayVisibleCsv() {
 }
 window.exportReplayVisibleCsv = exportReplayVisibleCsv;
 
+// Window Exporte
+window.inspectImuFile = inspectImuFile;
+window.closeImuReplayDeck = closeImuReplayDeck;
+window.onReplayCycleSelect = onReplayCycleSelect;
+window.onReplayScrub = onReplayScrub;
+window.toggleReplayPlay = toggleReplayPlay;
+window.resetReplayPlayback = resetReplayPlayback;
+window.onReplaySpeedChange = onReplaySpeedChange;
+window.setReplaySpeedPreset = setReplaySpeedPreset;
+window.resetReplayZoom = resetReplayZoom;
+window.setReplayGraphMode = setReplayGraphMode;
 window.setReplayCameraView = setReplayCameraView;
+window.setReplayTareCurrentFrame = setReplayTareCurrentFrame;
+window.resetReplayTare = resetReplayTare;
