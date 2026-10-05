@@ -270,23 +270,92 @@ function closeImuReplayDeck() {
 // 2. MATHEMATIK & REPLAY INSPEKTOR (DATEIEN ÖFFNEN)
 // ============================================================================
 
-function quatToEulerDeg(qw, qx, qy, qz) {
-    const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
-    const w = qw / norm, x = qx / norm, y = qy / norm, z = qz / norm;
+// Globales Tare-Quaternion (Standard: Keine Drehung)
+let replayTareQuat = null;
 
-    const sinr_cosp = 2 * (w * x + y * z);
-    const cosr_cosp = 1 - 2 * (x * x + y * y);
+// Tare auf den aktuellen Stand des Playheads setzen
+function setReplayTareCurrentFrame() {
+    if (!replayFilteredData || replayFilteredData.length === 0) return;
+
+    const sampleInterval = 0.1;
+    const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
+    const pt = replayFilteredData[exactIndex];
+
+    const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz) || 1.0;
+    replayTareQuat = {
+        w: pt.qw / norm,
+        x: pt.qx / norm,
+        y: pt.qy / norm,
+        z: pt.qz / norm
+    };
+
+    // Im Browser für dieses Gerät merken
+    if (typeof selectedDeviceId !== 'undefined') {
+        localStorage.setItem(`stag_tare_${selectedDeviceId}`, JSON.stringify(replayTareQuat));
+    }
+
+    updateTareUI(true);
+    invalidateReplayGraphCache();
+    drawReplayGraph(replayCurrentTimeSec);
+}
+
+function resetReplayTare() {
+    replayTareQuat = null;
+    if (typeof selectedDeviceId !== 'undefined') {
+        localStorage.removeItem(`stag_tare_${selectedDeviceId}`);
+    }
+    updateTareUI(false);
+    invalidateReplayGraphCache();
+    drawReplayGraph(replayCurrentTimeSec);
+}
+
+function updateTareUI(isTared) {
+    const btnSet = document.getElementById('btn-replay-tare');
+    const btnReset = document.getElementById('btn-replay-tare-reset');
+    if (btnSet) {
+        btnSet.className = isTared
+            ? 'px-2.5 py-1 text-[11px] font-bold rounded bg-emerald-600 text-white transition'
+            : 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition';
+        btnSet.innerText = isTared ? '✓ Genullt' : '🎯 Nulllage hier setzen';
+    }
+    if (btnReset) {
+        btnReset.classList.toggle('hidden', !isTared);
+    }
+}
+
+// Universelle relative Euler-Berechnung (Tare-Multiplikation)
+function quatToEulerDeg(qw, qx, qy, qz) {
+    let w = qw, x = qx, y = qy, z = qz;
+
+    // Falls Tare aktiv ist: q_rel = q_tare^-1 * q_raw
+    if (replayTareQuat) {
+        const tw = replayTareQuat.w, tx = replayTareQuat.x, ty = replayTareQuat.y, tz = replayTareQuat.z;
+        // Konjugiertes Tare-Quaternion (-x, -y, -z) multiplizieren
+        w = tw * qw + tx * qx + ty * qy + tz * qz;
+        x = tw * qx - tx * qw - ty * qz + tz * qy;
+        y = tw * qy + tx * qz - ty * qw - tz * qx;
+        z = tw * qz - tx * qy + ty * qx - tz * qw;
+    }
+
+    const norm = Math.hypot(w, x, y, z) || 1.0;
+    const nw = w / norm, nx = x / norm, ny = y / norm, nz = z / norm;
+
+    const sinr_cosp = 2 * (nw * nx + ny * nz);
+    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
     const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
 
-    const sinp = 2 * (w * y - z * x);
-    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(sinp) * (180 / Math.PI);
+    const sinp = 2 * (nw * ny - nz * nx);
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
 
-    const siny_cosp = 2 * (w * z + x * y);
-    const cosy_cosp = 1 - 2 * (y * y + z * z);
+    const siny_cosp = 2 * (nw * nz + nx * ny);
+    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
     const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
 
     return { roll, pitch, yaw };
 }
+
+window.setReplayTareCurrentFrame = setReplayTareCurrentFrame;
+window.resetReplayTare = resetReplayTare;
 
 function setReplayGraphMode(mode) {
     replayGraphMode = mode;
