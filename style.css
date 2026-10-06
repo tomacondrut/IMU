@@ -182,3 +182,18 @@ button, select, input[type="range"] {
 		right: 0 !important;
 	}
 }
+
+/*
+ * Breadcrumb: 2026-10-06 19:50 - 3-Tier Multi-Canvas Touch Containment
+ * [CRITICAL MOBILE OPTIMIZATION]: touch-action: none verhindert vertikales 
+ * WebKit/Android-Page-Scrolling bei Wischgesten im Zoom-Diagramm.
+ */
+#replayGraphCanvasAcc,
+#replayGraphCanvasEuler,
+#replayGraphCanvasDisp,
+#replayGraphCanvas {
+	cursor: crosshair;
+	touch-action: none;
+	-webkit-user-select: none;
+	user-select: none;
+}

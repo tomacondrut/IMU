@@ -226,21 +226,15 @@
                     </div>
                 </div>
 
-                <!-- Oszilloskop-Canvas & Zoom-Steuerung (Spalte 2 & 3 von 3) -->
+                <!-- Breadcrumb: 2026-10-06 19:50 - 3-Tier Synchronized Oscilloscopes (Accel, Euler, Displacement mm) -->
+                <!-- [CRITICAL BUGFIX & FEATURE PARITY - MULTI-CHANNEL ZOOM & OPTIMIZED Y-SCALING]:
+         1. Dreistufige Kaskade: Beschleunigung (m/s²), Neigungswinkel (°), Ausschlag (mm).
+         2. Zentraler Zoom-Reset-Button gilt für alle 3 Graphen simultan.
+         3. Einheitliche Cursor- und Drag-Steuerung über alle drei Canvas-Elemente. -->
                 <div class="lg:col-span-2 flex flex-col justify-between bg-white p-3 rounded-lg border border-slate-300">
-                    <!-- Obere Steuerungsleiste im Diagramm -->
-                    <div class="flex flex-wrap justify-between items-center gap-2 mb-2 pb-1 border-b border-slate-200">
+                    <!-- Zentralisierte Steuerungsleiste: Tare, Schwelle, Zoom-Reset, Export, Zeit-Cursor -->
+                    <div class="flex flex-wrap justify-between items-center gap-2 mb-2 pb-2 border-b border-slate-200">
                         <div class="flex items-center gap-1.5 flex-wrap">
-                            <span class="text-[11px] font-bold text-slate-600 font-mono uppercase mr-1">Signal:</span>
-                            <button id="btn-replay-mode-acc" onclick="setReplayGraphMode('accel')"
-                                    class="px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition">
-                                Beschleunigung (m/s²)
-                            </button>
-                            <button id="btn-replay-mode-euler" onclick="setReplayGraphMode('euler')"
-                                    class="px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition">
-                                Neigungswinkel (° Euler)
-                            </button>
-                            <!-- Neuer Tare-Button -->
                             <button id="btn-replay-tare" onclick="setReplayTareCurrentFrame()"
                                     class="px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition flex items-center gap-1"
                                     title="Aktuellen Zeitpunkt als 0°-Grundstellung (Tare) definieren">
@@ -253,7 +247,7 @@
                             </button>
                         </div>
 
-                        <!-- Schwellenwert-Filter für Beschleunigungs-Peaks (Feste Breite verhindert Layout-Jumping) -->
+                        <!-- Schwellenwert-Filter für Beschleunigungs-Peaks -->
                         <div class="flex items-center gap-2 bg-slate-50 border border-slate-300 px-2.5 py-1 rounded-lg shrink-0">
                             <span class="text-[11px] font-bold text-slate-600 font-mono uppercase shrink-0">Schwelle:</span>
                             <input type="range" min="0" max="10" step="0.2" value="0"
@@ -262,7 +256,7 @@
                             <span id="replay-threshold-val" class="text-[11px] font-mono font-bold text-red-600 w-28 sm:w-32 shrink-0 tabular-nums">AUS</span>
                         </div>
 
-                        <!-- Zoom-Reset Button, CSV-Export & Zeit-Cursor -->
+                        <!-- Zentraler Zoom-Reset Button für alle drei Graphen, CSV-Export & Zeit-Cursor -->
                         <div class="flex items-center gap-2">
                             <button id="btn-replay-reset-zoom" onclick="resetReplayZoom()"
                                     class="hidden px-2.5 py-1 text-[11px] font-bold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition flex items-center gap-1">
@@ -277,59 +271,69 @@
                         </div>
                     </div>
 
-                    <!-- Interaktives Diagramm (Drag to Zoom & Scroll to Pan) -->
-                    <div class="relative w-full h-40">
-                        <canvas id="replayGraphCanvas" class="w-full h-full block bg-white select-none"></canvas>
+                    <!-- 1. Graph: Beschleunigungsdynamik (m/s²) -->
+                    <div class="relative w-full h-28 sm:h-32 mb-2 bg-white rounded border border-slate-200 overflow-hidden">
+                        <canvas id="replayGraphCanvasAcc" class="w-full h-full block bg-white select-none"></canvas>
                     </div>
 
+                    <!-- 2. Graph: Neigungswinkel (° Euler) -->
+                    <div class="relative w-full h-28 sm:h-32 mb-2 bg-white rounded border border-slate-200 overflow-hidden">
+                        <canvas id="replayGraphCanvasEuler" class="w-full h-full block bg-white select-none"></canvas>
+                    </div>
+
+                    <!-- 3. Graph: Dynamischer Ausschlag (mm) -->
+                    <div class="relative w-full h-28 sm:h-32 mb-1 bg-white rounded border border-slate-200 overflow-hidden">
+                        <canvas id="replayGraphCanvasDisp" class="w-full h-full block bg-white select-none"></canvas>
+                    </div>
+
+                    <!-- Zeitachse & Hilfetext -->
                     <div class="flex justify-between items-center text-[10px] font-mono text-slate-500 mt-1">
                         <span>Start (0.0s)</span>
-                        <span class="text-slate-400 hidden sm:inline">🖱️ Bereich ziehen zum Zoomen • Mausrad für Einzelschritte (100 ms)</span>
+                        <span class="text-slate-400 hidden sm:inline">🖱️ In beliebigem Graphen ziehen zum Zoomen • Mausrad für Einzelschritte (100 ms)</span>
                         <span id="replay-duration-label">0.0 s</span>
                     </div>
                 </div>
-            </div>
 
-            <!-- Transport-Leiste: Scrubber, Playback & 0.1x Zeitlupe -->
-            <div class="bg-slate-100 p-3.5 rounded-lg border border-slate-300 flex flex-col gap-3">
-                <div class="flex items-center gap-3">
-                    <span id="replay-current-time-label" class="text-xs font-mono text-slate-700 w-14">00:00</span>
-                    <input type="range" id="replay-scrubber" min="0" max="100" value="0" step="1"
-                           oninput="onReplayScrub(this.value)"
-                           class="w-full h-2 bg-slate-300 rounded-lg cursor-pointer accent-green-600">
-                    <span id="replay-total-time-label" class="text-xs font-mono text-slate-500 w-14 text-right">00:00</span>
-                </div>
+                <!-- Transport-Leiste: Scrubber, Playback & 0.1x Zeitlupe -->
+                <div class="bg-slate-100 p-3.5 rounded-lg border border-slate-300 flex flex-col gap-3">
+                    <div class="flex items-center gap-3">
+                        <span id="replay-current-time-label" class="text-xs font-mono text-slate-700 w-14">00:00</span>
+                        <input type="range" id="replay-scrubber" min="0" max="100" value="0" step="1"
+                               oninput="onReplayScrub(this.value)"
+                               class="w-full h-2 bg-slate-300 rounded-lg cursor-pointer accent-green-600">
+                        <span id="replay-total-time-label" class="text-xs font-mono text-slate-500 w-14 text-right">00:00</span>
+                    </div>
 
-                <div class="flex flex-wrap justify-between items-center gap-3 pt-2 border-t border-slate-200">
-                    <div class="flex items-center gap-2 flex-wrap">
-                        <button id="btn-replay-play" onclick="toggleReplayPlay()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition">
-                            ▶ Abspielen
-                        </button>
-                        <button onclick="resetReplayPlayback()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 border border-slate-300 px-3 py-1.5 rounded text-xs font-bold transition">
-                            ⏮ Reset
-                        </button>
+                    <div class="flex flex-wrap justify-between items-center gap-3 pt-2 border-t border-slate-200">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <button id="btn-replay-play" onclick="toggleReplayPlay()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition">
+                                ▶ Abspielen
+                            </button>
+                            <button onclick="resetReplayPlayback()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 border border-slate-300 px-3 py-1.5 rounded text-xs font-bold transition">
+                                ⏮ Reset
+                            </button>
 
-                        <!-- Stufenlose Geschwindigkeitsleiste inkl. 0.1x Ultra-Zeitlupe -->
-                        <div class="flex items-center gap-1 bg-white border border-slate-300 rounded-lg p-0.5 shadow-sm ml-1">
-                            <span class="text-[10px] text-slate-500 font-semibold px-1 hidden md:inline">Tempo:</span>
-                            <button type="button" onclick="setReplaySpeedPreset(0.1)" id="btn-spd-0.1" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.1x</button>
-                            <button type="button" onclick="setReplaySpeedPreset(0.25)" id="btn-spd-0.25" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.25x</button>
-                            <button type="button" onclick="setReplaySpeedPreset(0.5)" id="btn-spd-0.5" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.5x</button>
-                            <button type="button" onclick="setReplaySpeedPreset(1.0)" id="btn-spd-1.0" class="px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition">1.0x</button>
-                            <button type="button" onclick="setReplaySpeedPreset(2.0)" id="btn-spd-2.0" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">2.0x</button>
+                            <!-- Stufenlose Geschwindigkeitsleiste inkl. 0.1x Ultra-Zeitlupe -->
+                            <div class="flex items-center gap-1 bg-white border border-slate-300 rounded-lg p-0.5 shadow-sm ml-1">
+                                <span class="text-[10px] text-slate-500 font-semibold px-1 hidden md:inline">Tempo:</span>
+                                <button type="button" onclick="setReplaySpeedPreset(0.1)" id="btn-spd-0.1" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.1x</button>
+                                <button type="button" onclick="setReplaySpeedPreset(0.25)" id="btn-spd-0.25" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.25x</button>
+                                <button type="button" onclick="setReplaySpeedPreset(0.5)" id="btn-spd-0.5" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.5x</button>
+                                <button type="button" onclick="setReplaySpeedPreset(1.0)" id="btn-spd-1.0" class="px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition">1.0x</button>
+                                <button type="button" onclick="setReplaySpeedPreset(2.0)" id="btn-spd-2.0" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">2.0x</button>
+                            </div>
+                        </div>
+
+                        <!-- Zyklus-Auswahl -->
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-slate-600 font-semibold whitespace-nowrap">Aufweckzyklus:</label>
+                            <select id="replay-cycle-select" onchange="onReplayCycleSelect(this.value)" class="bg-white border border-slate-300 rounded px-3 py-1.5 text-xs text-green-700 font-mono font-bold outline-none">
+                                <option value="ALL">Alle Zyklen der Datei</option>
+                            </select>
                         </div>
                     </div>
-
-                    <!-- Zyklus-Auswahl -->
-                    <div class="flex items-center gap-2">
-                        <label class="text-xs text-slate-600 font-semibold whitespace-nowrap">Aufweckzyklus:</label>
-                        <select id="replay-cycle-select" onchange="onReplayCycleSelect(this.value)" class="bg-white border border-slate-300 rounded px-3 py-1.5 text-xs text-green-700 font-mono font-bold outline-none">
-                            <option value="ALL">Alle Zyklen der Datei</option>
-                        </select>
-                    </div>
                 </div>
-            </div>
-        </section>
+</section>
 
         <!-- Supabase Storage Auslastungsanzeige (Bucket: imu-logs) -->
         <div class="card p-4 rounded-lg mb-4 bg-white border border-slate-300 shadow-sm">
