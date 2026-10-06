@@ -935,10 +935,27 @@ function checkAndApplySavedMounting() {
  * 2. Eliminiert repMesh.quaternion.setFromEuler(), wodurch 3D-Kippsprünge unmöglich werden.
  * 3. Nutzt direkte sphärische/normalisierte Interpolation zwischen Frame A und B.
  */
+// ============================================================================
+// 4. FRAME-INTERPOLATION & 3D RENDERING
+// ============================================================================
+
+/*
+ * Breadcrumb: 2026-10-06 23:59 - 3D CAD Mesh Sensor-Offset Parity & Absolute Frame Alignment
+ * [CRITICAL BUGFIX FLAG - CAD MODEL Y-UP ORIENTATION RESTORED]:
+ * 1. Stellt Sensor-Offset in die Y-Up-Welt wieder vollständig her:
+ *    premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107))  // +90° Z
+ *    premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)) // -90° X
+ * 2. repMesh nutzt im Viewport die echten, absoluten Sensordaten (qw..qz) via SLERP
+ *    für die korrekte physische 90°-Montagelage am Kipprahmen.
+ * 3. applyEspModelQuaternion() synchronisiert Modal-Vorschau und Hauptansicht auf identische Basis.
+ * [DISMISSED]: Weglassen des -90° X-Versatzes und Nutzen von relQw verdrehte das Gehäuse im Raum.
+ */
 function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
     const norm = Math.hypot(qx, qy, qz, qw) || 1.0;
     const qThree = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
-    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+    // Sensor-Offset in die Y-Up-Welt (Gehäuse steht bei 90° senkrecht im Raum)
+    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
+    qThree.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
     targetMesh.quaternion.copy(qThree);
 }
 
@@ -955,7 +972,7 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    // Kontinuierliche Winkelanzeige im HUD
+    // Kontinuierliche Winkelanzeige im HUD (genullte Werte bezüglich Tare)
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
@@ -968,21 +985,27 @@ function renderInterpolatedFrame(tSec) {
     const dyD = ((ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha);
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
+    /*
+     * 3D-MODELL: Echte, absolute Ausrichtung im Raum (KEIN Tare)
+     * Zeigt das Gehäuse exakt in der realen 90°-Montage am Kipprahmen.
+     */
     if (repMesh && repScene && repCamera) {
-        // Lineare Quaternion-Interpolation mit Vorzeichen-Gleichheit
-        let dot = ptA.relQw * ptB.relQw + ptA.relQx * ptB.relQx + ptA.relQy * ptB.relQy + ptA.relQz * ptB.relQz;
-        let bScale = alpha;
-        let aScale = 1.0 - alpha;
-        if (dot < 0.0) bScale = -bScale;
+        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
+        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
 
-        const iqw = aScale * ptA.relQw + bScale * ptB.relQw;
-        const iqx = aScale * ptA.relQx + bScale * ptB.relQx;
-        const iqy = aScale * ptA.relQy + bScale * ptB.relQy;
-        const iqz = aScale * ptA.relQz + bScale * ptB.relQz;
+        // Absolute Sensordaten ohne Nulllagen-Offset
+        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
+        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
 
-        // Direktes Anwenden der hardware-identischen Portal-Transformation
-        applyEspModelQuaternion(repMesh, iqw, iqx, iqy, iqz);
+        if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
+        qA.slerp(qB, alpha);
 
+        // Sensor-Offset in die Y-Up-Welt
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
+        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
+        repMesh.quaternion.copy(qA);
+
+        // Translationsauslenkung Schwingweg (mm -> Szene)
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dxD * mmToSceneScale,
