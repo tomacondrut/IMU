@@ -361,16 +361,20 @@ function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
     if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
 
-    const box = new THREE.Box3().setFromObject(gltfScene);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-
     gltfScene.traverse((child) => {
         if (child.isMesh && child.material) {
             child.material.side = THREE.DoubleSide;
         }
     });
+
+    // Basisausrichtung des CAD-Exports: -90° um X legt Bodenplatte plan auf XZ-Gitter
+    gltfScene.rotation.x = -Math.PI / 2;
+    gltfScene.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(gltfScene);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
 
     const group = new THREE.Group();
     if (maxDim > 0) {
@@ -386,6 +390,35 @@ function setupReplayModelMesh(gltfScene) {
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
 }
 
+function loadReplayGLBModel() {
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createReplayFallbackCube();
+        return;
+    }
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            createReplayFallbackCube();
+            return;
+        }
+        loader.load(
+            candidatePaths[index],
+            (gltf) => { setupReplayModelMesh(gltf.scene); },
+            undefined,
+            () => { tryLoad(index + 1); }
+        );
+    }
+    tryLoad(0);
+}
+
+/*
+ * Breadcrumb: 2026-10-06 23:55 - Restore loadMountingGLBModel Cache Cloner
+ * [CRITICAL BUGFIX FLAG - ELIMINATE REFERENCE ERROR]:
+ * 1. Stellt die fehlende Funktion für initMounting3D() bereit.
+ * 2. Nutzt rawGltfScene-Klon für verzögerungsfreies Laden ohne HTTP-Request.
+ */
 function loadMountingGLBModel() {
     if (rawGltfScene) {
         setupMountingModelMesh(rawGltfScene.clone(true));
@@ -411,29 +444,6 @@ function loadMountingGLBModel() {
                 rawGltfScene = gltf.scene.clone(true);
                 setupMountingModelMesh(gltf.scene);
             },
-            undefined,
-            () => { tryLoad(index + 1); }
-        );
-    }
-    tryLoad(0);
-}
-
-function loadReplayGLBModel() {
-    if (typeof THREE.GLTFLoader === 'undefined') {
-        createReplayFallbackCube();
-        return;
-    }
-    const loader = new THREE.GLTFLoader();
-    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
-
-    function tryLoad(index) {
-        if (index >= candidatePaths.length) {
-            createReplayFallbackCube();
-            return;
-        }
-        loader.load(
-            candidatePaths[index],
-            (gltf) => { setupReplayModelMesh(gltf.scene); },
             undefined,
             () => { tryLoad(index + 1); }
         );
@@ -615,17 +625,22 @@ function updateMountingQuaternion() {
  */
 // Exakte Achstransformation aus 260920_IMU.c++
 // Globaler Status für Einbaulage (Standard: Roll -90° = Gehäuse liegt plan mit Bodenplatte auf)
-let replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+/*
+ * Breadcrumb: 2026-10-06 23:50 - Dual-Axis 90° Rotation Elimination & 0° Baseline Alignment
+ * [CRITICAL BUGFIX FLAG - DUAL 90° TWIST ERADICATED]:
+ * 1. Standard-Einbaulage ist { roll: 0, pitch: 0, yaw: 0 } (plan am Kipprahmen montiert).
+ * 2. Z-Achsen +90° Pre-Multiplikation aus sensorToModelQuat restlos entfernt (beseitigt 90°-Yaw-Drall).
+ * 3. 3D-Replay-Modell und Graphen starten synchron bei 0.0° in horizontaler Lage.
+ * [DISMISSED]: q.premultiply(0, 0, 0.707107, 0.707107) zusammen mit Roll -90° verdrehte das Modell um 2 Achsen um je 90°.
+ */
+// Globaler Status für Einbaulage (Standard: 0° auf allen Achsen = Plan auf Bodenplatte / Kipprahmen)
+let replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
 let replayMountQuat = null;
 
-let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
-
-// Exakte Achstransformation aus 260920_IMU.c++
+// Achstransformation PCB -> Modellkörper (1:1 ohne künstliche Z-Vormultiplikation)
 function sensorToModelQuat(qw, qx, qy, qz) {
     const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
-    const q = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
-    q.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-    return q;
+    return new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
 }
 
 function getRelativeModelQuat(qw, qx, qy, qz) {
@@ -657,25 +672,28 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     return { roll, pitch, yaw };
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:55 - Strict Quaternion-Based Euler Recalculation
+ * [CRITICAL BUGFIX FLAG - ELIMINATE SCALAR DRIFT]:
+ * 1. Ersetzt skalare Subtraktion durch quatToEulerDeg() für mathematisch saubere 3D-Kippwinkel.
+ * 2. rawRoll/Pitch/Yaw bleiben für den Nullabgleich (adoptCurrentFrameMounting) erhalten.
+ */
 function recalculateAllEuler() {
     for (let i = 0; i < replayDataRaw.length; i++) {
         const item = replayDataRaw[i];
         const qModel = sensorToModelQuat(item.qw, item.qx, item.qy, item.qz);
-        const euler = new THREE.Euler().setFromQuaternion(qModel, 'ZYX');
+        const eulerRaw = new THREE.Euler().setFromQuaternion(qModel, 'ZYX');
 
-        // Physische Rohwinkel des Sensors
-        const rawRoll = euler.x * (180 / Math.PI);
-        const rawPitch = euler.y * (180 / Math.PI);
-        const rawYaw = euler.z * (180 / Math.PI);
+        // Physische absolute Rohwinkel des Sensors
+        item.rawRoll = eulerRaw.x * (180 / Math.PI);
+        item.rawPitch = eulerRaw.y * (180 / Math.PI);
+        item.rawYaw = eulerRaw.z * (180 / Math.PI);
 
-        item.rawRoll = rawRoll;
-        item.rawPitch = rawPitch;
-        item.rawYaw = rawYaw;
-
-        // Relative Winkel für Oszilloskop-Graph und HUD (Ausgangslage getart = 0°)
-        item.roll = rawRoll - replayMountConfig.roll;
-        item.pitch = rawPitch - replayMountConfig.pitch;
-        item.yaw = rawYaw - replayMountConfig.yaw;
+        // Relative Winkel via Quaternionen-Tare (qMountInv * qModel)
+        const relEuler = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
+        item.roll = relEuler.roll;
+        item.pitch = relEuler.pitch;
+        item.yaw = relEuler.yaw;
     }
 }
 
@@ -689,6 +707,13 @@ function updateMountingButtonUI() {
     lbl.innerText = parts.length > 0 ? parts.join(' ') : '0°';
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:50 - 0° Mounting Baseline Presets & Modal Sync
+ * [CRITICAL BUGFIX FLAG - 0° HORIZONTAL BASELINE RESTORATION]:
+ * 1. Sämtliche Fallbacks und Defaults auf 0° kalibriert.
+ * 2. updateMountingPreview3D stellt bei r=0, p=0, y=0 die plane Auflage dar.
+ * 3. adoptCurrentFrameMounting übernimmt Messwerte unmodifiziert als Nullpunkt-Tare.
+ */
 function checkAndApplySavedMounting() {
     const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
     const saved = localStorage.getItem(`stag_mount_${devId}`);
@@ -696,19 +721,15 @@ function checkAndApplySavedMounting() {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+            replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
         }
     } else {
-        replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+        replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
     recalculateAllEuler();
 }
-
-// ----------------------------------------------------------------------------
-// MODAL-STEUERUNG & GLB-3D-VORSCHAU FÜR EINBAULAGE
-// ----------------------------------------------------------------------------
 
 function openMountingConfigModal() {
     const modal = document.getElementById('mounting-config-modal');
@@ -716,7 +737,7 @@ function openMountingConfigModal() {
     modal.classList.remove('hidden');
 
     ['roll', 'pitch', 'yaw'].forEach(axis => {
-        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : (axis === 'roll' ? -90 : 0);
+        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : 0;
         const numEl = document.getElementById(`mount-${axis}-num`);
         const rngEl = document.getElementById(`mount-${axis}-range`);
         if (numEl) numEl.value = val;
@@ -774,20 +795,19 @@ function adoptCurrentFrameMounting() {
     const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
     const pt = replayFilteredData[exactIndex];
 
-    const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll) : -90;
+    const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll) : 0;
     const p = (pt.rawPitch !== undefined) ? Math.round(pt.rawPitch) : 0;
     const y = (pt.rawYaw !== undefined) ? Math.round(pt.rawYaw) : 0;
 
     setMountingPreset(r, p, y);
 }
-window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
 
 function saveMountingConfig() {
     const rEl = document.getElementById('mount-roll-num');
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
@@ -835,16 +855,20 @@ function createMountingFallbackCube() {
 function setupMountingModelMesh(gltfScene) {
     if (mountMesh && mountScene) mountScene.remove(mountMesh);
 
-    const box = new THREE.Box3().setFromObject(gltfScene);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-
     gltfScene.traverse((child) => {
         if (child.isMesh && child.material) {
             child.material.side = THREE.DoubleSide;
         }
     });
+
+    // Identische Basisausrichtung für das Modal-Vorschaumodell
+    gltfScene.rotation.x = -Math.PI / 2;
+    gltfScene.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(gltfScene);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
 
     const group = new THREE.Group();
     if (maxDim > 0) {
@@ -937,7 +961,7 @@ function updateMountingPreview3D() {
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
@@ -1009,11 +1033,11 @@ function renderInterpolatedFrame(tSec) {
             new THREE.Euler(meshRoll, meshPitch, meshYaw, 'ZYX')
         );
 
-        // Translations-Mapping aus 260920_IMU.c++ (X=ay, Y=-ax, Z=az)
+        // Achsenreine Schwingweg-Translation (X=dx, Y=dy, Z=dz) ohne alte Z-90°-Verdrehung
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
+            dxD * mmToSceneScale,
             dyD * mmToSceneScale,
-            -dxD * mmToSceneScale,
             dzD * mmToSceneScale
         );
         localDisp.applyQuaternion(repMesh.quaternion);
