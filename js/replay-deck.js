@@ -258,6 +258,12 @@ function initReplay3D() {
  * 2. Farbkodierung: X (Rot) = Roll, Y (Grün) = Pitch, Z (Blau) = Yaw.
  * 3. Text-Sprites rotieren phasenstarr mit dem IMU-Gehäuse mit.
  */
+/*
+ * Breadcrumb: 2026-10-06 22:45 - 3D Orientation Axes Helpers Fix (Roll=X, Pitch=Y, Yaw=Z)
+ * [CRITICAL BUGFIX FLAG - ELIMINATE SYNTAX ERROR & RESTORE AXIS PARITY]:
+ * 1. Doppelte Deklarationen (const lblX/Y/Z) restlos entfernt -> Script parst fehlerfrei.
+ * 2. X (Rot) = Roll, Y (Grün) = Pitch, Z (Blau) = Yaw.
+ */
 function attachImuAxes(targetGroup) {
     const old = targetGroup.getObjectByName('imuAxesGroup');
     if (old) targetGroup.remove(old);
@@ -269,28 +275,16 @@ function attachImuAxes(targetGroup) {
     const headLen = 0.22;
     const headWidth = 0.12;
 
-    // X-Achse: Querachse = Pitch (Grün #009B4C)
-    const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
-    // Y-Achse: Längs-/Kippachse = Roll (Rot #dc2626)
-    const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
+    // X-Achse: Längsachse = Roll (Rot #dc2626)
+    const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
+    // Y-Achse: Quer-/Kippachse = Pitch (Grün #009B4C)
+    const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
     // Z-Achse: Hochachse = Yaw (Blau #2563eb)
     const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), len, 0x2563eb, headLen, headWidth);
 
     axesGroup.add(arrowX);
     axesGroup.add(arrowY);
     axesGroup.add(arrowZ);
-
-    const lblX = createAxisLabel('Pitch (X)', '#009B4C');
-    lblX.position.set(len + 0.25, 0, 0);
-    axesGroup.add(lblX);
-
-    const lblY = createAxisLabel('Roll (Y)', '#dc2626');
-    lblY.position.set(0, len + 0.25, 0);
-    axesGroup.add(lblY);
-
-    const lblZ = createAxisLabel('Yaw (Z)', '#2563eb');
-    lblZ.position.set(0, 0, len + 0.25);
-    axesGroup.add(lblZ);
 
     function createAxisLabel(text, colorHex) {
         const canvas = document.createElement('canvas');
@@ -579,17 +573,25 @@ function calculateAllDisplacements() {
  * 5. renderInterpolatedFrame übersetzt reale Millimeter-Ausschläge (dx, dy, dz) phasenstarr.
  */
 
-// Globaler Status für Einbaulage (Standard: Roll -90° für Kippstation)
-let replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+/*
+ * Breadcrumb: 2026-10-06 22:45 - Standard 0° Baseplate Mounting & Euler Parity
+ * [CRITICAL BUGFIX FLAG - AXIS CORRECTION]:
+ * 1. Default-Einbaulage ist 0° (plan auf Bodenplatte liegend).
+ * 2. Euler-Mapping: X = Roll, Y = Pitch, Z = Yaw (keine Achsenvertauschung mehr).
+ * [DISMISSED]: { roll: -90, pitch: 0, yaw: 0 } als Hardcoded-Default führte zu gekippter Voransicht.
+ */
+
+// Globaler Status für Einbaulage (Standard: 0° = Gehäuse liegt plan mit Bodenplatte auf)
+let replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
 let replayMountQuat = null;
 
 let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
 
-// Three.js-basierte Euler-zu-Quaternion Konvertierung (Pitch=X, Roll=Y, Yaw=Z)
+// Three.js-basierte Euler-zu-Quaternion Konvertierung (Roll=X, Pitch=Y, Yaw=Z)
 function eulerDegToQuat(rDeg, pDeg, yDeg) {
     const euler = new THREE.Euler(
-        (pDeg * Math.PI) / 180,
         (rDeg * Math.PI) / 180,
+        (pDeg * Math.PI) / 180,
         (yDeg * Math.PI) / 180,
         'ZYX'
     );
@@ -635,9 +637,9 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     const q = new THREE.Quaternion(qRel.x, qRel.y, qRel.z, qRel.w);
     const euler = new THREE.Euler().setFromQuaternion(q, 'ZYX');
 
-    // Modell-Achsenparität: X = Pitch, Y = Roll (Kippachse), Z = Yaw
-    const pitch = euler.x * (180 / Math.PI);
-    const roll = euler.y * (180 / Math.PI);
+    // Modell-Achsenparität: X = Roll (Längsachse), Y = Pitch (Quer-/Kippachse), Z = Yaw
+    const roll = euler.x * (180 / Math.PI);
+    const pitch = euler.y * (180 / Math.PI);
     const yaw = euler.z * (180 / Math.PI);
 
     return { roll, pitch, yaw };
@@ -660,7 +662,7 @@ function updateMountingButtonUI() {
     if (replayMountConfig.roll !== 0) parts.push(`R:${replayMountConfig.roll}°`);
     if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
     if (replayMountConfig.yaw !== 0) parts.push(`Y:${replayMountConfig.yaw}°`);
-    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0° (Eben)';
+    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0° (Plan / Bodenplatte)';
 }
 
 function checkAndApplySavedMounting() {
@@ -670,10 +672,10 @@ function checkAndApplySavedMounting() {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+            replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
         }
     } else {
-        replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+        replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
@@ -752,8 +754,8 @@ function adoptCurrentFrameMounting() {
     const q = new THREE.Quaternion(qM.x, qM.y, qM.z, qM.w);
     const euler = new THREE.Euler().setFromQuaternion(q, 'ZYX');
 
-    const rawPitch = Math.round(euler.x * (180 / Math.PI));
-    const rawRoll = Math.round(euler.y * (180 / Math.PI));
+    const rawRoll = Math.round(euler.x * (180 / Math.PI));
+    const rawPitch = Math.round(euler.y * (180 / Math.PI));
     const rawYaw = Math.round(euler.z * (180 / Math.PI));
 
     setMountingPreset(rawRoll, rawPitch, rawYaw);
@@ -765,7 +767,7 @@ function saveMountingConfig() {
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
@@ -898,20 +900,25 @@ function initMounting3D() {
     anim();
 }
 
+/*
+ * Breadcrumb: 2026-10-06 22:45 - Mounting Preview & Preset Alignment
+ * [CRITICAL BUGFIX FLAG - SLIDER PARITY]:
+ * 1. mountMesh rotiert Euler mit Roll an X, Pitch an Y und Yaw an Z.
+ * 2. adoptCurrentFrameMounting liest rawRoll aus euler.x und rawPitch aus euler.y.
+ */
 function updateMountingPreview3D() {
     if (!mountMesh) return;
     const rEl = document.getElementById('mount-roll-num');
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
-    // Plan auf Bodengitter: Bei r=0, p=0, y=0 liegt die Bodenplatte auf dem Gitter
-    // r rotiert die Längsachse (Roll), p die Querachse (Pitch)
+    // r dreht Roll um X, p dreht Pitch um Y, y dreht Yaw um Z
     mountMesh.quaternion.setFromEuler(
-        new THREE.Euler((p * Math.PI) / 180, (r * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
+        new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
     );
 
     if (mountRenderer && mountScene && mountCamera) {
@@ -923,6 +930,11 @@ function updateMountingPreview3D() {
 // 3. FRAME-INTERPOLATION & 3D RENDERING (MIT SCHWINGWEG-TRANSLATION)
 // ----------------------------------------------------------------------------
 
+/*
+ * Breadcrumb: 2026-10-06 22:45 - 3D Replay Rotation Alignment
+ * [CRITICAL BUGFIX FLAG - MOTION PARITY]:
+ * repMesh.quaternion übernimmt roll auf X und pitch auf Y.
+ */
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -949,12 +961,10 @@ function renderInterpolatedFrame(tSec) {
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        // Physische Rotation: Startet bei 0° waagrecht und kippt exakt mit dem Roll-Graphen
         repMesh.quaternion.setFromEuler(
-            new THREE.Euler((pitch * Math.PI) / 180, (roll * Math.PI) / 180, (yaw * Math.PI) / 180, 'ZYX')
+            new THREE.Euler((roll * Math.PI) / 180, (pitch * Math.PI) / 180, (yaw * Math.PI) / 180, 'ZYX')
         );
 
-        // Translation: Reale Millimeter-Ausschläge (10 mm = 0.25 Einheiten)
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dxD * mmToSceneScale,
@@ -1555,6 +1565,140 @@ function setReplayThreshold(val) {
     drawReplayGraph(replayCurrentTimeSec);
 }
 window.setReplayThreshold = setReplayThreshold;
+
+
+/*
+ * Breadcrumb: 2026-10-06 22:45 - Data Ingestion & Graph Activation Engine
+ * [CRITICAL BUGFIX FLAG - RESTORE REPLAY PIPELINE]:
+ * 1. onReplayCycleSelect befüllt replayFilteredData und löst sofort den initialen Canvas-Render aus.
+ * 2. formatReplayTimestamp und setReplayGraphMode deklariert.
+ * 3. inspectImuFile für Einzelfilterung implementiert.
+ */
+function formatReplayTimestamp(ts) {
+    if (!ts) return '';
+    try {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) {
+            return d.toLocaleTimeString('de-CH', { hour12: false });
+        }
+    } catch (e) { }
+    return String(ts);
+}
+
+function onReplayCycleSelect(cycleVal) {
+    if (!replayDataRaw || replayDataRaw.length === 0) return;
+
+    if (cycleVal === 'ALL' || !cycleVal) {
+        replayFilteredData = [...replayDataRaw];
+    } else {
+        const cId = parseInt(cycleVal, 10);
+        replayFilteredData = replayDataRaw.filter(d => d.cycle === cId);
+    }
+
+    if (replayFilteredData.length === 0) {
+        replayFilteredData = [...replayDataRaw];
+    }
+
+    resetReplayZoom();
+    replayCurrentTimeSec = 0.0;
+
+    const scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) {
+        scrubber.min = 0;
+        scrubber.max = Math.max(0, replayFilteredData.length - 1);
+        scrubber.value = 0;
+    }
+
+    renderInterpolatedFrame(0.0);
+    drawReplayGraph(0.0);
+}
+window.onReplayCycleSelect = onReplayCycleSelect;
+
+function setReplayGraphMode(mode) {
+    replayGraphMode = mode;
+    drawReplayGraph(replayCurrentTimeSec);
+}
+window.setReplayGraphMode = setReplayGraphMode;
+
+async function inspectImuFile(file) {
+    const deck = document.getElementById('imu-replay-deck');
+    if (!deck) return;
+
+    isDayMergedMode = false;
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
+
+    deck.classList.remove('hidden');
+    deck.scrollIntoView({ behavior: 'smooth' });
+
+    const titleEl = document.getElementById('replay-file-title');
+    if (titleEl) titleEl.innerText = `📄 ${file.file_name || 'IMU Log'}`;
+    const metaEl = document.getElementById('replay-meta-info');
+    if (metaEl) metaEl.innerText = 'Lade Messdaten...';
+
+    initReplay3D();
+
+    try {
+        const cleanPath = file.file_path.startsWith('/') ? file.file_path.substring(1) : file.file_path;
+        const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+        const text = await fetchCachedCsv(url);
+
+        const lines = text.split('\n');
+        replayDataRaw = [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const sep = line.includes(';') ? ';' : ',';
+            const parts = line.split(sep);
+            if (parts.length >= 8) {
+                const qw = parseFloat(parts[1]) || 1.0;
+                const qx = parseFloat(parts[2]) || 0.0;
+                const qy = parseFloat(parts[3]) || 0.0;
+                const qz = parseFloat(parts[4]) || 0.0;
+                const euler = quatToEulerDeg(qw, qx, qy, qz);
+
+                replayDataRaw.push({
+                    ts: parts[0],
+                    qw, qx, qy, qz,
+                    ax: parseFloat(parts[5]) || 0.0,
+                    ay: parseFloat(parts[6]) || 0.0,
+                    az: parseFloat(parts[7]) || 0.0,
+                    roll: euler.roll,
+                    pitch: euler.pitch,
+                    yaw: euler.yaw,
+                    cycle: 1,
+                    fileIndex: 0
+                });
+            }
+        }
+
+        if (replayDataRaw.length === 0) {
+            if (metaEl) metaEl.innerText = 'Keine gültigen Messzeilen gefunden.';
+            return;
+        }
+
+        calculateAllDisplacements();
+        checkAndApplySavedMounting();
+
+        const select = document.getElementById('replay-cycle-select');
+        if (select) {
+            select.innerHTML = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
+        }
+
+        if (metaEl) {
+            const dur = ((replayDataRaw.length - 1) * 0.1).toFixed(1);
+            metaEl.innerText = `${replayDataRaw.length} Samples | Dauer: ${dur}s @ 10 Hz`;
+        }
+
+        onReplayCycleSelect('ALL');
+    } catch (err) {
+        console.error('[INSPECT ERROR]', err);
+        if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
+    }
+}
+window.inspectImuFile = inspectImuFile;
+
 
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
