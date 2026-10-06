@@ -40,6 +40,46 @@ let replayTareQuat = null;
 
 const imuMemoryCache = new Map();
 
+
+/*
+ * Breadcrumb: 2026-10-06 20:45 - Dynamic Curve Visibility State
+ */
+let replayVisibleCurves = {
+    ax: true, ay: true, az: true,
+    roll: true, pitch: true, yaw: true,
+    dx: true, dy: true, dz: true
+};
+
+function toggleReplayCurve(key) {
+    if (replayVisibleCurves.hasOwnProperty(key)) {
+        replayVisibleCurves[key] = !replayVisibleCurves[key];
+        updateCurveToggleUI();
+        drawReplayGraph(replayCurrentTimeSec);
+    }
+}
+window.toggleReplayCurve = toggleReplayCurve;
+
+function updateCurveToggleUI() {
+    const colorThemes = {
+        ax: 'red', roll: 'red', dx: 'red',
+        ay: 'emerald', pitch: 'emerald', dy: 'emerald',
+        az: 'blue', dz: 'blue', yaw: 'purple'
+    };
+
+    Object.keys(replayVisibleCurves).forEach(key => {
+        const btn = document.getElementById(`btn-filter-${key}`);
+        if (!btn) return;
+        const active = replayVisibleCurves[key];
+        const theme = colorThemes[key] || 'slate';
+
+        if (active) {
+            btn.className = `px-2 py-0.5 rounded text-[10px] font-bold border transition bg-${theme}-50 text-${theme}-700 border-${theme}-300 shadow-xs`;
+        } else {
+            btn.className = 'px-2 py-0.5 rounded text-[10px] font-normal border transition bg-slate-100 text-slate-400 border-slate-200 line-through opacity-60';
+        }
+    });
+}
+
 async function fetchCachedCsv(url) {
     if (imuMemoryCache.has(url)) {
         return imuMemoryCache.get(url);
@@ -210,6 +250,66 @@ function initReplay3D() {
     animateReplay3D();
 }
 
+
+
+/*
+ * Breadcrumb: 2026-10-06 20:45 - 3D Orientation Axes Helpers (Roll=X, Pitch=Y, Yaw=Z)
+ * [CRITICAL 3D VISUALIZATION PARITY]:
+ * 1. Zeichnet feste Richtungsvektoren mit ArrowHelpern direkt am Modellkörper.
+ * 2. Farbkodierung: X (Rot) = Roll, Y (Grün) = Pitch, Z (Blau) = Yaw.
+ * 3. Text-Sprites rotieren phasenstarr mit dem IMU-Gehäuse mit.
+ */
+function attachImuAxes(targetGroup) {
+    const old = targetGroup.getObjectByName('imuAxesGroup');
+    if (old) targetGroup.remove(old);
+
+    const axesGroup = new THREE.Group();
+    axesGroup.name = 'imuAxesGroup';
+
+    const len = 1.25;
+    const headLen = 0.22;
+    const headWidth = 0.12;
+
+    // X-Achse: Roll (Rot #dc2626)
+    const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
+    // Y-Achse: Pitch (Grün #009B4C)
+    const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
+    // Z-Achse: Yaw (Blau #2563eb)
+    const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), len, 0x2563eb, headLen, headWidth);
+
+    axesGroup.add(arrowX);
+    axesGroup.add(arrowY);
+    axesGroup.add(arrowZ);
+
+    function createAxisLabel(text, colorHex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = colorHex;
+        ctx.font = 'bold 26px monospace';
+        ctx.fillText(text, 10, 42);
+        const texture = new THREE.CanvasTexture(canvas);
+        const mat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
+        const sprite = new THREE.Sprite(mat);
+        sprite.scale.set(0.85, 0.22, 1.0);
+        return sprite;
+    }
+
+    const lblX = createAxisLabel('Roll (X)', '#dc2626');
+    lblX.position.set(len + 0.25, 0, 0);
+    axesGroup.add(lblX);
+
+    const lblY = createAxisLabel('Pitch (Y)', '#009B4C');
+    lblY.position.set(0, len + 0.25, 0);
+    axesGroup.add(lblY);
+
+    const lblZ = createAxisLabel('Yaw (Z)', '#2563eb');
+    lblZ.position.set(0, 0, len + 0.25);
+    axesGroup.add(lblZ);
+
+    targetGroup.add(axesGroup);
+}
 function createReplayFallbackCube() {
     if (repMesh && repScene) repScene.remove(repMesh);
     const group = new THREE.Group();
@@ -230,8 +330,12 @@ function createReplayFallbackCube() {
     frontMesh.position.set(0, 0.1, 0.48);
     group.add(frontMesh);
 
+
+    // Am Ende von createReplayFallbackCube():
     repMesh = group;
+    attachImuAxes(repMesh);
     repScene.add(repMesh);
+
 }
 
 function setupReplayModelMesh(gltfScene) {
@@ -256,7 +360,9 @@ function setupReplayModelMesh(gltfScene) {
     }
     group.add(gltfScene);
 
+    // Ersetze das doppelte Hinzufügen am Ende der Funktion:
     repMesh = group;
+    attachImuAxes(repMesh);
     repScene.add(repMesh);
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
 }
@@ -828,7 +934,7 @@ function attachCanvasInteraction() {
     if (canvases.length === 0 || canvasListenersAttached) return;
     canvasListenersAttached = true;
 
-    const leftMargin = 38;
+    const leftMargin = 44;
 
     function getEventX(e, cv) {
         const rect = cv.getBoundingClientRect();
@@ -969,6 +1075,11 @@ function getNiceScale(maxVal, minScale, steps) {
     return Math.ceil(target);
 }
 
+/*
+ * Breadcrumb: 2026-10-06 20:45 - Selective Y-Scaling & Rendering for Active Curves
+ * [PER-CHANNEL ISOLATION]: Schaltet eine Kurve ab, skaliert sich die Y-Achse 
+ * automatisch optimal auf die verbleibenden sichtbaren Signale.
+ */
 function drawReplayGraph(curTimeSec) {
     const cvAcc = document.getElementById('replayGraphCanvasAcc');
     const cvEuler = document.getElementById('replayGraphCanvasEuler');
@@ -984,28 +1095,37 @@ function drawReplayGraph(curTimeSec) {
     const startIndex = Math.max(0, Math.floor(tStart / 0.1) - 1);
     const endIndex = Math.min(count - 1, Math.ceil(tEnd / 0.1) + 1);
 
-    // 1. Skalenermittlung für den sichtbaren Zeitausschnitt
+    // 1. Skalenermittlung NUR für aktuell aktivierte Kurven
     let maxAcc = 0.1, maxAngle = 0.1, maxDisp = 0.05;
     for (let i = startIndex; i <= endIndex; i++) {
         const d = replayFilteredData[i];
-        maxAcc = Math.max(maxAcc, Math.abs(d.ax), Math.abs(d.ay), Math.abs(d.az));
-        maxAngle = Math.max(maxAngle, Math.abs(d.roll), Math.abs(d.pitch), Math.abs(d.yaw));
-        maxDisp = Math.max(maxDisp, Math.abs(d.dx || 0), Math.abs(d.dy || 0), Math.abs(d.dz || 0));
+        if (replayVisibleCurves.ax) maxAcc = Math.max(maxAcc, Math.abs(d.ax));
+        if (replayVisibleCurves.ay) maxAcc = Math.max(maxAcc, Math.abs(d.ay));
+        if (replayVisibleCurves.az) maxAcc = Math.max(maxAcc, Math.abs(d.az));
+
+        if (replayVisibleCurves.roll) maxAngle = Math.max(maxAngle, Math.abs(d.roll));
+        if (replayVisibleCurves.pitch) maxAngle = Math.max(maxAngle, Math.abs(d.pitch));
+        if (replayVisibleCurves.yaw) maxAngle = Math.max(maxAngle, Math.abs(d.yaw));
+
+        if (replayVisibleCurves.dx) maxDisp = Math.max(maxDisp, Math.abs(d.dx || 0));
+        if (replayVisibleCurves.dy) maxDisp = Math.max(maxDisp, Math.abs(d.dy || 0));
+        if (replayVisibleCurves.dz) maxDisp = Math.max(maxDisp, Math.abs(d.dz || 0));
     }
-    if (replayAccThreshold > 0 && replayAccThreshold > maxAcc) {
+
+    if (replayAccThreshold > 0 && replayAccThreshold > maxAcc && (replayVisibleCurves.ax || replayVisibleCurves.ay || replayVisibleCurves.az)) {
         maxAcc = replayAccThreshold;
     }
 
-    const scaleAcc = getNiceScale(maxAcc, 1.0, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0]);
+    const scaleAcc = getNiceScale(maxAcc, 0.5, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0]);
     const scaleEuler = getNiceScale(maxAngle, 2.0, [2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180]);
-    const scaleDisp = getNiceScale(maxDisp, 0.5, [0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0]);
+    const scaleDisp = getNiceScale(maxDisp, 0.5, [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0]);
 
-    const leftMargin = 44; // Genug Raum für 4-stellige Werte inkl. Vorzeichen
+    const leftMargin = 44;
     const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
     const curExactIdx = Math.min(Math.floor(curTime / 0.1), count - 1);
     const curPt = replayFilteredData[Math.max(0, curExactIdx)] || replayFilteredData[0];
 
-    function renderTier(cv, maxScale, unitLabel, curves, badgeTitle, isBottomTier, isAccTier) {
+    function renderTier(cv, maxScale, unitLabel, allCurves, badgeTitle, isBottomTier, isAccTier) {
         const w = cv.width = cv.clientWidth;
         const h = cv.height = cv.clientHeight;
         if (w === 0 || h === 0) return;
@@ -1013,15 +1133,18 @@ function drawReplayGraph(curTimeSec) {
         const ctx = cv.getContext('2d');
         ctx.clearRect(0, 0, w, h);
 
-        const topMargin = 18; // Verhindert Überlappung der Einheit mit der +1.0 Linie
+        const topMargin = 18;
         const bottomMargin = isBottomTier ? 16 : 8;
         const plotW = w - leftMargin;
         const plotH = h - topMargin - bottomMargin;
         const midY = topMargin + plotH / 2;
         const halfH = plotH / 2;
 
-        // Schwellenwert-Hintergrund bei Peaks (nur Beschleunigung)
-        if (isAccTier && replayAccThreshold > 0) {
+        // Nur aktivierte Kurven rendern
+        const activeCurves = allCurves.filter(c => replayVisibleCurves[c.key]);
+
+        // Schwellenwert-Hintergrund bei Peaks
+        if (isAccTier && replayAccThreshold > 0 && activeCurves.length > 0) {
             ctx.save();
             ctx.beginPath();
             ctx.rect(leftMargin, topMargin, plotW, plotH);
@@ -1038,7 +1161,7 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         }
 
-        // Horizontale Rasterlinien & Achsenwerte
+        // Horizontale Rasterlinien
         const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
         ctx.font = '9px monospace';
         gridPoints.forEach(ratio => {
@@ -1052,21 +1175,19 @@ function drawReplayGraph(curTimeSec) {
             ctx.fillStyle = '#64748b';
             const val = ratio * maxScale;
             const str = (ratio > 0 ? '+' : '') + (Number.isInteger(maxScale) ? val.toFixed(0) : val.toFixed(1));
-
-            // Rechtsbündig mit klarem Abstand zur Diagrammkante
             ctx.textAlign = 'right';
             ctx.fillText(str, leftMargin - 6, y + 3);
             ctx.textAlign = 'left';
         });
         ctx.setLineDash([]);
 
-        // Einheit sauber oberhalb der Skalenlinie platziert
+        // Einheit
         ctx.fillStyle = '#475569';
         ctx.font = 'bold 9px monospace';
         ctx.fillText(unitLabel, 4, 12);
 
-        // Schwellenwert-Grenzlinien
-        if (isAccTier && replayAccThreshold > 0 && replayAccThreshold <= maxScale) {
+        // Schwellenwert-Linien
+        if (isAccTier && replayAccThreshold > 0 && replayAccThreshold <= maxScale && activeCurves.length > 0) {
             ctx.save();
             ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
             ctx.lineWidth = 1.2;
@@ -1082,7 +1203,7 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         }
 
-        // Vertikale Zeitrasterlinien (Beschriftung nur im untersten Graphen)
+        // Zeitraster (Beschriftung unten)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
@@ -1092,7 +1213,6 @@ function drawReplayGraph(curTimeSec) {
 
         ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
         ctx.fillStyle = '#94a3b8';
-
         let lastLabelX = -999;
         for (let t = firstTick; t <= tEnd; t += timeStep) {
             const px = timeToX(t, w, leftMargin);
@@ -1112,8 +1232,8 @@ function drawReplayGraph(curTimeSec) {
             }
         }
 
-        // Signalverläufe zeichnen (mit Clipping auf Plotbereich)
-        curves.forEach(({ key, color }) => {
+        // Kurven zeichnen
+        activeCurves.forEach(({ key, color }) => {
             ctx.save();
             ctx.beginPath();
             ctx.rect(leftMargin, topMargin, plotW, plotH);
@@ -1133,7 +1253,7 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         });
 
-        // Interaktiver Zoom-Auswahlrahmen
+        // Zoom-Selektion
         if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
             const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
             const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
@@ -1154,7 +1274,7 @@ function drawReplayGraph(curTimeSec) {
             }
         }
 
-        // Synchroner Zeit-Cursor (orange)
+        // Zeiger-Cursor
         const curX = timeToX(curTime, w, leftMargin);
         if (curX >= leftMargin && curX <= w) {
             ctx.strokeStyle = '#d97706';
@@ -1165,45 +1285,44 @@ function drawReplayGraph(curTimeSec) {
             ctx.beginPath(); ctx.arc(curX, topMargin + 4, 3.5, 0, Math.PI * 2); ctx.fill();
         }
 
-        // Kopf-Badge mit eindeutiger Einheit und Werten
-        ctx.font = 'bold 9px monospace';
-        let valInfo = curves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
-        let fullBadge = `${badgeTitle} [${unitLabel}] | ${valInfo}`;
-        let badgeW = ctx.measureText(fullBadge).width;
+        // Live-Badge oben rechts
+        if (activeCurves.length > 0) {
+            ctx.font = 'bold 9px monospace';
+            let valInfo = activeCurves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
+            let fullBadge = `${badgeTitle} [${unitLabel}] | ${valInfo}`;
+            let badgeW = ctx.measureText(fullBadge).width;
 
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-        ctx.fillRect(w - badgeW - 14, 3, badgeW + 10, 15);
-        ctx.strokeStyle = '#cbd5e1';
-        ctx.strokeRect(w - badgeW - 14, 3, badgeW + 10, 15);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            ctx.fillRect(w - badgeW - 14, 3, badgeW + 10, 15);
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.strokeRect(w - badgeW - 14, 3, badgeW + 10, 15);
 
-        let drawX = w - badgeW - 9;
-        ctx.fillStyle = '#0f172a';
-        ctx.fillText(`${badgeTitle} [${unitLabel}] | `, drawX, 14);
-        drawX += ctx.measureText(`${badgeTitle} [${unitLabel}] | `).width;
+            let drawX = w - badgeW - 9;
+            ctx.fillStyle = '#0f172a';
+            ctx.fillText(`${badgeTitle} [${unitLabel}] | `, drawX, 14);
+            drawX += ctx.measureText(`${badgeTitle} [${unitLabel}] | `).width;
 
-        curves.forEach(c => {
-            ctx.fillStyle = c.color;
-            const textSeg = `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}  `;
-            ctx.fillText(textSeg, drawX, 14);
-            drawX += ctx.measureText(textSeg).width;
-        });
+            activeCurves.forEach(c => {
+                ctx.fillStyle = c.color;
+                const textSeg = `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}  `;
+                ctx.fillText(textSeg, drawX, 14);
+                drawX += ctx.measureText(textSeg).width;
+            });
+        }
     }
 
-    // 1. Kanal: Beschleunigung
     renderTier(cvAcc, scaleAcc, 'm/s²', [
         { key: 'ax', color: '#dc2626', label: 'ACC X', dec: 2 },
         { key: 'ay', color: '#009B4C', label: 'ACC Y', dec: 2 },
         { key: 'az', color: '#2563eb', label: 'ACC Z', dec: 2 }
     ], 'BESCHLEUNIGUNG', false, true);
 
-    // 2. Kanal: Neigungswinkel
     renderTier(cvEuler, scaleEuler, '°', [
         { key: 'roll', color: '#dc2626', label: 'Roll', dec: 1 },
         { key: 'pitch', color: '#009B4C', label: 'Pitch', dec: 1 },
         { key: 'yaw', color: '#7c3aed', label: 'Yaw', dec: 1 }
     ], 'WINKEL', false, false);
 
-    // 3. Kanal: Dynamischer Schwingweg
     renderTier(cvDisp, scaleDisp, 'mm', [
         { key: 'dx', color: '#dc2626', label: 'X', dec: 2 },
         { key: 'dy', color: '#009B4C', label: 'Y', dec: 2 },
