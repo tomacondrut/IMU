@@ -35,8 +35,7 @@ let repControls = null;
 let repAnimId3D = null;
 let repContainerObserver = null;
 
-// Globales Tare-Quaternion (Standard: null = Rohdaten)
-let replayTareQuat = null;
+
 
 const imuMemoryCache = new Map();
 
@@ -406,45 +405,7 @@ function closeImuReplayDeck() {
 // 2. MATHEMATIK, TARE & REPLAY INSPEKTOR
 // ============================================================================
 
-function quatToEulerDeg(qw, qx, qy, qz) {
-    let w = qw, x = qx, y = qy, z = qz;
 
-    // Relative Drehung berechnen falls Nulllage aktiv: q_rel = q_tare^-1 * q_raw
-    if (replayTareQuat) {
-        const tw = replayTareQuat.w, tx = replayTareQuat.x, ty = replayTareQuat.y, tz = replayTareQuat.z;
-        w = tw * qw + tx * qx + ty * qy + tz * qz;
-        x = tw * qx - tx * qw - ty * qz + tz * qy;
-        y = tw * qy + tx * qz - ty * qw - tz * qx;
-        z = tw * qz - tx * qy + ty * qx - tz * qw;
-    }
-
-    const norm = Math.hypot(w, x, y, z) || 1.0;
-    const nw = w / norm, nx = x / norm, ny = y / norm, nz = z / norm;
-
-    const sinr_cosp = 2 * (nw * nx + ny * nz);
-    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
-    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
-
-    const sinp = 2 * (nw * ny - nz * nx);
-    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
-
-    const siny_cosp = 2 * (nw * nz + nx * ny);
-    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
-    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
-
-    return { roll, pitch, yaw };
-}
-
-// Berechnet alle Kurvenpunkte im RAM blitzschnell neu
-function recalculateAllEuler() {
-    for (let i = 0; i < replayDataRaw.length; i++) {
-        const item = replayDataRaw[i];
-        const e = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
-        item.roll = e.roll;
-        item.pitch = e.pitch;
-        item.yaw = e.yaw;
-    }
-}
 /*
  * Breadcrumb: 2026-10-06 19:50 - Realtime Double-Integration for Displacement in mm
  * [CRITICAL BUGFIX FLAG - LEAKY INTEGRATION PREVENTS DRIFT]:
@@ -550,70 +511,286 @@ function calculateAllDisplacements() {
 }
 
 
-function setReplayTareCurrentFrame() {
-    if (!replayFilteredData || replayFilteredData.length === 0) return;
+/*
+ * Breadcrumb: 2026-10-06 21:05 - Physical Mounting Position (Roll/Pitch/Yaw) & Direct mm-Displacement 3D Translation
+ * [CRITICAL FEATURE & BUGFIX PARITY]:
+ * 1. Ersetzt starres Nullen durch konfigurierbare Einbaulage (Standard: Pitch -90° für STAG Kippstation).
+ * 2. 3D-Vorschau im Konfigurations-Modal zur intuitiven Sichtprüfung der Einbaulage.
+ * 3. quatToEulerDeg berechnet Winkel relativ zur definierten Einbaulage.
+ * 4. 3D-Translation im Replay bildet exakt den berechneten Schwingweg (dx, dy, dz in mm) phasenstarr ab.
+ */
 
+// Globaler Status für Einbaulage
+let replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+let replayMountQuat = null;
+
+// Three.js Instanzen für das Einbaulagen-Modal
+let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
+
+function eulerDegToQuat(rDeg, pDeg, yDeg) {
+    const r = (rDeg * Math.PI) / 360;
+    const p = (pDeg * Math.PI) / 360;
+    const y = (yDeg * Math.PI) / 360;
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const cp = Math.cos(p), sp = Math.sin(p);
+    const cy = Math.cos(y), sy = Math.sin(y);
+    return {
+        w: cr * cp * cy + sr * sp * sy,
+        x: sr * cp * cy - cr * sp * sy,
+        y: cr * sp * cy + sr * cp * sy,
+        z: cr * cp * sy - sr * sp * cy
+    };
+}
+
+function updateMountingQuaternion() {
+    replayMountQuat = eulerDegToQuat(
+        replayMountConfig.roll,
+        replayMountConfig.pitch,
+        replayMountConfig.yaw
+    );
+}
+
+function quatToEulerDeg(qw, qx, qy, qz) {
+    let w = qw, x = qx, y = qy, z = qz;
+
+    // Relative Drehung zur konfigurierten Einbaulage: q_rel = q_mount^-1 * q_raw
+    if (replayMountQuat) {
+        const tw = replayMountQuat.w, tx = replayMountQuat.x, ty = replayMountQuat.y, tz = replayMountQuat.z;
+        w = tw * qw + tx * qx + ty * qy + tz * qz;
+        x = tw * qx - tx * qw - ty * qz + tz * qy;
+        y = tw * qy + tx * qz - ty * qw - tz * qx;
+        z = tw * qz - tx * qy + ty * qx - tz * qw;
+    }
+
+    const norm = Math.hypot(w, x, y, z) || 1.0;
+    const nw = w / norm, nx = x / norm, ny = y / norm, nz = z / norm;
+
+    const sinr_cosp = 2 * (nw * nx + ny * nz);
+    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
+
+    const sinp = 2 * (nw * ny - nz * nx);
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
+
+    const siny_cosp = 2 * (nw * nz + nx * ny);
+    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
+    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
+
+    return { roll, pitch, yaw };
+}
+
+function recalculateAllEuler() {
+    for (let i = 0; i < replayDataRaw.length; i++) {
+        const item = replayDataRaw[i];
+        const e = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
+        item.roll = e.roll;
+        item.pitch = e.pitch;
+        item.yaw = e.yaw;
+    }
+}
+
+function updateMountingButtonUI() {
+    const lbl = document.getElementById('btn-replay-mounting-label');
+    if (!lbl) return;
+    const parts = [];
+    if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
+    if (replayMountConfig.roll !== 0) parts.push(`R:${replayMountConfig.roll}°`);
+    if (replayMountConfig.yaw !== 0) parts.push(`Y:${replayMountConfig.yaw}°`);
+    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0° (Eben)';
+}
+
+function checkAndApplySavedMounting() {
+    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
+    const saved = localStorage.getItem(`stag_mount_${devId}`);
+    if (saved) {
+        try {
+            replayMountConfig = JSON.parse(saved);
+        } catch (e) {
+            replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+        }
+    } else {
+        replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+    }
+    updateMountingQuaternion();
+    updateMountingButtonUI();
+    recalculateAllEuler();
+}
+
+// ----------------------------------------------------------------------------
+// MODAL-STEUERUNG & 3D-VORSCHAU FÜR EINBAULAGE
+// ----------------------------------------------------------------------------
+
+function openMountingConfigModal() {
+    const modal = document.getElementById('mounting-config-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+
+    ['roll', 'pitch', 'yaw'].forEach(axis => {
+        const val = replayMountConfig[axis] || 0;
+        const numEl = document.getElementById(`mount-${axis}-num`);
+        const rngEl = document.getElementById(`mount-${axis}-range`);
+        if (numEl) numEl.value = val;
+        if (rngEl) rngEl.value = val;
+    });
+
+    initMounting3D();
+    updateMountingPreview3D();
+}
+window.openMountingConfigModal = openMountingConfigModal;
+
+function closeMountingConfigModal() {
+    const modal = document.getElementById('mounting-config-modal');
+    if (modal) modal.classList.add('hidden');
+}
+window.closeMountingConfigModal = closeMountingConfigModal;
+
+function syncMountingInput(axis, val) {
+    const num = Math.max(-180, Math.min(180, parseFloat(val) || 0));
+    const numEl = document.getElementById(`mount-${axis}-num`);
+    const rngEl = document.getElementById(`mount-${axis}-range`);
+    if (numEl && numEl.value != num) numEl.value = num;
+    if (rngEl && rngEl.value != num) rngEl.value = num;
+
+    updateMountingPreview3D();
+}
+window.syncMountingInput = syncMountingInput;
+
+function setMountingPreset(r, p, y) {
+    syncMountingInput('roll', r);
+    syncMountingInput('pitch', p);
+    syncMountingInput('yaw', y);
+}
+window.setMountingPreset = setMountingPreset;
+
+function adoptCurrentFrameMounting() {
+    if (!replayFilteredData || replayFilteredData.length === 0) return;
     const sampleInterval = 0.1;
     const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
     const pt = replayFilteredData[exactIndex];
 
+    // Rohe Euler-Winkel ohne Offset ermitteln
     const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz) || 1.0;
-    replayTareQuat = {
-        w: pt.qw / norm,
-        x: pt.qx / norm,
-        y: pt.qy / norm,
-        z: pt.qz / norm
-    };
+    const nw = pt.qw / norm, nx = pt.qx / norm, ny = pt.qy / norm, nz = pt.qz / norm;
+
+    const sinr_cosp = 2 * (nw * nx + ny * nz);
+    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
+    const rawRoll = Math.round(Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI));
+
+    const sinp = 2 * (nw * ny - nz * nx);
+    const rawPitch = Math.round(Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI));
+
+    const siny_cosp = 2 * (nw * nz + nx * ny);
+    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
+    const rawYaw = Math.round(Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI));
+
+    setMountingPreset(rawRoll, rawPitch, rawYaw);
+}
+window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
+
+/*
+ * Breadcrumb: 2026-10-06 21:25 - Fix Falsy Pitch Zero Fallback in saveMountingConfig
+ * [CRITICAL BUGFIX FLAG - PREVENT ZERO-DEGREE OVERWRITE]:
+ * Explizite isNaN-Prüfung verhindert, dass Pitch 0° durch den Fallback || -90 überschrieben wird.
+ */
+function saveMountingConfig() {
+    const rEl = document.getElementById('mount-roll-num');
+    const pEl = document.getElementById('mount-pitch-num');
+    const yEl = document.getElementById('mount-yaw-num');
+
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
+    const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : -90;
+    const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
+
+    replayMountConfig = { roll: r, pitch: p, yaw: y };
 
     const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    localStorage.setItem(`stag_tare_${devId}`, JSON.stringify(replayTareQuat));
+    localStorage.setItem(`stag_mount_${devId}`, JSON.stringify(replayMountConfig));
 
+    updateMountingQuaternion();
+    updateMountingButtonUI();
     recalculateAllEuler();
-    updateTareUI(true);
     drawReplayGraph(replayCurrentTimeSec);
     renderInterpolatedFrame(replayCurrentTimeSec);
+
+    closeMountingConfigModal();
 }
+window.saveMountingConfig = saveMountingConfig;
 
-function resetReplayTare() {
-    replayTareQuat = null;
-    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    localStorage.removeItem(`stag_tare_${devId}`);
+function initMounting3D() {
+    const container = document.getElementById('mounting-canvas-container');
+    if (!container || mountRenderer) return;
 
-    recalculateAllEuler();
-    updateTareUI(false);
-    drawReplayGraph(replayCurrentTimeSec);
-    renderInterpolatedFrame(replayCurrentTimeSec);
-}
+    const w = container.clientWidth || 280;
+    const h = container.clientHeight || 224;
 
-function updateTareUI(isTared) {
-    const btnSet = document.getElementById('btn-replay-tare');
-    const btnReset = document.getElementById('btn-replay-tare-reset');
-    if (btnSet) {
-        btnSet.className = isTared
-            ? 'px-2.5 py-1 text-[11px] font-bold rounded bg-emerald-600 text-white transition'
-            : 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition flex items-center gap-1';
-        btnSet.innerText = isTared ? '✓ Genullt' : '🎯 Nulllage hier setzen';
+    mountScene = new THREE.Scene();
+    mountScene.background = new THREE.Color(0xdbe2ea);
+    mountCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
+    mountCamera.position.set(2.4, 2.0, 2.8);
+    mountCamera.lookAt(0, 0, 0);
+
+    mountRenderer = new THREE.WebGLRenderer({ antialias: true });
+    mountRenderer.setSize(w, h);
+    mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(mountRenderer.domElement);
+
+    if (typeof THREE.OrbitControls !== 'undefined') {
+        mountControls = new THREE.OrbitControls(mountCamera, mountRenderer.domElement);
+        mountControls.enableDamping = true;
+        mountControls.dampingFactor = 0.08;
     }
-    if (btnReset) {
-        btnReset.classList.toggle('hidden', !isTared);
-    }
-}
 
-function checkAndApplySavedTare() {
-    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    const saved = localStorage.getItem(`stag_tare_${devId}`);
-    if (saved) {
-        try {
-            replayTareQuat = JSON.parse(saved);
-            recalculateAllEuler();
-            updateTareUI(true);
-            return;
-        } catch (e) {
-            replayTareQuat = null;
+    const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
+    l1.position.set(5, 10, 7);
+    mountScene.add(l1);
+    mountScene.add(new THREE.AmbientLight(0xffffff, 0.85));
+
+    const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
+    grid.position.y = -0.5;
+    mountScene.add(grid);
+
+    // Modellgruppe mit Achsen
+    mountMesh = new THREE.Group();
+    const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.2, roughness: 0.5 });
+    mountMesh.add(new THREE.Mesh(bodyGeo, bodyMat));
+
+    const topGeo = new THREE.BoxGeometry(1.68, 0.04, 0.82);
+    const topMat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.3 });
+    const topMesh = new THREE.Mesh(topGeo, topMat);
+    topMesh.position.y = 0.21;
+    mountMesh.add(topMesh);
+
+    attachImuAxes(mountMesh);
+    mountScene.add(mountMesh);
+
+    function anim() {
+        requestAnimationFrame(anim);
+        const c = document.getElementById('mounting-canvas-container');
+        if (!c || c.clientWidth === 0) return;
+        if (mountControls) mountControls.update();
+        if (mountRenderer && mountScene && mountCamera) {
+            mountRenderer.render(mountScene, mountCamera);
         }
     }
-    replayTareQuat = null;
-    updateTareUI(false);
+    anim();
+}
+
+function updateMountingPreview3D() {
+    if (!mountMesh) return;
+    const r = parseFloat(document.getElementById('mount-roll-num')?.value) || 0;
+    const p = parseFloat(document.getElementById('mount-pitch-num')?.value) || 0;
+    const y = parseFloat(document.getElementById('mount-yaw-num')?.value) || 0;
+
+    mountMesh.rotation.set(
+        (r * Math.PI) / 180,
+        (p * Math.PI) / 180,
+        (y * Math.PI) / 180,
+        'ZYX'
+    );
+    if (mountRenderer && mountScene && mountCamera) {
+        mountRenderer.render(mountScene, mountCamera);
+    }
 }
 
 function setReplayGraphMode(mode) {
@@ -726,7 +903,13 @@ async function inspectImuFile(downloadUrl, fileName) {
             select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${timeLabel}${count} Samples)</option>`;
         });
 
-        checkAndApplySavedTare();
+        /*
+         * Breadcrumb: 2026-10-06 21:15 - Mount Configuration Hook in inspectImuFile
+         * [CRITICAL BUGFIX FLAG - ELIMINATE TARE REFERENCE ERROR]:
+         * Ersetzt den Aufruf der gelöschten Tare-Funktion durch checkAndApplySavedMounting().
+         */
+        // Ersetze checkAndApplySavedTare(); durch:
+        checkAndApplySavedMounting();
         onReplayCycleSelect('ALL');
     } catch (err) {
         document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
@@ -767,7 +950,6 @@ function onReplayCycleSelect(cycleVal) {
 // ============================================================================
 // 3. FRAME-INTERPOLATION & 3D RENDERING
 // ============================================================================
-
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -781,56 +963,47 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    /*
- * 3D-MODELL: Echte, absolute Ausrichtung im Raum (KEIN Tare)
- * Zeigt das Gehäuse exakt in der realen 90°-Montage am Rahmen.
- */
-    if (repMesh && repScene && repCamera) {
-        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
-        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
-
-        // Absolute Sensordaten ohne Nulllagen-Offset:
-        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
-        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
-
-        if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
-        qA.slerp(qB, alpha);
-
-        // Sensor-Offset in die Y-Up-Welt (Gehäuse steht bei 90° senkrecht im Raum)
-        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)); // 90° Z
-        qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
-        repMesh.quaternion.copy(qA);
-
-        // Translationsauslenkung bei Vibration
-        const ax = ptA.ax + (ptB.ax - ptA.ax) * alpha;
-        const ay = ptA.ay + (ptB.ay - ptA.ay) * alpha;
-        const az = ptA.az + (ptB.az - ptA.az) * alpha;
-        const aLen = Math.hypot(ax, ay, az);
-        const axF = (aLen > 0.20) ? ax : 0;
-        const ayF = (aLen > 0.20) ? ay : 0;
-        const azF = (aLen > 0.20) ? az : 0;
-
-        const aVec = new THREE.Vector3(ayF, -axF, azF);
-        aVec.applyQuaternion(repMesh.quaternion);
-
-        const tx = Math.max(-0.45, Math.min(0.45, aVec.x * 0.05));
-        const ty = Math.max(-0.45, Math.min(0.45, aVec.y * 0.05));
-        const tz = Math.max(-0.45, Math.min(0.45, aVec.z * 0.05));
-        repMesh.position.set(tx, ty, tz);
-
-        repRenderer.render(repScene, repCamera);
-    }
-
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
+
     const axD = ptA.ax + (ptB.ax - ptA.ax) * alpha;
     const ayD = ptA.ay + (ptB.ay - ptA.ay) * alpha;
     const azD = ptA.az + (ptB.az - ptA.az) * alpha;
 
+    // Phasenstarre Interpolation des berechneten Schwingwegs (mm)
     const dxD = ((ptA.dx || 0) + ((ptB.dx || 0) - (ptA.dx || 0)) * alpha);
     const dyD = ((ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha);
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
+
+    if (repMesh && repScene && repCamera) {
+        // 1. Drehung: Relativ zur definierten Einbaulage
+        repMesh.rotation.set(
+            (roll * Math.PI) / 180,
+            (pitch * Math.PI) / 180,
+            (yaw * Math.PI) / 180,
+            'ZYX'
+        );
+
+        // 2. Translation: Bildet exakt die errechneten Millimeter-Ausschläge ab
+        // 10 mm Schwingweg = 0.25 Einheiten im 3D-Raum für deutliche optische Sichtbarkeit
+        const mmToSceneScale = 0.025;
+        const localDisp = new THREE.Vector3(
+            dxD * mmToSceneScale,
+            dyD * mmToSceneScale,
+            dzD * mmToSceneScale
+        );
+        // Translation richtet sich mit der Drehung des Gehäuses aus
+        localDisp.applyEuler(repMesh.rotation);
+
+        repMesh.position.set(
+            Math.max(-0.85, Math.min(0.85, localDisp.x)),
+            Math.max(-0.85, Math.min(0.85, localDisp.y)),
+            Math.max(-0.85, Math.min(0.85, localDisp.z))
+        );
+
+        repRenderer.render(repScene, repCamera);
+    }
 
     const hud = document.getElementById('replay-overlay-hud');
     if (hud) {
@@ -1174,7 +1347,10 @@ function drawReplayGraph(curTimeSec) {
 
             ctx.fillStyle = '#64748b';
             const val = ratio * maxScale;
-            const str = (ratio > 0 ? '+' : '') + (Number.isInteger(maxScale) ? val.toFixed(0) : val.toFixed(1));
+            // KORREKTUR: Prüft den konkreten Taktwert val auf Ganzzahligkeit
+            const isInt = Math.abs(val - Math.round(val)) < 1e-4;
+            const str = (ratio > 0 ? '+' : '') + (isInt ? val.toFixed(0) : val.toFixed(1));
+
             ctx.textAlign = 'right';
             ctx.fillText(str, leftMargin - 6, y + 3);
             ctx.textAlign = 'left';
@@ -1522,7 +1698,13 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
         });
 
-        checkAndApplySavedTare();
+        /*
+  * Breadcrumb: 2026-10-06 21:15 - Mount Configuration Hook in inspectImuDayMerged
+  * [CRITICAL BUGFIX FLAG - ELIMINATE TARE REFERENCE ERROR]:
+  * Ersetzt den Aufruf der gelöschten Tare-Funktion durch checkAndApplySavedMounting().
+  */
+        // Ersetze checkAndApplySavedTare(); durch:
+        checkAndApplySavedMounting();
         onReplayCycleSelect('ALL');
     } catch (err) {
         console.error('[CACHE MERGE FEHLER]', err);
@@ -1583,8 +1765,16 @@ function exportReplayVisibleCsv() {
 }
 window.exportReplayVisibleCsv = exportReplayVisibleCsv;
 
+/*
+ * Breadcrumb: 2026-10-06 21:15 - Mounting Position Exports & Auto-Init
+ * [CRITICAL BUGFIX FLAG - CLEAN EXPORTS]:
+ * 1. Entfernt nicht mehr existierende Tare-Exporte (verhindert ReferenceError).
+ * 2. Exportiert alle Einbaulagen-Modal-Funktionen für HTML-Trigger.
+ * 3. Initialisiert checkAndApplySavedMounting() direkt beim Parsen des Skripts.
+ */
 // Window Exporte
 window.inspectImuFile = inspectImuFile;
+window.inspectImuDayMerged = inspectImuDayMerged;
 window.closeImuReplayDeck = closeImuReplayDeck;
 window.onReplayCycleSelect = onReplayCycleSelect;
 window.onReplayScrub = onReplayScrub;
@@ -1595,5 +1785,14 @@ window.setReplaySpeedPreset = setReplaySpeedPreset;
 window.resetReplayZoom = resetReplayZoom;
 window.setReplayGraphMode = setReplayGraphMode;
 window.setReplayCameraView = setReplayCameraView;
-window.setReplayTareCurrentFrame = setReplayTareCurrentFrame;
-window.resetReplayTare = resetReplayTare;
+
+// Einbaulagen-Steuerung Exporte
+window.openMountingConfigModal = openMountingConfigModal;
+window.closeMountingConfigModal = closeMountingConfigModal;
+window.syncMountingInput = syncMountingInput;
+window.setMountingPreset = setMountingPreset;
+window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
+window.saveMountingConfig = saveMountingConfig;
+
+// Direkte Initialisierung der Standard-Einbaulage (Pitch -90°) beim Booten
+checkAndApplySavedMounting();
