@@ -339,6 +339,81 @@ function recalculateAllEuler() {
         item.yaw = e.yaw;
     }
 }
+/*
+ * Breadcrumb: 2026-10-06 19:50 - Realtime Double-Integration for Displacement in mm
+ * [CRITICAL BUGFIX FLAG - LEAKY INTEGRATION PREVENTS DRIFT]:
+ * 1. DC-Offset-Bereinigung pro Messzyklus eliminiert statische Gravitationsvektoren.
+ * 2. Trapezförmige doppelte Integration (a -> v -> s) mit Hochpass-Dämpfung (alpha 0.94).
+ * 3. Skaliert Meter zu Millimeter (* 1000) für direkten mechanischen Vibrationsabgleich.
+ */
+function calculateAllDisplacements() {
+    if (!replayDataRaw || replayDataRaw.length === 0) return;
+
+    const dt = 0.1;
+    const alpha = 0.94; // Verhindert quadratischen Drift bei 10 Hz Abtastung
+
+    let currentCycle = null;
+    let cycleIndices = [];
+
+    function processCycle(indices) {
+        if (indices.length === 0) return;
+
+        let sumAx = 0, sumAy = 0, sumAz = 0;
+        for (let idx of indices) {
+            sumAx += replayDataRaw[idx].ax;
+            sumAy += replayDataRaw[idx].ay;
+            sumAz += replayDataRaw[idx].az;
+        }
+        const meanAx = sumAx / indices.length;
+        const meanAy = sumAy / indices.length;
+        const meanAz = sumAz / indices.length;
+
+        let vx = 0, vy = 0, vz = 0;
+        let sx = 0, sy = 0, sz = 0;
+        let prevAx = 0, prevAy = 0, prevAz = 0;
+        let prevVx = 0, prevVy = 0, prevVz = 0;
+
+        for (let k = 0; k < indices.length; k++) {
+            const item = replayDataRaw[indices[k]];
+            const axF = item.ax - meanAx;
+            const ayF = item.ay - meanAy;
+            const azF = item.az - meanAz;
+
+            if (k === 0) {
+                vx = 0; vy = 0; vz = 0;
+                sx = 0; sy = 0; sz = 0;
+            } else {
+                vx = alpha * (vx + 0.5 * (axF + prevAx) * dt);
+                vy = alpha * (vy + 0.5 * (ayF + prevAy) * dt);
+                vz = alpha * (vz + 0.5 * (azF + prevAz) * dt);
+
+                sx = alpha * (sx + 0.5 * (vx + prevVx) * dt);
+                sy = alpha * (sy + 0.5 * (vy + prevVy) * dt);
+                sz = alpha * (sz + 0.5 * (vz + prevVz) * dt);
+            }
+
+            prevAx = axF; prevAy = ayF; prevAz = azF;
+            prevVx = vx; prevVy = vy; prevVz = vz;
+
+            item.dx = sx * 1000.0;
+            item.dy = sy * 1000.0;
+            item.dz = sz * 1000.0;
+        }
+    }
+
+    for (let i = 0; i < replayDataRaw.length; i++) {
+        const c = replayDataRaw[i].cycle || 0;
+        if (currentCycle === null || c !== currentCycle) {
+            if (cycleIndices.length > 0) processCycle(cycleIndices);
+            currentCycle = c;
+            cycleIndices = [i];
+        } else {
+            cycleIndices.push(i);
+        }
+    }
+    if (cycleIndices.length > 0) processCycle(cycleIndices);
+}
+
 
 function setReplayTareCurrentFrame() {
     if (!replayFilteredData || replayFilteredData.length === 0) return;
@@ -438,6 +513,12 @@ function formatReplayTimestamp(tsStr, withSec = true) {
     return m ? m[1] : String(tsStr);
 }
 
+/*
+ * Breadcrumb: 2026-10-06 20:00 - Performance Fix: Bulk Calculation Outside CSV Parse Loop
+ * [CRITICAL BUGFIX FLAG - ELIMINATE O(N^2) PARSE FREEZE]:
+ * 1. recalculateAllEuler() and calculateAllDisplacements() moved strictly after loop completion.
+ * 2. Prevents catastrophic main-thread locking on multi-thousand line telemetry files.
+ */
 async function inspectImuFile(downloadUrl, fileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -483,6 +564,7 @@ async function inspectImuFile(downloadUrl, fileName) {
                     yaw: euler.yaw,
                     cycle: parts[8] ? parseInt(parts[8], 10) : 0
                 };
+
                 replayDataRaw.push(item);
                 if (item.cycle) cyclesMap.add(item.cycle);
             }
@@ -492,6 +574,10 @@ async function inspectImuFile(downloadUrl, fileName) {
             document.getElementById('replay-meta-info').innerText = 'Datei enthält keine gültigen Messzeilen.';
             return;
         }
+
+        // [WICHTIG]: Erst nach vollständigem Einlesen genau EINMAL im RAM durchrechnen!
+        recalculateAllEuler();
+        calculateAllDisplacements();
 
         const select = document.getElementById('replay-cycle-select');
         select.innerHTML = '<option value="ALL">Alle Zyklen der Datei (' + replayDataRaw.length + ' Pkt)</option>';
@@ -607,11 +693,16 @@ function renderInterpolatedFrame(tSec) {
     const ayD = ptA.ay + (ptB.ay - ptA.ay) * alpha;
     const azD = ptA.az + (ptB.az - ptA.az) * alpha;
 
+    const dxD = ((ptA.dx || 0) + ((ptB.dx || 0) - (ptA.dx || 0)) * alpha);
+    const dyD = ((ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha);
+    const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
+
     const hud = document.getElementById('replay-overlay-hud');
     if (hud) {
         hud.innerHTML =
             `ANG: R:${roll.toFixed(1)}° P:${pitch.toFixed(1)}° Y:${yaw.toFixed(1)}°<br>` +
-            `ACC: X:${axD.toFixed(2)} Y:${ayD.toFixed(2)} Z:${azD.toFixed(2)} m/s² | Zyklus #${ptA.cycle}`;
+            `ACC: X:${axD.toFixed(2)} Y:${ayD.toFixed(2)} Z:${azD.toFixed(2)} m/s²<br>` +
+            `HUB: X:${dxD.toFixed(2)} Y:${dyD.toFixed(2)} Z:${dzD.toFixed(2)} mm | Zyklus #${ptA.cycle}`;
     }
 
     const curTimeEl = document.getElementById('replay-cursor-time');
@@ -691,14 +782,26 @@ function resetReplayZoom() {
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
+/*
+ * Breadcrumb: 2026-10-06 19:50 - Multi-Canvas Synchronized Pointer & Zoom Engine
+ * [CRITICAL BUGFIX FLAG - CROSS-TIER DRAG-TO-ZOOM]:
+ * 1. Event-Listener auf allen drei Leinwänden (Acc, Euler, Disp) gebunden.
+ * 2. Globaler Pointer-Release auf Window-Ebene gegen hängende Selektionsrahmen.
+ * 3. Klick springt im Zeitstrahl; Wischgeste zoomt simultan auf allen 3 Achsen.
+ */
 function attachCanvasInteraction() {
-    const cv = document.getElementById('replayGraphCanvas');
-    if (!cv || canvasListenersAttached) return;
+    const canvases = [
+        document.getElementById('replayGraphCanvasAcc'),
+        document.getElementById('replayGraphCanvasEuler'),
+        document.getElementById('replayGraphCanvasDisp')
+    ].filter(Boolean);
+
+    if (canvases.length === 0 || canvasListenersAttached) return;
     canvasListenersAttached = true;
 
     const leftMargin = 38;
 
-    function getEventX(e) {
+    function getEventX(e, cv) {
         const rect = cv.getBoundingClientRect();
         const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
         return clientX - rect.left;
@@ -711,24 +814,17 @@ function attachCanvasInteraction() {
         selectCurrentX = clientX;
     }
 
-    function handleMove(clientX) {
+    function handleMove(clientX, w) {
         if (!isSelectingZoom) return;
-        const cvNow = document.getElementById('replayGraphCanvas');
-        if (!cvNow) return;
-        selectCurrentX = Math.max(leftMargin, Math.min(cvNow.clientWidth, clientX));
+        selectCurrentX = Math.max(leftMargin, Math.min(w, clientX));
         drawReplayGraph(replayCurrentTimeSec);
     }
 
-    function handleEnd() {
+    function handleEnd(w) {
         if (!isSelectingZoom) return;
         isSelectingZoom = false;
 
-        const cvNow = document.getElementById('replayGraphCanvas');
-        if (!cvNow) return;
-
         const dx = Math.abs(selectCurrentX - selectStartX);
-        const w = cvNow.clientWidth;
-
         if (dx >= 6) {
             const t1 = xToTime(Math.min(selectStartX, selectCurrentX), w, leftMargin);
             const t2 = xToTime(Math.max(selectStartX, selectCurrentX), w, leftMargin);
@@ -760,369 +856,312 @@ function attachCanvasInteraction() {
         }
     }
 
-    cv.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        handleStart(getEventX(e));
+    canvases.forEach(cv => {
+        cv.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            handleStart(getEventX(e, cv));
+        });
+
+        cv.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                e.preventDefault();
+                handleStart(getEventX(e, cv));
+            }
+        }, { passive: false });
+
+        cv.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (replayFilteredData.length === 0) return;
+            if (replayIsPlaying) toggleReplayPlay();
+
+            const { tStart, tEnd } = getTimeBounds();
+            const direction = e.deltaY > 0 ? 1 : -1;
+            const stepSec = 0.1;
+
+            let newTime = replayCurrentTimeSec + (direction * stepSec);
+            newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
+
+            replayCurrentTimeSec = newTime;
+            renderInterpolatedFrame(replayCurrentTimeSec);
+        }, { passive: false });
     });
 
     window.addEventListener('mousemove', (e) => {
-        if (isSelectingZoom) handleMove(getEventX(e));
+        if (!isSelectingZoom) return;
+        const refCv = canvases[0];
+        if (!refCv) return;
+        handleMove(getEventX(e, refCv), refCv.clientWidth);
     });
 
     window.addEventListener('mouseup', () => {
-        if (isSelectingZoom) handleEnd();
+        if (!isSelectingZoom) return;
+        const refCv = canvases[0];
+        if (!refCv) return;
+        handleEnd(refCv.clientWidth);
     });
 
-    cv.addEventListener('touchstart', (e) => {
-        if (e.touches.length === 1) {
-            e.preventDefault();
-            handleStart(getEventX(e));
-        }
+    window.addEventListener('touchmove', (e) => {
+        if (!isSelectingZoom || e.touches.length !== 1) return;
+        const refCv = canvases[0];
+        if (!refCv) return;
+        handleMove(getEventX(e, refCv), refCv.clientWidth);
     }, { passive: false });
 
-    cv.addEventListener('touchmove', (e) => {
-        if (isSelectingZoom && e.touches.length === 1) {
-            e.preventDefault();
-            handleMove(getEventX(e));
-        }
-    }, { passive: false });
-
-    cv.addEventListener('touchend', () => {
-        if (isSelectingZoom) handleEnd();
+    window.addEventListener('touchend', () => {
+        if (!isSelectingZoom) return;
+        const refCv = canvases[0];
+        if (!refCv) return;
+        handleEnd(refCv.clientWidth);
     });
+}
 
-    cv.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        if (replayFilteredData.length === 0) return;
-
-        if (replayIsPlaying) toggleReplayPlay();
-
-        const { tStart, tEnd } = getTimeBounds();
-        const direction = e.deltaY > 0 ? 1 : -1;
-        const stepSec = 0.1;
-
-        let newTime = replayCurrentTimeSec + (direction * stepSec);
-        newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
-
-        replayCurrentTimeSec = newTime;
-        renderInterpolatedFrame(replayCurrentTimeSec);
-    }, { passive: false });
+/*
+ * Breadcrumb: 2026-10-06 19:50 - 3-Tier Synchronized Canvas Drawing & Adaptive Y-Scale
+ * [OPTIMIZED Y-SCALING & SYNCED CURSORS]:
+ * 1. Beschleunigung: Gestufte Rundung (0.5 bis 50 m/s²) mit Schwellenwert-Puffer.
+ * 2. Winkel: Dynamisch an sichtbares Delta angepasst (2° bis 180°), kein starres 45°-Minimum mehr.
+ * 3. Ausschlag: Sub-Millimeter- und Millimeter-Schritte (0.2 bis 100 mm) um Nulllinie.
+ * 4. Durchgehender orangefarbener Zeit-Cursor und synchrones Drag-Overlay auf allen 3 Ebenen.
+ */
+function getNiceScale(maxVal, minScale, steps) {
+    const target = Math.max(minScale, maxVal * 1.18);
+    for (let s of steps) {
+        if (s >= target) return s;
+    }
+    return Math.ceil(target);
 }
 
 function drawReplayGraph(curTimeSec) {
-    const cv = document.getElementById('replayGraphCanvas');
-    if (!cv || replayFilteredData.length === 0) return;
+    const cvAcc = document.getElementById('replayGraphCanvasAcc');
+    const cvEuler = document.getElementById('replayGraphCanvasEuler');
+    const cvDisp = document.getElementById('replayGraphCanvasDisp');
+    if (!cvAcc || !cvEuler || !cvDisp || replayFilteredData.length === 0) return;
 
     attachCanvasInteraction();
 
-    const w = cv.width = cv.clientWidth;
-    const h = cv.height = cv.clientHeight;
-    if (w === 0 || h === 0) return;
-
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, w, h);
-
     const count = replayFilteredData.length;
-    const midY = h / 2;
-    const leftMargin = 38;
-    const plotW = w - leftMargin;
-
     if (count < 2) return;
 
     const { tStart, tEnd, tSpan } = getTimeBounds();
-
-    let maxScale = 2.0;
-    const isEuler = (replayGraphMode === 'euler');
-
     const startIndex = Math.max(0, Math.floor(tStart / 0.1) - 1);
     const endIndex = Math.min(count - 1, Math.ceil(tEnd / 0.1) + 1);
 
-    if (!isEuler) {
-        for (let i = startIndex; i <= endIndex; i++) {
-            const d = replayFilteredData[i];
-            if (Math.abs(d.ax) > maxScale) maxScale = Math.abs(d.ax);
-            if (Math.abs(d.ay) > maxScale) maxScale = Math.abs(d.ay);
-            if (Math.abs(d.az) > maxScale) maxScale = Math.abs(d.az);
-        }
-        if (replayAccThreshold > 0 && replayAccThreshold > maxScale) {
-            maxScale = replayAccThreshold * 1.1;
-        }
-        maxScale = Math.ceil(maxScale * 1.15 * 10) / 10;
-    } else {
-        maxScale = 45.0;
-        for (let i = startIndex; i <= endIndex; i++) {
-            const d = replayFilteredData[i];
-            if (Math.abs(d.roll) > maxScale) maxScale = Math.abs(d.roll);
-            if (Math.abs(d.pitch) > maxScale) maxScale = Math.abs(d.pitch);
-            if (Math.abs(d.yaw) > maxScale) maxScale = Math.abs(d.yaw);
-        }
-        maxScale = Math.min(180.0, Math.ceil(maxScale / 15) * 15);
+    // 1. Skalenermittlung für den sichtbaren Zeitausschnitt
+    let maxAcc = 0.1, maxAngle = 0.1, maxDisp = 0.05;
+    for (let i = startIndex; i <= endIndex; i++) {
+        const d = replayFilteredData[i];
+        maxAcc = Math.max(maxAcc, Math.abs(d.ax), Math.abs(d.ay), Math.abs(d.az));
+        maxAngle = Math.max(maxAngle, Math.abs(d.roll), Math.abs(d.pitch), Math.abs(d.yaw));
+        maxDisp = Math.max(maxDisp, Math.abs(d.dx || 0), Math.abs(d.dy || 0), Math.abs(d.dz || 0));
+    }
+    if (replayAccThreshold > 0 && replayAccThreshold > maxAcc) {
+        maxAcc = replayAccThreshold;
     }
 
-    if (replayAccThreshold > 0 && !isEuler) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(leftMargin, 0, plotW, h);
-        ctx.clip();
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+    const scaleAcc = getNiceScale(maxAcc, 1.0, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0]);
+    const scaleEuler = getNiceScale(maxAngle, 2.0, [2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180]);
+    const scaleDisp = getNiceScale(maxDisp, 0.5, [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0]);
 
-        for (let i = startIndex; i <= endIndex; i++) {
-            const d = replayFilteredData[i];
-            const aLen = Math.hypot(d.ax, d.ay, d.az);
+    const leftMargin = 38;
+    const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
+    const curExactIdx = Math.min(Math.floor(curTime / 0.1), count - 1);
+    const curPt = replayFilteredData[Math.max(0, curExactIdx)] || replayFilteredData[0];
 
-            if (aLen >= replayAccThreshold) {
-                const t = i * 0.1;
-                const px = timeToX(t, w, leftMargin);
-                const stepW = Math.max(2, (0.1 / tSpan) * plotW);
-                ctx.fillRect(px - stepW / 2, 0, stepW, h);
-            }
-        }
-        ctx.restore();
-    }
+    // Hilfsfunktion zum Zeichnen eines einzelnen Graphen
+    function renderTier(cv, maxScale, unitStr, curves, badgeTitle, isBottomTier, isAccTier) {
+        const w = cv.width = cv.clientWidth;
+        const h = cv.height = cv.clientHeight;
+        if (w === 0 || h === 0) return;
 
-    const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
-    ctx.font = '9px monospace';
-    gridPoints.forEach(ratio => {
-        const y = midY - ratio * (midY - 8);
-        ctx.strokeStyle = ratio === 0 ? 'rgba(15, 23, 42, 0.25)' : 'rgba(15, 23, 42, 0.07)';
-        ctx.lineWidth = 1;
-        if (ratio === 0) ctx.setLineDash([3, 3]); else ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(leftMargin, y); ctx.lineTo(w, y); ctx.stroke();
-        ctx.fillStyle = '#64748b';
-        ctx.fillText((ratio > 0 ? '+' : '') + (ratio * maxScale).toFixed(isEuler ? 0 : 1), 2, y + 3);
-    });
-    ctx.setLineDash([]);
+        const ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, w, h);
+        const midY = h / 2;
+        const plotW = w - leftMargin;
 
-    if (replayAccThreshold > 0 && !isEuler && replayAccThreshold <= maxScale) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
-        ctx.lineWidth = 1.2;
-        ctx.setLineDash([4, 3]);
-
-        const yPos = midY - (replayAccThreshold / maxScale) * (midY - 8);
-        const yNeg = midY + (replayAccThreshold / maxScale) * (midY - 8);
-
-        ctx.beginPath();
-        ctx.moveTo(leftMargin, yPos); ctx.lineTo(w, yPos);
-        ctx.moveTo(leftMargin, yNeg); ctx.lineTo(w, yNeg);
-        ctx.stroke();
-
-        ctx.fillStyle = '#dc2626';
-        ctx.font = 'bold 9px monospace';
-        ctx.fillText(`Schwelle ±${replayAccThreshold.toFixed(1)}`, leftMargin + 4, yPos - 3);
-        ctx.restore();
-    }
-
-    const isCycleAll = !document.getElementById('replay-cycle-select') || document.getElementById('replay-cycle-select').value === 'ALL';
-    const hasMultipleCycles = replayFilteredData.length > 0 && (replayFilteredData[0].cycle !== replayFilteredData[replayFilteredData.length - 1].cycle);
-    const isFullDayUnzoomed = !isReplayZoomed && isCycleAll && (isDayMergedMode || hasMultipleCycles);
-
-    if (isFullDayUnzoomed) {
-        const recordings = [];
-        for (let i = 0; i < replayFilteredData.length; i++) {
-            const item = replayFilteredData[i];
-            if (i === 0 || item.cycle !== replayFilteredData[i - 1].cycle) {
-                recordings.push({
-                    index: i,
-                    t: i * 0.1,
-                    ts: item.ts,
-                    cycle: item.cycle
-                });
-            }
-        }
-
-        function getUhrzeit(tsStr, withSec) {
-            if (!tsStr) return '';
-            const d = new Date(tsStr);
-            if (!isNaN(d.getTime())) {
-                return d.toLocaleTimeString('de-CH', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    ...(withSec ? { second: '2-digit' } : {})
-                });
-            }
-            const m = String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/);
-            return m ? m[1] : String(tsStr);
-        }
-
-        let withSec = false;
-        for (let k = 1; k < recordings.length; k++) {
-            if (getUhrzeit(recordings[k - 1].ts, false) === getUhrzeit(recordings[k].ts, false)) {
-                withSec = true;
-                break;
-            }
-        }
-
-        let lastLabelX = -999;
-        ctx.font = 'bold 9px monospace';
-
-        recordings.forEach((rec, idx) => {
-            const px = timeToX(rec.t, w, leftMargin);
-            if (px < leftMargin || px > w) return;
-
+        // Peak-Highlighting bei Schwellenwert-Überschreitung (nur Beschleunigung)
+        if (isAccTier && replayAccThreshold > 0) {
             ctx.save();
-            ctx.strokeStyle = (idx === 0) ? 'rgba(15, 23, 42, 0.25)' : 'rgba(0, 155, 76, 0.45)';
-            ctx.lineWidth = (idx === 0) ? 1 : 1.2;
-            if (idx > 0) ctx.setLineDash([3, 2]);
             ctx.beginPath();
-            ctx.moveTo(px, 0);
-            ctx.lineTo(px, h);
-            ctx.stroke();
+            ctx.rect(leftMargin, 0, plotW, h);
+            ctx.clip();
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.18)';
+            for (let i = startIndex; i <= endIndex; i++) {
+                const d = replayFilteredData[i];
+                if (Math.hypot(d.ax, d.ay, d.az) >= replayAccThreshold) {
+                    const px = timeToX(i * 0.1, w, leftMargin);
+                    const stepW = Math.max(2, (0.1 / tSpan) * plotW);
+                    ctx.fillRect(px - stepW / 2, 0, stepW, h);
+                }
+            }
             ctx.restore();
-
-            const timeLabel = getUhrzeit(rec.ts, withSec);
-            const textWidth = ctx.measureText(timeLabel).width;
-
-            if (px - lastLabelX >= textWidth + 8 && (px + textWidth) <= (w - 5)) {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-                ctx.fillRect(px + 1, h - 13, textWidth + 3, 11);
-                ctx.fillStyle = '#009B4C';
-                ctx.fillText(timeLabel, px + 2, h - 4);
-                lastLabelX = px;
-            }
-        });
-
-        if (recordings.length > 0) {
-            const lastSample = replayFilteredData[replayFilteredData.length - 1];
-            const endPx = timeToX((replayFilteredData.length - 1) * 0.1, w, leftMargin);
-            const endTimeLabel = getUhrzeit(lastSample.ts, withSec);
-            const endTextWidth = ctx.measureText(endTimeLabel).width;
-            if (endPx - lastLabelX >= endTextWidth + 12 && endPx <= w) {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-                ctx.fillRect(endPx - endTextWidth - 2, h - 13, endTextWidth + 3, 11);
-                ctx.fillStyle = '#64748b';
-                ctx.fillText(endTimeLabel, endPx - endTextWidth, h - 4);
-            }
         }
-    } else {
+
+        // Horizontale Amplituden-Rasterlinien mit Einheitenbeschriftung
+        const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
+        ctx.font = '9px monospace';
+        gridPoints.forEach(ratio => {
+            const y = midY - ratio * (midY - 8);
+            ctx.strokeStyle = ratio === 0 ? 'rgba(15, 23, 42, 0.25)' : 'rgba(15, 23, 42, 0.07)';
+            ctx.lineWidth = 1;
+            if (ratio === 0) ctx.setLineDash([3, 3]); else ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(leftMargin, y); ctx.lineTo(w, y); ctx.stroke();
+
+            ctx.fillStyle = '#64748b';
+            const val = ratio * maxScale;
+            const str = (ratio > 0 ? '+' : '') + (Number.isInteger(maxScale) ? val.toFixed(0) : val.toFixed(1));
+            ctx.fillText(str, 2, y + 3);
+        });
+        ctx.setLineDash([]);
+
+        // Einheit oben links
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(unitStr, 2, 9);
+
+        // Schwellenwert-Grenzlinien
+        if (isAccTier && replayAccThreshold > 0 && replayAccThreshold <= maxScale) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
+            ctx.lineWidth = 1.2;
+            ctx.setLineDash([4, 3]);
+            const yPos = midY - (replayAccThreshold / maxScale) * (midY - 8);
+            const yNeg = midY + (replayAccThreshold / maxScale) * (midY - 8);
+            ctx.beginPath();
+            ctx.moveTo(leftMargin, yPos); ctx.lineTo(w, yPos);
+            ctx.moveTo(leftMargin, yNeg); ctx.lineTo(w, yNeg);
+            ctx.stroke();
+            ctx.fillStyle = '#dc2626';
+            ctx.fillText(`±${replayAccThreshold.toFixed(1)}`, leftMargin + 4, yPos - 3);
+            ctx.restore();
+        }
+
+        // Vertikales Zeitraster (Labels nur im untersten Graphen zur Vermeidung von Überlagerungen)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
-
-        const niceIntervals = [
-            0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
-            1, 2, 5, 10, 15, 30,
-            60, 120, 300, 600, 900, 1800, 3600
-        ];
+        const niceIntervals = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
         const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
-
         const firstTick = Math.ceil(tStart / timeStep) * timeStep;
+
         ctx.strokeStyle = 'rgba(15, 23, 42, 0.06)';
         ctx.fillStyle = '#94a3b8';
-        ctx.font = '9px monospace';
 
         let lastLabelX = -999;
-
         for (let t = firstTick; t <= tEnd; t += timeStep) {
             const px = timeToX(t, w, leftMargin);
             if (px >= leftMargin && px <= w) {
                 ctx.beginPath();
-                ctx.moveTo(px, 0);
-                ctx.lineTo(px, h);
-                ctx.stroke();
+                ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
 
-                let labelText = '';
-                if (timeStep < 0.1) {
-                    labelText = t.toFixed(2) + 's';
-                } else if (timeStep < 1.0) {
-                    labelText = t.toFixed(1) + 's';
-                } else if (timeStep >= 60) {
-                    const m = Math.floor(t / 60);
-                    const s = Math.round(t % 60);
-                    labelText = s === 0 ? `${m}m` : `${m}m ${s}s`;
-                } else {
-                    labelText = Math.round(t) + 's';
-                }
-
-                const textWidth = ctx.measureText(labelText).width;
-                if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
-                    ctx.fillText(labelText, px + 2, h - 4);
-                    lastLabelX = px;
+                if (isBottomTier) {
+                    let labelText = timeStep < 0.1 ? t.toFixed(2) + 's' : (timeStep < 1.0 ? t.toFixed(1) + 's' : Math.round(t) + 's');
+                    const textWidth = ctx.measureText(labelText).width;
+                    if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (w - 35)) {
+                        ctx.fillText(labelText, px + 2, h - 4);
+                        lastLabelX = px;
+                    }
                 }
             }
         }
-    }
 
-    const drawCurve = (key, colorHex) => {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(leftMargin, 0, plotW, h);
-        ctx.clip();
-        ctx.strokeStyle = colorHex;
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
+        // Kurven zeichnen
+        curves.forEach(({ key, color }) => {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(leftMargin, 0, plotW, h);
+            ctx.clip();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.8;
+            ctx.beginPath();
 
-        let first = true;
-        for (let i = startIndex; i <= endIndex; i++) {
-            const t = i * 0.1;
-            const px = timeToX(t, w, leftMargin);
-            const py = midY - (replayFilteredData[i][key] / maxScale) * (midY - 8);
-            if (first) { ctx.moveTo(px, py); first = false; }
-            else { ctx.lineTo(px, py); }
+            let first = true;
+            for (let i = startIndex; i <= endIndex; i++) {
+                const px = timeToX(i * 0.1, w, leftMargin);
+                const py = midY - ((replayFilteredData[i][key] || 0) / maxScale) * (midY - 8);
+                if (first) { ctx.moveTo(px, py); first = false; }
+                else { ctx.lineTo(px, py); }
+            }
+            ctx.stroke();
+            ctx.restore();
+        });
+
+        // Interaktiver Selektionsbereich während des Ziehens
+        if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
+            const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
+            const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
+            const selW = xMax - xMin;
+
+            ctx.fillStyle = 'rgba(0, 155, 76, 0.16)';
+            ctx.fillRect(xMin, 0, selW, h);
+            ctx.strokeStyle = '#009B4C';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(xMin, 0, selW, h);
+
+            if (isBottomTier) {
+                const tSelA = xToTime(xMin, w, leftMargin);
+                const tSelB = xToTime(xMax, w, leftMargin);
+                ctx.fillStyle = '#009B4C';
+                ctx.font = 'bold 9px monospace';
+                ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, 16);
+            }
         }
-        ctx.stroke();
-        ctx.restore();
-    };
 
-    if (!isEuler) {
-        drawCurve('ax', '#dc2626');
-        drawCurve('ay', '#009B4C');
-        drawCurve('az', '#2563eb');
-    } else {
-        drawCurve('roll', '#dc2626');
-        drawCurve('pitch', '#009B4C');
-        drawCurve('yaw', '#7c3aed');
-    }
+        // Zeiger-Cursor (orange)
+        const curX = timeToX(curTime, w, leftMargin);
+        if (curX >= leftMargin && curX <= w) {
+            ctx.strokeStyle = '#d97706';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(curX, 0); ctx.lineTo(curX, h); ctx.stroke();
+            ctx.fillStyle = '#d97706';
+            ctx.beginPath(); ctx.arc(curX, 5, 3.5, 0, Math.PI * 2); ctx.fill();
+        }
 
-    ctx.font = 'bold 9px monospace';
-    const legendText = isEuler ? '● Roll  ● Pitch  ● Yaw' : '● ACC X  ● ACC Y  ● ACC Z';
-    const legendWidth = ctx.measureText(legendText).width;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    ctx.fillRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.strokeRect(w - legendWidth - 14, 3, legendWidth + 10, 15);
-
-    if (!isEuler) {
-        ctx.fillStyle = '#dc2626'; ctx.fillText('● ACC X', w - legendWidth - 9, 14);
-        ctx.fillStyle = '#009B4C'; ctx.fillText('● ACC Y', w - legendWidth + 37, 14);
-        ctx.fillStyle = '#2563eb'; ctx.fillText('● ACC Z', w - legendWidth + 83, 14);
-    } else {
-        ctx.fillStyle = '#dc2626'; ctx.fillText('● Roll', w - legendWidth - 9, 14);
-        ctx.fillStyle = '#009B4C'; ctx.fillText('● Pitch', w - legendWidth + 31, 14);
-        ctx.fillStyle = '#7c3aed'; ctx.fillText('● Yaw', w - legendWidth + 77, 14);
-    }
-
-    if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
-        const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
-        const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
-        const selW = xMax - xMin;
-
-        ctx.fillStyle = 'rgba(0, 155, 76, 0.16)';
-        ctx.fillRect(xMin, 0, selW, h);
-        ctx.strokeStyle = '#009B4C';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(xMin, 0, selW, h);
-
-        const tSelA = xToTime(xMin, w, leftMargin);
-        const tSelB = xToTime(xMax, w, leftMargin);
-        ctx.fillStyle = '#009B4C';
+        // Legende & Live-Werte des Cursors
         ctx.font = 'bold 9px monospace';
-        ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, 18);
+        let valInfo = curves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
+        let fullBadge = `${badgeTitle} | ${valInfo}`;
+        let badgeW = ctx.measureText(fullBadge).width;
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.fillRect(w - badgeW - 14, 3, badgeW + 10, 15);
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.strokeRect(w - badgeW - 14, 3, badgeW + 10, 15);
+
+        let drawX = w - badgeW - 9;
+        ctx.fillStyle = '#0f172a';
+        ctx.fillText(`${badgeTitle} |`, drawX, 14);
+        drawX += ctx.measureText(`${badgeTitle} | `).width;
+
+        curves.forEach(c => {
+            ctx.fillStyle = c.color;
+            const textSeg = `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}  `;
+            ctx.fillText(textSeg, drawX, 14);
+            drawX += ctx.measureText(textSeg).width;
+        });
     }
 
-    const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
-    const curX = timeToX(curTime, w, leftMargin);
+    // 1. Kanal: Beschleunigung
+    renderTier(cvAcc, scaleAcc, 'm/s²', [
+        { key: 'ax', color: '#dc2626', label: 'ACC X', dec: 2 },
+        { key: 'ay', color: '#009B4C', label: 'ACC Y', dec: 2 },
+        { key: 'az', color: '#2563eb', label: 'ACC Z', dec: 2 }
+    ], 'ACCEL', false, true);
 
-    if (curX >= leftMargin && curX <= w) {
-        ctx.strokeStyle = '#d97706';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(curX, 0); ctx.lineTo(curX, h); ctx.stroke();
-        ctx.fillStyle = '#d97706';
-        ctx.beginPath(); ctx.arc(curX, 6, 4, 0, Math.PI * 2); ctx.fill();
-    }
+    // 2. Kanal: Neigungswinkel
+    renderTier(cvEuler, scaleEuler, 'Grad (°)', [
+        { key: 'roll', color: '#dc2626', label: 'Roll', dec: 1 },
+        { key: 'pitch', color: '#009B4C', label: 'Pitch', dec: 1 },
+        { key: 'yaw', color: '#7c3aed', label: 'Yaw', dec: 1 }
+    ], 'WINKEL', false, false);
+
+    // 3. Kanal: Ausschlag (Weg in mm)
+    renderTier(cvDisp, scaleDisp, 'mm', [
+        { key: 'dx', color: '#dc2626', label: 'X', dec: 2 },
+        { key: 'dy', color: '#009B4C', label: 'Y', dec: 2 },
+        { key: 'dz', color: '#2563eb', label: 'Z', dec: 2 }
+    ], 'AUSSCHLAG', true, false);
 }
 
 // ============================================================================
@@ -1306,6 +1345,9 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             document.getElementById('replay-meta-info').innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
             return;
         }
+
+        // [NEU]: Displacement auch für zusammengeführte Tagesdateien ermitteln
+        calculateAllDisplacements();
 
         const select = document.getElementById('replay-cycle-select');
         select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
