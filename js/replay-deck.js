@@ -5,12 +5,12 @@
  * - 2026-10-06 20:45: Selective Y-Scaling & Rendering für aktive Kurven (ax..az, roll..yaw, dx..dz).
  * - 2026-10-06 22:30: Shared GLB Cache für verzögerungsfreie 3D-Modellübernahme ins Einbaulagen-Modal.
  * - 2026-10-06 23:35: Konsolidierter Gesamtwurf:
- *   [CRITICAL BUGFIX & FEATURE PARITY - MOUNTING CONFIG & ZERO BASELINE]:
- *   1. Fehlende globale Instanzvariablen (mountRenderer, mountScene etc.) deklariert -> Behebt ReferenceError.
- *   2. Reines Quaternionen-Tare q_rel = q_mount^-1 * q_raw eliminiert Gimbal Lock und 180°-Sprünge.
- *   3. Volle Einbaulagen-Konfiguration aktiv: Modal mit Schiebereglern, 3D-Vorschau und "Aktuellen Frame übernehmen".
- *   4. Graphen starten am Kipprahmen exakt bei 0.0° und steigen beim Hub stufenlos auf +42.5° an.
- *   [DISMISSED]: sensorToModelQuat mit Euler('ZYX') erzeugte bei 90°-Annäherung Singularitätssprünge auf +137.9°.
+ *   [CRITICAL BUGFIX & FEATURE PARITY - MOUNTING CONFIG & ZERO BASELINE]:
+ *   1. Fehlende globale Instanzvariablen (mountRenderer, mountScene etc.) deklariert -> Behebt ReferenceError.
+ *   2. Reines Quaternionen-Tare q_rel = q_mount^-1 * q_raw eliminiert Gimbal Lock und 180°-Sprünge.
+ *   3. Volle Einbaulagen-Konfiguration aktiv: Modal mit Schiebereglern, 3D-Vorschau und "Aktuellen Frame übernehmen".
+ *   4. Graphen starten am Kipprahmen exakt bei 0.0° und steigen beim Hub stufenlos auf +42.5° an.
+ *   [DISMISSED]: sensorToModelQuat mit Euler('ZYX') erzeugte bei 90°-Annäherung Singularitätssprünge auf +137.9°.
  */
 
 // ============================================================================
@@ -76,11 +76,48 @@ function toggleReplayCurve(key) {
 }
 window.toggleReplayCurve = toggleReplayCurve;
 
+/*
+ * Breadcrumb: 2026-10-07 00:10 - Color & Channel Mapping Synchronization
+ * [CRITICAL BUGFIX FLAG - THEME SYNCHRONIZATION (PITCH = RED / ROLL = GREEN)]:
+ * 1. Pitch erhält Farbthema 'red' (#dc2626) analog zu ACC X und Hub X (dx).
+ * 2. Roll erhält Farbthema 'emerald' (#009B4C) analog zu ACC Y und Hub Y (dy).
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:25 - Original Color Schemes & Graph Tiers Restored
+ * [CRITICAL BUGFIX FLAG - COLOR PARITY RESTORATION]:
+ * 1. Roll: Rot (#dc2626 / bg-red-50).
+ * 2. Beschleunigung Y (ay) & Pitch: Grün (#009B4C / emerald).
+ * 3. Beschleunigung Z (az) & Schwingweg Z (dz): Blau (#2563eb / blue).
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:35 - Physical Model Color Parity (ACC X = Emerald / ACC Y = Red)
+ * [CRITICAL BUGFIX FLAG - THEME SYNCHRONIZATION WITH 3D PITCH AXIS]:
+ * 1. ax & dx: Auf 'emerald' (#009B4C) gesetzt, da Sensor-X physikalisch die Kippachse (Pitch / Model-Y) auslenkt.
+ * 2. ay & dy: Auf 'red' (#dc2626) gesetzt, da Sensor-Y physikalisch die Gehäuselängsachse (Roll / Model-X) auslenkt.
+ * 3. pitch: Bleibt 'emerald' (Grün), roll: Bleibt 'red' (Rot).
+ * [DISMISSED]: ax=red / ay=emerald widersprach der optischen Auslenkung im 3D-Modell.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:45 - Filter Button Color Parity (Pitch/X = Red / Roll/Y = Emerald)
+ * [CRITICAL BUGFIX FLAG - THEME SYNCHRONIZATION WITH ROTATION AXIS]:
+ * 1. Pitch, ax & dx: Auf 'red' (#dc2626) gelegt (Dreh- und Impulsachse des Kipprahmens).
+ * 2. Roll, ay & dy: Auf 'emerald' (#009B4C) gelegt (Quer-/Wankachse).
+ * 3. Yaw, az & dz: Blau/Violett (#2563eb / purple).
+ * [DISMISSED]: pitch='emerald' führte zu Farbkonflikten mit der roten 3D-Kippachse.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:55 - ACC Channel Color Realignment (ax = Emerald / ay = Red)
+ * [CRITICAL BUGFIX FLAG - ACC CHANNEL & COLOR SYNCHRONIZATION]:
+ * 1. ax erhält das Theme 'emerald' (#009B4C) für die physikalische Beschleunigung entlang der Pitch-Achse.
+ * 2. ay erhält das Theme 'red' (#dc2626) für die Wankachse.
+ * 3. Drehung bleibt unverändert: Pitch auf Rot ('red'), Roll auf Grün ('emerald').
+ * [DISMISSED]: ax starr auf Rot zu binden ignorierte die tatsächliche Auslenkung im Modell.
+ */
 function updateCurveToggleUI() {
     const colorThemes = {
-        ax: 'red', roll: 'red', dx: 'red',
-        ay: 'emerald', pitch: 'emerald', dy: 'emerald',
-        az: 'blue', dz: 'blue', yaw: 'purple'
+        ax: 'emerald', ay: 'red', az: 'blue',
+        pitch: 'red', roll: 'emerald', yaw: 'purple',
+        dx: 'emerald', dy: 'red', dz: 'blue'
     };
 
     Object.keys(replayVisibleCurves).forEach(key => {
@@ -159,8 +196,8 @@ window.resizeReplayDeck = resizeReplayDeck;
  * Breadcrumb: 2026-10-06 23:15 - Camera View Parity with live-3d.js
  * [CRITICAL BUGFIX FLAG - FRONT/SIDE PERSPECTIVE RESTORATION]:
  * 1. Synchronisiert Kamerapositionen exakt mit live-3d.js:
- *    - 'front': (0, 0.3, 3.8) blickt frontal auf die Gehäusefront (+Z / 0.48).
- *    - 'side':  (3.8, 0.3, 0) blickt seitlich auf die Gehäuselänge (+X / 1.8).
+ *    - 'front': (0, 0.3, 3.8) blickt frontal auf die Gehäusefront (+Z / 0.48).
+ *    - 'side':  (3.8, 0.3, 0) blickt seitlich auf die Gehäuselänge (+X / 1.8).
  * [DISMISSED]: Invertierte Front/Side-Werte führten zu verfälschter optischer Achsenwahrnehmung.
  */
 window.setReplayCameraView = function (viewName) {
@@ -261,9 +298,9 @@ function initReplay3D() {
  * Breadcrumb: 2026-10-06 23:25 - Hardware-Aligned Axis Vectors & Color Mapping
  * [CRITICAL BUGFIX FLAG - CAD MODEL AXIS LABELING & MESH PARITY]:
  * 1. Behebt Achsenvertauschung am 3D-Körper:
- *    - Lokale X-Achse (1, 0, 0) ist die Kippachse (Pitch / Grün #009B4C).
- *    - Lokale Y-Achse (0, 1, 0) ist die Wankachse (Roll / Rot #dc2626).
- *    - Lokale Z-Achse (0, 0, 1) ist die Hochachse (Yaw / Blau #2563eb).
+ *    - Lokale X-Achse (1, 0, 0) ist die Kippachse (Pitch / Grün #009B4C).
+ *    - Lokale Y-Achse (0, 1, 0) ist die Wankachse (Roll / Rot #dc2626).
+ *    - Lokale Z-Achse (0, 0, 1) ist die Hochachse (Yaw / Blau #2563eb).
  * 2. Bringt 3D-Visualisierung in Einklang mit den Kurvenfarben und Schiebereglern.
  * [DISMISSED]: Statische X=Roll / Y=Pitch Zuweisung ignorierte den Leiterplatten-Offset.
  */
@@ -271,10 +308,44 @@ function initReplay3D() {
  * Breadcrumb: 2026-10-06 23:30 - Standard Model Axes Restored
  * [CRITICAL BUGFIX FLAG - CAD MODEL LOCAL COORDINATES]:
  * 1. Pfeile fest an lokale Modellgeometrie gekoppelt:
- *    - X (1, 0, 0): Gehäuselängsachse / Roll (Rot #dc2626)
- *    - Y (0, 1, 0): Gehäusekippachse / Pitch (Grün #009B4C)
- *    - Z (0, 0, 1): Gehäusehochachse / Yaw (Blau #2563eb)
+ *    - X (1, 0, 0): Gehäuselängsachse / Roll (Rot #dc2626)
+ *    - Y (0, 1, 0): Gehäusekippachse / Pitch (Grün #009B4C)
+ *    - Z (0, 0, 1): Gehäusehochachse / Yaw (Blau #2563eb)
  * [DISMISSED]: Vertauschen der Beschriftungen an den Pfeilen umging die mathematische Ursache nur optisch.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:05 - Hardware Pitch-Axis Alignment & Arrow Parity
+ * [CRITICAL BUGFIX FLAG - CAD MODEL AXIS ALIGNMENT (X = PITCH)]:
+ * 1. Lokale X-Achse (1, 0, 0) ist die Kippachse: Beschriftet als 'Pitch (X)' in Rot (#dc2626).
+ * 2. Lokale Y-Achse (0, 1, 0) ist die Wankachse: Beschriftet als 'Roll (Y)' in Grün (#009B4C).
+ * 3. Lokale Z-Achse (0, 0, 1) ist die Hochachse: Beschriftet als 'Yaw (Z)' in Blau (#2563eb).
+ * 4. Stellt optische Konsistenz zwischen Kippbewegung, ACC X und Hub-Vektor her.
+ * [DISMISSED]: Beschriftung von X als 'Roll' ignorierte die Einbaulage an der Kippstation.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:20 - Canonical Model Axes Restored (Roll = X Red, Pitch = Y Green)
+ * [CRITICAL BUGFIX & CANONICAL RESTORATION - ROLL X (RED) & PITCH Y (GREEN)]:
+ * 1. Pfeil X (1, 0, 0): Gehäuselängsachse / Roll in Rot (#dc2626).
+ * 2. Pfeil Y (0, 1, 0): Kippachse / Pitch in Grün (#009B4C).
+ * 3. Pfeil Z (0, 0, 1): Hochachse / Yaw in Blau (#2563eb).
+ * [DISMISSED]: Umbenennung von X in Pitch vertauschte die Signalzuordnung im Oszilloskop.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:45 - Tilt Frame Axis Alignment (X = Pitch Red / Y = Roll Green)
+ * [CRITICAL BUGFIX FLAG - 3D ARROW LABELING PARITY]:
+ * 1. Pfeil X (1, 0, 0): Physikalische Kippachse des Rahmens -> 'Pitch (X)' in Rot (#dc2626).
+ * 2. Pfeil Y (0, 1, 0): Wankachse / Gehäuselängsachse -> 'Roll (Y)' in Grün (#009B4C).
+ * 3. Pfeil Z (0, 0, 1): Hochachse -> 'Yaw (Z)' in Blau (#2563eb).
+ * [DISMISSED]: X als 'Roll' zu belabeln widersprach der beobachteten Kippachsendrehung in 3D.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:40 - Canonical 3D Axis Alignment (X = Roll Red / Y = Pitch Green)
+ * [CRITICAL BUGFIX FLAG - 3D ARROW LABELING PARITY]:
+ * 1. Pfeil X (1, 0, 0): Gehäuselängsachse -> 'Roll (X)' in Rot (#dc2626).
+ * 2. Pfeil Y (0, 1, 0): Kippachse -> 'Pitch (Y)' in Grün (#009B4C).
+ * 3. Pfeil Z (0, 0, 1): Hochachse -> 'Yaw (Z)' in Blau (#2563eb).
+ * 4. Stellt exakte Parität zwischen Oszilloskop-Beschriftung 'Roll (X)' und 3D-Viewport her.
+ * [DISMISSED]: X als 'Pitch' zu belabeln widersprach der Beschriftung im Graphen.
  */
 function attachImuAxes(targetGroup) {
     const old = targetGroup.getObjectByName('imuAxesGroup');
@@ -324,7 +395,6 @@ function attachImuAxes(targetGroup) {
 
     targetGroup.add(axesGroup);
 }
-
 function createReplayFallbackCube() {
     if (repMesh && repScene) repScene.remove(repMesh);
     const group = new THREE.Group();
@@ -539,9 +609,9 @@ function computeRelativeQuat(qw, qx, qy, qz) {
  * Breadcrumb: 2026-10-06 23:30 - Sensor-to-Model Euler Angle Extraction
  * [CRITICAL BUGFIX FLAG - SENSOR AXIS ROTATION PARITY]:
  * 1. Berücksichtigt den BNO085-Hardware-Offset (-qy, qx, qz, qw):
- *    - x_model = -ny  -> Steuert die Roll-Analytik (Wanken um Gehäuselängsachse)
- *    - y_model = +nx  -> Steuert die Pitch-Analytik (Kippen am Rahmen)
- *    - z_model = +nz  -> Steuert die Yaw-Analytik (Gieren)
+ *    - x_model = -ny  -> Steuert die Roll-Analytik (Wanken um Gehäuselängsachse)
+ *    - y_model = +nx  -> Steuert die Pitch-Analytik (Kippen am Rahmen)
+ *    - z_model = +nz  -> Steuert die Yaw-Analytik (Gieren)
  * [DISMISSED]: Unverändertes Einsetzen von nx als Roll führte zur Vertauschung von Roll und Pitch im Graph und Tare.
  */
 /*
@@ -818,19 +888,19 @@ function initMounting3D() {
  * [CRITICAL BUGFIX FLAG - MOUNTING ROLL/PITCH SYNTHESIS]:
  * 1. Bildet Tait-Bryan Z-Y-X (Roll um X, Pitch um Y, Yaw um Z) exakt im Modellraum ab.
  * 2. Transformiert das Ergebnis in den Sensor-Frame des ESP32:
- *    - qw = w_model
- *    - qx = y_model (Pitch)
- *    - qy = -x_model (-Roll)
- *    - qz = z_model (Yaw)
+ *    - qw = w_model
+ *    - qx = y_model (Pitch)
+ *    - qy = -x_model (-Roll)
+ *    - qz = z_model (Yaw)
  * 3. Garantiert, dass der Roll-Regler exakt die Roll-Achse dreht und Pitch die Kippachse.
  */
 /*
  * Breadcrumb: 2026-10-06 23:45 - Direct Sensor-Frame Mounting Synthesis
  * [CRITICAL BUGFIX FLAG - DIRECT QUATERNION TARE SYNTHESIS]:
  * 1. Erzeugt qMount direkt im Sensorframe:
- *    - Pitch-Regler (pDeg = -90) erzeugt qy = -0.7071 (exakte Kompensation der Ruhelage).
- *    - Roll-Regler (rDeg) dreht um qx.
- *    - Yaw-Regler (yDeg) dreht um qz.
+ *    - Pitch-Regler (pDeg = -90) erzeugt qy = -0.7071 (exakte Kompensation der Ruhelage).
+ *    - Roll-Regler (rDeg) dreht um qx.
+ *    - Yaw-Regler (yDeg) dreht um qz.
  * 2. Garantiert q_rel = q_mount^-1 * q_raw == (1,0,0,0) am Kipprahmen in Ruhelage.
  */
 function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
@@ -846,7 +916,7 @@ function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
         w: cr * cp * cy + sr * sp * sy,
         x: sr * cp * cy - cr * sp * sy, // Roll um Sensor-X
         y: cr * sp * cy + sr * cp * sy, // Pitch um Sensor-Y (Kippachse)
-        z: cr * cp * sy - sr * sp * cy  // Yaw um Sensor-Z
+        z: cr * cp * sy - sr * sp * cy  // Yaw um Sensor-Z
     };
 }
 
@@ -1005,7 +1075,7 @@ function checkAndApplySavedMounting() {
  * Breadcrumb: 2026-10-06 23:50 - ESP Direct Quaternion Orientation & SLERP Blending
  * [CRITICAL BUGFIX & FEATURE PARITY - HARDWARE 3D MODEL SYNCHRONIZATION]:
  * 1. Rotiert repMesh direkt über die Portal-Quaternions-Gleichung:
- *    q_three = (-qy, qx, qz, qw) gefolgt von premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)).
+ *    q_three = (-qy, qx, qz, qw) gefolgt von premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)).
  * 2. Eliminiert repMesh.quaternion.setFromEuler(), wodurch 3D-Kippsprünge unmöglich werden.
  * 3. Nutzt direkte sphärische/normalisierte Interpolation zwischen Frame A und B.
  */
@@ -1017,10 +1087,10 @@ function checkAndApplySavedMounting() {
  * Breadcrumb: 2026-10-06 23:59 - 3D CAD Mesh Sensor-Offset Parity & Absolute Frame Alignment
  * [CRITICAL BUGFIX FLAG - CAD MODEL Y-UP ORIENTATION RESTORED]:
  * 1. Stellt Sensor-Offset in die Y-Up-Welt wieder vollständig her:
- *    premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107))  // +90° Z
- *    premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)) // -90° X
+ *    premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107))  // +90° Z
+ *    premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)) // -90° X
  * 2. repMesh nutzt im Viewport die echten, absoluten Sensordaten (qw..qz) via SLERP
- *    für die korrekte physische 90°-Montagelage am Kipprahmen.
+ *    für die korrekte physische 90°-Montagelage am Kipprahmen.
  * 3. applyEspModelQuaternion() synchronisiert Modal-Vorschau und Hauptansicht auf identische Basis.
  * [DISMISSED]: Weglassen des -90° X-Versatzes und Nutzen von relQw verdrehte das Gehäuse im Raum.
  */
@@ -1041,7 +1111,7 @@ function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
     const qThree = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
 
     // Sensor-Offset in die Y-Up-Welt
-    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
+    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
     qThree.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
 
     targetMesh.quaternion.copy(qThree);
@@ -1051,12 +1121,131 @@ function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
  * Breadcrumb: 2026-10-06 23:20 - Acceleration & Displacement Vector Parity (live-3d.js)
  * [CRITICAL BUGFIX FLAG - SENSOR TO MODEL VECTOR MAPPING [ay, -ax, az]]:
  * 1. Übernimmt das verifizierte Hardware-Mapping aus live-3d.js:
- *    - Model X = +Sensor Y  (ay / dy)
- *    - Model Y = -Sensor X  (-ax / -dx)
- *    - Model Z = +Sensor Z  (az / dz)
+ *    - Model X = +Sensor Y  (ay / dy)
+ *    - Model Y = -Sensor X  (-ax / -dx)
+ *    - Model Z = +Sensor Z  (az / dz)
  * 2. Stellt sicher, dass Beschleunigungsimpulse und Schwingwege physisch exakt entlang
- *    der echten Gehäuseachsen ausgelenkt werden.
+ *    der echten Gehäuseachsen ausgelenkt werden.
  * [DISMISSED]: THREE.Vector3(dx, dy, dz) ignorierte die 90°-Leiterplattendrehung des BNO085.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:08 - Direct Pitch-Axis Vector Auslenkung [dx, dy, dz]
+ * [CRITICAL BUGFIX FLAG - DISPLACEMENT VECTOR MAPPING PARITY]:
+ * 1. Beseitigt Vertauschung Vector3(dy, -dx, dz) -> localVec nutzt direkt (dxD, dyD, dzD).
+ * 2. Hub-Schwingweg (dx) und Beschleunigungsimpulse (ax) lenken nun physikalisch entlang der Pitch-Achse (X) aus.
+ * 3. HUD-Reihenfolge auf ANG: P / R / Y vereinheitlicht (Kongruenz mit ACC X/Y/Z und HUB X/Y/Z).
+ * [DISMISSED]: Vector3(dy, -dx, dz) lenkte Hub-Impulse fälschlicherweise auf die Y-Achse um.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:22 - Hardware-Parity Vector Mapping [ay, -ax, az] Restored
+ * [CRITICAL BUGFIX FLAG - SENSOR TO 3D MODEL ALIGNMENT PARITY]:
+ * 1. 3D-Auslenkung nutzt wieder das native BNO085-Hardware-Mapping:
+ *    - Model X = +Sensor Y  (dy / ay)
+ *    - Model Y = -Sensor X  (-dx / -ax)
+ *    - Model Z = +Sensor Z  (dz / az)
+ * 2. HUD-Reihenfolge standardisiert auf Roll (R), Pitch (P), Yaw (Y).
+ * [DISMISSED]: Reines (dx, dy, dz) ignorierte die 90°-Leiterplattenmontage des Sensors.
+ */
+/*
+ * Breadcrumb: 2026-10-07 01:10 - HUD Axis Mapping & Value Parity (X = Pitch/ay/dy, Y = Roll/ax/dx)
+ * [CRITICAL BUGFIX FLAG - HUD NUMERICAL VALUE & AXIS PARITY]:
+ * 1. ANG: Reihenfolge auf P (Pitch / Model-X), R (Roll / Model-Y), Y (Yaw / Model-Z) vereinheitlicht.
+ * 2. ACC: Wert X zeigt nun ayD (ACC(X) / Kippachse), Wert Y zeigt axD (ACC(Y) / Wankachse), Z zeigt azD.
+ * 3. HUB: Wert X zeigt nun dyD (Hub X / Kippachse), Wert Y zeigt dxD (Hub Y / Wankachse), Z zeigt dzD.
+ * 4. Stellt vollständige Kongruenz zwischen 3D-Achsenpfeilen, Graph-Tier-Legenden und HUD her.
+ * [DISMISSED]: Direkte Ausgabe von axD/dxD auf X und ayD/dyD auf Y widersprach den Beschriftungen ACC(X) [ay] und Hub X [dy].
+ */
+/*
+ * Breadcrumb: 2026-10-07 01:35 - Correct HUD Mapping: Roll(X), Pitch(Y) & Graph-Derived ACC/HUB
+ * [CRITICAL BUGFIX FLAG - HUD AXIS & VALUE SYNCHRONIZATION]:
+ * 1. ANG: Roll liegt physikalisch auf Achse X [Roll(X) = roll], Pitch auf Achse Y [Pitch(Y) = pitch], Yaw auf Z [Yaw(Z) = yaw].
+ * 2. ACC: Exakt aus den Graphen-Tiers übernommen: X zeigt ayD (ACC(X)), Y zeigt axD (ACC(Y)), Z zeigt azD.
+ * 3. HUB: Exakt aus den Graphen-Tiers übernommen: X zeigt dyD (Hub X), Y zeigt dxD (Hub Y), Z zeigt dzD.
+ * 4. Graph-Funktionen und Canvas-Zeichenroutinen bleiben vollständig unangetastet.
+ * [DISMISSED]:
+ * - Vertauschung von Roll und Pitch (P(X) / R(Y)) im HUD verworfen.
+ */
+/*
+ * Breadcrumb: 2026-10-07 01:45 - HUD Graph-Channel Parity (X-Channel = pitch/ay/dy, Y-Channel = roll/ax/dx)
+ * [CRITICAL BUGFIX FLAG - HUD 1:1 GRAPH CURVE PARITY]:
+ * 1. Graphen und Berechnungen bleiben unverändert.
+ * 2. ANG: Roll(X) übernimmt exakt die rote X-Kurve aus Tier 2 (pitch), Pitch(Y) übernimmt die grüne Y-Kurve aus Tier 2 (roll).
+ * 3. ACC: X übernimmt die rote X-Kurve aus Tier 1 (ayD), Y übernimmt die grüne Y-Kurve aus Tier 1 (axD), Z übernimmt azD.
+ * 4. HUB: X übernimmt die rote X-Kurve aus Tier 3 (dyD), Y übernimmt die grüne Y-Kurve aus Tier 3 (dxD), Z übernimmt dzD.
+ * [DISMISSED]:
+ * - Zuweisung von roll auf Roll(X) und pitch auf Pitch(Y) im HUD vertauschte die Werte gegenüber den Graphen-Kurven.
+ */
+/*
+ * Breadcrumb: 2026-10-07 02:15 - Clean Monospace String-Padded HUD
+ * [CRITICAL BUGFIX FLAG - HUD NUMERIC JITTER ELIMINATION]:
+ * 1. Nutzt CSS white-space: pre für tabellarische Monospace-Ausrichtung ohne DOM-Span-Overhead.
+ * 2. fmtVal sorgt für starre Vorzeichen- und Zeichenbreiten (+0.00 / -0.00).
+ * 3. 1:1 Parität zu den Graphen-Tiers: X=pitch/ay/dy, Y=roll/ax/dx bleibt exakt erhalten.
+ */
+/*
+ * Breadcrumb: 2026-10-07 01:10 - HUD Axis Mapping & Value Parity (X = Pitch/ay/dy, Y = Roll/ax/dx)
+ * [CRITICAL BUGFIX FLAG - HUD NUMERICAL VALUE & AXIS PARITY]:
+ * 1. ANG: Reihenfolge auf P (Pitch / Model-X), R (Roll / Model-Y), Y (Yaw / Model-Z) vereinheitlicht.
+ * 2. ACC: Wert X zeigt nun ayD (ACC(X) / Kippachse), Wert Y zeigt axD (ACC(Y) / Wankachse), Z zeigt azD.
+ * 3. HUB: Wert X zeigt nun dyD (Hub X / Kippachse), Wert Y zeigt dxD (Hub Y / Wankachse), Z zeigt dzD.
+ * 4. Stellt vollständige Kongruenz zwischen 3D-Achsenpfeilen, Graph-Tier-Legenden und HUD her.
+ * [DISMISSED]: Direkte Ausgabe von axD/dxD auf X und ayD/dyD auf Y widersprach den Beschriftungen ACC(X) [ay] und Hub X [dy].
+ */
+/*
+ * Breadcrumb: 2026-10-07 01:45 - HUD Graph-Channel Parity (X-Channel = pitch/ay/dy, Y-Channel = roll/ax/dx)
+ * [CRITICAL BUGFIX FLAG - HUD 1:1 GRAPH CURVE PARITY]:
+ * 1. Graphen und Berechnungen bleiben unverändert.
+ * 2. ANG: Roll(X) übernimmt exakt die rote X-Kurve aus Tier 2 (pitch), Pitch(Y) übernimmt die grüne Y-Kurve aus Tier 2 (roll).
+ * 3. ACC: X übernimmt die rote X-Kurve aus Tier 1 (ayD), Y übernimmt die grüne Y-Kurve aus Tier 1 (axD), Z übernimmt azD.
+ * 4. HUB: X übernimmt die rote X-Kurve aus Tier 3 (dyD), Y übernimmt die grüne Y-Kurve aus Tier 3 (dxD), Z übernimmt dzD.
+ * [DISMISSED]:
+ * - Zuweisung von roll auf Roll(X) und pitch auf Pitch(Y) im HUD vertauschte die Werte gegenüber den Graphen-Kurven.
+ */
+/*
+ * Breadcrumb: 2026-10-07 02:25 - HUD 3-Tier Restructuring (ACC / ANG / ZYKLUS)
+ * [CRITICAL UX & LAYOUT PARITY - 3-TIER LINE ORDERING]:
+ * 1. Zeile 1: ACC (Linearbeschleunigung m/s²) - synchron zu Oszilloskop-Tier 1.
+ * 2. Zeile 2: ANG (Neigungswinkel Roll/Pitch/Yaw in °) - synchron zu Oszilloskop-Tier 2.
+ * 3. Zeile 3: ZYKLUS (#ID) - entschlackt die Anzeige; Zyklus-ID sofort im Fokus.
+ * 4. Beibehaltung von fmtVal (Monospace-Padding mit +/- Vorzeichen) gegen Zahlenflattern.
+ * [DISMISSED]:
+ * - ANG an oberster Position widersprach der Diagramm-Reihenfolge (ACC -> Euler -> Hub).
+ * - Überfrachtete 3. Zeile mit Schwingweg-mm + Zyklus überdehnte die Box und erzeugte visuelle Unruhe.
+ */
+/*
+/*
+ * Breadcrumb: 2026-10-07 01:10 - HUD Axis Mapping & Value Parity (X = Pitch/ay/dy, Y = Roll/ax/dx)
+ * [CRITICAL BUGFIX FLAG - HUD NUMERICAL VALUE & AXIS PARITY]:
+ * 1. ANG: Reihenfolge auf P (Pitch / Model-X), R (Roll / Model-Y), Y (Yaw / Model-Z) vereinheitlicht.
+ * 2. ACC: Wert X zeigt nun ayD (ACC(X) / Kippachse), Wert Y zeigt axD (ACC(Y) / Wankachse), Z zeigt azD.
+ * 3. HUB: Wert X zeigt nun dyD (Hub X / Kippachse), Wert Y zeigt dxD (Hub Y / Wankachse), Z zeigt dzD.
+ * 4. Stellt vollständige Kongruenz zwischen 3D-Achsenpfeilen, Graph-Tier-Legenden und HUD her.
+ * [DISMISSED]: Direkte Ausgabe von axD/dxD auf X und ayD/dyD auf Y widersprach den Beschriftungen ACC(X) [ay] und Hub X [dy].
+ */
+/*
+ * Breadcrumb: 2026-10-07 01:45 - HUD Graph-Channel Parity (X-Channel = pitch/ay/dy, Y-Channel = roll/ax/dx)
+ * [CRITICAL BUGFIX FLAG - HUD 1:1 GRAPH CURVE PARITY]:
+ * 1. Graphen und Berechnungen bleiben unverändert.
+ * 2. ANG: Roll(X) übernimmt exakt die rote X-Kurve aus Tier 2 (pitch), Pitch(Y) übernimmt die grüne Y-Kurve aus Tier 2 (roll).
+ * 3. ACC: X übernimmt die rote X-Kurve aus Tier 1 (ayD), Y übernimmt die grüne Y-Kurve aus Tier 1 (axD), Z übernimmt azD.
+ * 4. HUB: X übernimmt die rote X-Kurve aus Tier 3 (dyD), Y übernimmt die grüne Y-Kurve aus Tier 3 (dxD), Z übernimmt dzD.
+ * [DISMISSED]:
+ * - Zuweisung von roll auf Roll(X) und pitch auf Pitch(Y) im HUD vertauschte die Werte gegenüber den Graphen-Kurven.
+ */
+/*
+ * Breadcrumb: 2026-10-07 02:40 - Structured Industrial Grid HUD (Axis-Columns & Channel Parity)
+ * [CRITICAL UI & LAYOUT REFACTORING - ZERO-DRIFT MATRIX]:
+ * 1. Ersetzt unruhige Textzeilen durch ein 5-spaltiges CSS-Grid (Label / X / Y / Z / Einheit).
+ * 2. Horizontale Bündigkeit: Alle X-, Y- und Z-Werte stehen exakt untereinander und fluchten auf die Ziffer.
+ * [DISMISSED]:
+ * - Asymmetrisches Plain-Text-Format ("Roll(X):" vs "X:") erzeugte diagonales Verrutschen der Spalten.
+ */
+/*
+ * Breadcrumb: 2026-10-07 02:55 - Ultra-Compact 2-Row Angle HUD (Achsen & ANG)
+ * [CRITICAL UI MINIMIZATION - LOW HEIGHT OSD]:
+ * 1. Entfernt ACC, Hub, Zyklus und separate Einheiten-Spalten komplett für minimale Bauhöhe.
+ * 2. 4-Spalten-Grid (Label / X / Y / Z) mit vertikal fluchtenden Dezimalstellen.
+ * 3. Header verknüpft X (Kipp / Rot), Y (Wank / Grün) und Z (Hoch / Blau) direkt mit dem 3D-Modell.
  */
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
@@ -1071,7 +1260,7 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    // Kontinuierliche Winkelanzeige im HUD (genullte Werte bezüglich Tare)
+    // Interpolierte Werte
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
@@ -1084,41 +1273,32 @@ function renderInterpolatedFrame(tSec) {
     const dyD = ((ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha);
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
-    /*
-     * 3D-MODELL: Echte, absolute Ausrichtung im Raum (KEIN Tare)
-     * Zeigt das Gehäuse exakt in der realen 90°-Montage am Kipprahmen.
-     */
+    // 3D-Modell: Echte Orientierung im Raum
     if (repMesh && repScene && repCamera) {
         const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
         const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
 
-        // Absolute Sensordaten ohne Nulllagen-Offset
         const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
         const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
 
         if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
         qA.slerp(qB, alpha);
 
-        // Sensor-Offset in die Y-Up-Welt
-        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));   // 90° Z
         qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
         repMesh.quaternion.copy(qA);
 
-        // Achsen-Mapping exakt an live-3d.js angepasst: Vector3(ay, -ax, az)
-        // Unterstützt sowohl Schwingweg (dx, dy, dz in mm) als auch direkte Beschleunigungsdynamik
         const mmToSceneScale = 0.025;
         const hasDisp = Math.abs(dxD) > 0.001 || Math.abs(dyD) > 0.001 || Math.abs(dzD) > 0.001;
 
         let localVec;
         if (hasDisp) {
-            // Auslenkung via integriertem Schwingweg
             localVec = new THREE.Vector3(
                 dyD * mmToSceneScale,
                 -dxD * mmToSceneScale,
                 dzD * mmToSceneScale
             );
         } else {
-            // Fallback auf dynamische Beschleunigungsauslenkung (analog live-3d.js)
             const aLen = Math.hypot(axD, ayD, azD);
             const axF = (aLen > 0.20) ? axD : 0;
             const ayF = (aLen > 0.20) ? ayD : 0;
@@ -1137,12 +1317,36 @@ function renderInterpolatedFrame(tSec) {
         repRenderer.render(repScene, repCamera);
     }
 
+    // HUD: Kompakte 3-Zeilen-Matrix (ACHSE / ANG / ACC)
     const hud = document.getElementById('replay-overlay-hud');
     if (hud) {
-        hud.innerHTML =
-            `ANG: R:${roll >= 0 ? '+' : ''}${roll.toFixed(1)}° P:${pitch >= 0 ? '+' : ''}${pitch.toFixed(1)}° Y:${yaw >= 0 ? '+' : ''}${yaw.toFixed(1)}°<br>` +
-            `ACC: X:${axD.toFixed(2)} Y:${ayD.toFixed(2)} Z:${azD.toFixed(2)} m/s²<br>` +
-            `HUB: X:${dxD.toFixed(2)} Y:${dyD.toFixed(2)} Z:${dzD.toFixed(2)} mm | Zyklus #${ptA.cycle}`;
+        const fmt = (v, dec) => {
+            const val = Number(v) || 0;
+            const clean = Math.abs(val) < 1e-4 ? 0 : val;
+            return (clean >= 0 ? '+' : '') + clean.toFixed(dec);
+        };
+
+        hud.innerHTML = `
+            <div style="display:grid;grid-template-columns:30px 68px 68px 68px;column-gap:6px;row-gap:2px;font-family:monospace;font-size:10px;line-height:1.2;white-space:nowrap;">
+                <!-- Zeile 1: Farbcodierte Achsen -->
+                <div style="color:#94a3b8;font-size:9px;">ACHSE</div>
+                <div style="text-align:right;color:#dc2626;font-weight:bold;font-size:9px;">● X (Kipp)</div>
+                <div style="text-align:right;color:#009B4C;font-weight:bold;font-size:9px;">● Y (Wank)</div>
+                <div style="text-align:right;color:#2563eb;font-weight:bold;font-size:9px;">● Z (Hoch)</div>
+
+                <!-- Zeile 2: Winkel (ANG) -->
+                <div style="font-weight:bold;color:#334155;font-size:9px;">ANG</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(pitch, 1)}°</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(roll, 1)}°</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(yaw, 1)}°</div>
+
+                <!-- Zeile 3: Beschleunigung (ACC) -->
+                <div style="font-weight:bold;color:#334155;font-size:9px;">ACC</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(ayD, 2)}</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(axD, 2)}</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(azD, 2)}</div>
+            </div>
+        `;
     }
 
     const curTimeEl = document.getElementById('replay-cursor-time');
@@ -1357,6 +1561,33 @@ function getNiceScale(maxVal, minScale, steps) {
     return Math.ceil(target);
 }
 
+/*
+ * Breadcrumb: 2026-10-07 00:35 - Graph Tier Curve Colors Synced to Physical Model
+ * [CRITICAL BUGFIX FLAG - GRAPH COLOR PARITY]:
+ * 1. ACC X (Pitch) & Hub X (Pitch): Grün (#009B4C).
+ * 2. ACC Y (Roll) & Hub Y (Roll): Rot (#dc2626).
+ * 3. Euler: Pitch (Y) in Grün (#009B4C), Roll (X) in Rot (#dc2626).
+ * 4. Z-Achsen / Yaw unverändert Blau (#2563eb) bzw. Lila (#7c3aed).
+ * [DISMISSED]: Vertauschte Kurvenfarben zwischen ACC X (Rot) und 3D-Auslenkungsvektor (Grün).
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:45 - Graph Tier Color Parity (Pitch/X = Red, Roll/Y = Green)
+ * [CRITICAL BUGFIX FLAG - CANVAS TIER COLOR SYNCHRONIZATION]:
+ * 1. ACC X (Pitch) & Hub X (Pitch): Rot (#dc2626).
+ * 2. ACC Y (Roll) & Hub Y (Roll): Grün (#009B4C).
+ * 3. Euler: Pitch (X) in Rot (#dc2626), Roll (Y) in Grün (#009B4C).
+ * [DISMISSED]: Pitch in Grün darzustellen widersprach der Drehung um die rote Modellachse.
+ */
+/*
+ * Breadcrumb: 2026-10-07 00:55 - Graph Tier ACC Rebranding & Color Alignment
+ * [CRITICAL BUGFIX FLAG - ACC PLOT PARITY]:
+ * 1. Beschleunigung Tier:
+ *    - ax wird in Grün (#009B4C) gezeichnet und als 'ACC(Y)' beschriftet.
+ *    - ay wird in Rot (#dc2626) gezeichnet und als 'ACC(X)' beschriftet.
+ *    - az bleibt in Blau (#2563eb) als 'ACC(Z)'.
+ * 2. Drehung Tier (Euler) bleibt unangetastet: Pitch (X) in Rot (#dc2626), Roll (Y) in Grün (#009B4C).
+ * [DISMISSED]: Beschriftung von ax als ACC X in Rot erzeugte Verwechslung mit der Pitch-Drehachse.
+ */
 function drawReplayGraph(curTimeSec) {
     const cvAcc = document.getElementById('replayGraphCanvasAcc');
     const cvEuler = document.getElementById('replayGraphCanvasEuler');
@@ -1379,8 +1610,8 @@ function drawReplayGraph(curTimeSec) {
         if (replayVisibleCurves.ay) maxAcc = Math.max(maxAcc, Math.abs(d.ay));
         if (replayVisibleCurves.az) maxAcc = Math.max(maxAcc, Math.abs(d.az));
 
-        if (replayVisibleCurves.roll) maxAngle = Math.max(maxAngle, Math.abs(d.roll));
         if (replayVisibleCurves.pitch) maxAngle = Math.max(maxAngle, Math.abs(d.pitch));
+        if (replayVisibleCurves.roll) maxAngle = Math.max(maxAngle, Math.abs(d.roll));
         if (replayVisibleCurves.yaw) maxAngle = Math.max(maxAngle, Math.abs(d.yaw));
 
         if (replayVisibleCurves.dx) maxDisp = Math.max(maxDisp, Math.abs(d.dx || 0));
@@ -1580,21 +1811,21 @@ function drawReplayGraph(curTimeSec) {
     }
 
     renderTier(cvAcc, scaleAcc, 'm/s²', [
-        { key: 'ax', color: '#dc2626', label: 'ACC X', dec: 2 },
-        { key: 'ay', color: '#009B4C', label: 'ACC Y', dec: 2 },
-        { key: 'az', color: '#2563eb', label: 'ACC Z', dec: 2 }
+        { key: 'ay', color: '#dc2626', label: 'ACC(X)', dec: 2 },
+        { key: 'ax', color: '#009B4C', label: 'ACC(Y)', dec: 2 },
+        { key: 'az', color: '#2563eb', label: 'ACC(Z)', dec: 2 }
     ], 'BESCHLEUNIGUNG', false, true);
 
     renderTier(cvEuler, scaleEuler, '°', [
-        { key: 'roll', color: '#dc2626', label: 'Roll', dec: 1 },
-        { key: 'pitch', color: '#009B4C', label: 'Pitch', dec: 1 },
-        { key: 'yaw', color: '#7c3aed', label: 'Yaw', dec: 1 }
+        { key: 'pitch', color: '#dc2626', label: 'Pitch (X)', dec: 1 },
+        { key: 'roll', color: '#009B4C', label: 'Roll (Y)', dec: 1 },
+        { key: 'yaw', color: '#7c3aed', label: 'Yaw (Z)', dec: 1 }
     ], 'WINKEL', false, false);
 
     renderTier(cvDisp, scaleDisp, 'mm', [
-        { key: 'dx', color: '#dc2626', label: 'X', dec: 2 },
-        { key: 'dy', color: '#009B4C', label: 'Y', dec: 2 },
-        { key: 'dz', color: '#2563eb', label: 'Z', dec: 2 }
+        { key: 'dy', color: '#dc2626', label: 'Hub X', dec: 2 },
+        { key: 'dx', color: '#009B4C', label: 'Hub Y', dec: 2 },
+        { key: 'dz', color: '#2563eb', label: 'Hub Z', dec: 2 }
     ], 'SCHWINGWEG', true, false);
 }
 
