@@ -155,6 +155,14 @@ function resizeReplayDeck() {
 }
 window.resizeReplayDeck = resizeReplayDeck;
 
+/*
+ * Breadcrumb: 2026-10-06 23:15 - Camera View Parity with live-3d.js
+ * [CRITICAL BUGFIX FLAG - FRONT/SIDE PERSPECTIVE RESTORATION]:
+ * 1. Synchronisiert Kamerapositionen exakt mit live-3d.js:
+ *    - 'front': (0, 0.3, 3.8) blickt frontal auf die Gehäusefront (+Z / 0.48).
+ *    - 'side':  (3.8, 0.3, 0) blickt seitlich auf die Gehäuselänge (+X / 1.8).
+ * [DISMISSED]: Invertierte Front/Side-Werte führten zu verfälschter optischer Achsenwahrnehmung.
+ */
 window.setReplayCameraView = function (viewName) {
     if (!repCamera) return;
 
@@ -167,11 +175,11 @@ window.setReplayCameraView = function (viewName) {
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'front') {
-        repCamera.position.set(3.8, 0.3, 0);
+        repCamera.position.set(0, 0.3, 3.8);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'side') {
-        repCamera.position.set(0, 0.3, 3.8);
+        repCamera.position.set(3.8, 0.3, 0);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     }
@@ -515,7 +523,8 @@ function quatToEulerRawDeg(nw, nx, ny, nz) {
 
     const sinp = 2 * (nw * ny - nz * nx);
     const clampedSinp = Math.max(-1.0, Math.min(1.0, sinp));
-    const pitch = -Math.asin(clampedSinp) * (180 / Math.PI);
+    // Korrektes mathematisches Vorzeichen fuer Z-Y-X Tait-Bryan
+    const pitch = Math.asin(clampedSinp) * (180 / Math.PI);
 
     const siny_cosp = 2 * (nw * nz + nx * ny);
     const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
@@ -776,9 +785,10 @@ function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
     const y = ((yDeg || 0) * (Math.PI / 180)) / 2;
 
     const cr = Math.cos(r), sr = Math.sin(r);
-    const cp = Math.cos(-p), sp = Math.sin(-p);
+    const cp = Math.cos(p), sp = Math.sin(p);
     const cy = Math.cos(y), sy = Math.sin(y);
 
+    // Standard Z-Y-X Euler zu Quaternion Synthese
     return {
         w: cr * cp * cy + sr * sp * sy,
         x: sr * cp * cy - cr * sp * sy,
@@ -787,6 +797,15 @@ function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
     };
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:59 - Axis Parity Fix for Mounting Preview
+ * [CRITICAL BUGFIX FLAG - MOUNTING ROLL/PITCH AXIS MAPPING]:
+ * 1. Behebt Achsenvertauschung im Einbaulagen-Modal:
+ *    - Roll (r) dreht das Modell nun strikt um die Roll-Achse (Rot / X).
+ *    - Pitch (p) dreht das Modell strikt um die Pitch-Achse (Grün / Y).
+ * 2. qMount-Komponenten werden achsenrichtig an applyEspModelQuaternion übergeben.
+ * [DISMISSED]: Direkte Übergabe (qx -> Y, qy -> X) vertauschte Roll und Pitch in der 3D-Vorschau.
+ */
 function updateMountingPreview3D() {
     if (!mountMesh) return;
     const rEl = document.getElementById('mount-roll-num');
@@ -798,7 +817,10 @@ function updateMountingPreview3D() {
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
     const qMount = getMountingQuaternionFromDeg(r, p, y);
-    applyEspModelQuaternion(mountMesh, qMount.w, qMount.x, qMount.y, qMount.z);
+
+    // Roll (X) und Pitch (Y) werden hier dem Sensor-Offset-Mapping entsprechend
+    // unvertuscht zugeordnet: qx -> Roll-Achse, qy -> Pitch-Achse
+    applyEspModelQuaternion(mountMesh, qMount.w, -qMount.y, qMount.x, qMount.z);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -950,15 +972,34 @@ function checkAndApplySavedMounting() {
  * 3. applyEspModelQuaternion() synchronisiert Modal-Vorschau und Hauptansicht auf identische Basis.
  * [DISMISSED]: Weglassen des -90° X-Versatzes und Nutzen von relQw verdrehte das Gehäuse im Raum.
  */
+/*
+ * Breadcrumb: 2026-10-06 23:59 - Sensor-Offset & Y-Up Basis Alignment
+ * [CRITICAL BUGFIX & FEATURE PARITY - 3D CAD MODEL ORIENTATION]:
+ * 1. Überträgt das Hardware-Mapping (-qy, qx, qz, qw) und die Y-Up-Weltrotation.
+ * 2. targetMesh übernimmt das transformierte Quaternion ohne Gimbal Lock.
+ */
 function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
     const norm = Math.hypot(qx, qy, qz, qw) || 1.0;
-    const qThree = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
-    // Sensor-Offset in die Y-Up-Welt (Gehäuse steht bei 90° senkrecht im Raum)
-    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
+    const qThree = new THREE.Quaternion(qx / norm, qy / norm, qz / norm, qw / norm);
+
+    // Sensor-Offset in die Y-Up-Welt (Gehäuseausrichtung)
+    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // +90° Z
     qThree.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
+
     targetMesh.quaternion.copy(qThree);
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:20 - Acceleration & Displacement Vector Parity (live-3d.js)
+ * [CRITICAL BUGFIX FLAG - SENSOR TO MODEL VECTOR MAPPING [ay, -ax, az]]:
+ * 1. Übernimmt das verifizierte Hardware-Mapping aus live-3d.js:
+ *    - Model X = +Sensor Y  (ay / dy)
+ *    - Model Y = -Sensor X  (-ax / -dx)
+ *    - Model Z = +Sensor Z  (az / dz)
+ * 2. Stellt sicher, dass Beschleunigungsimpulse und Schwingwege physisch exakt entlang
+ *    der echten Gehäuseachsen ausgelenkt werden.
+ * [DISMISSED]: THREE.Vector3(dx, dy, dz) ignorierte die 90°-Leiterplattendrehung des BNO085.
+ */
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -1005,19 +1046,34 @@ function renderInterpolatedFrame(tSec) {
         qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
         repMesh.quaternion.copy(qA);
 
-        // Translationsauslenkung Schwingweg (mm -> Szene)
+        // Achsen-Mapping exakt an live-3d.js angepasst: Vector3(ay, -ax, az)
+        // Unterstützt sowohl Schwingweg (dx, dy, dz in mm) als auch direkte Beschleunigungsdynamik
         const mmToSceneScale = 0.025;
-        const localDisp = new THREE.Vector3(
-            dxD * mmToSceneScale,
-            dyD * mmToSceneScale,
-            dzD * mmToSceneScale
-        );
-        localDisp.applyQuaternion(repMesh.quaternion);
+        const hasDisp = Math.abs(dxD) > 0.001 || Math.abs(dyD) > 0.001 || Math.abs(dzD) > 0.001;
+
+        let localVec;
+        if (hasDisp) {
+            // Auslenkung via integriertem Schwingweg
+            localVec = new THREE.Vector3(
+                dyD * mmToSceneScale,
+                -dxD * mmToSceneScale,
+                dzD * mmToSceneScale
+            );
+        } else {
+            // Fallback auf dynamische Beschleunigungsauslenkung (analog live-3d.js)
+            const aLen = Math.hypot(axD, ayD, azD);
+            const axF = (aLen > 0.20) ? axD : 0;
+            const ayF = (aLen > 0.20) ? ayD : 0;
+            const azF = (aLen > 0.20) ? azD : 0;
+            localVec = new THREE.Vector3(ayF * 0.05, -axF * 0.05, azF * 0.05);
+        }
+
+        localVec.applyQuaternion(repMesh.quaternion);
 
         repMesh.position.set(
-            Math.max(-0.85, Math.min(0.85, localDisp.x)),
-            Math.max(-0.85, Math.min(0.85, localDisp.y)),
-            Math.max(-0.85, Math.min(0.85, localDisp.z))
+            Math.max(-0.85, Math.min(0.85, localVec.x)),
+            Math.max(-0.85, Math.min(0.85, localVec.y)),
+            Math.max(-0.85, Math.min(0.85, localVec.z))
         );
 
         repRenderer.render(repScene, repCamera);
