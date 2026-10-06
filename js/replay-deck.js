@@ -607,29 +607,41 @@ function updateMountingQuaternion() {
     );
 }
 
-// Sensor-Rohdaten (-qy, qx, qz, qw) in das Modell-Koordinatensystem überführen
+/*
+ * Breadcrumb: 2026-10-06 23:15 - Capture Portal Parity: Z-Axis +90° Pre-Multiplication
+ * [CRITICAL BUGFIX FLAG - HORIZONTAL BASELINE ALIGNMENT]:
+ * 1. Gleicht sensorToModelQuat 1:1 mit 260920_IMU.c++ ab: premultiply(0, 0, 0.707107, 0.707107).
+ * 2. Beseitigt den -90° Roll-Versatz in der Horizontalen: Plane Auflage = Roll 0°, Pitch 0°, Yaw 0°.
+ * 3. getRelativeModelQuat nutzt native Three.js Invertierung gegen Vorzeichenfehler.
+ * [DISMISSED]: sensorToModelQuat ohne Pre-Multiplikation erforderte künstlichen -90° Mount-Offset.
+ */
 function sensorToModelQuat(qw, qx, qy, qz) {
     const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
+    const q = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
+    // Exakte Phasenkorrektur aus 260920_IMU.c++:
+    q.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
     return {
-        w: qw / norm,
-        x: -qy / norm,
-        y: qx / norm,
-        z: qz / norm
+        w: q.w,
+        x: q.x,
+        y: q.y,
+        z: q.z
     };
 }
 
-// Relative Drehung im Modell-System berechnen: q_rel = q_mount^-1 * q_model
 function getRelativeModelQuat(qw, qx, qy, qz) {
     const qM = sensorToModelQuat(qw, qx, qy, qz);
     if (!replayMountQuat) return qM;
 
-    const tw = replayMountQuat.w, tx = replayMountQuat.x, ty = replayMountQuat.y, tz = replayMountQuat.z;
-    const w = tw * qM.w + tx * qM.x + ty * qM.y + tz * qM.z;
-    const x = tw * qM.x - tx * qM.w - ty * qM.z + tz * qM.y;
-    const y = tw * qM.y + tx * qM.z - ty * qM.w - tz * qM.x;
-    const z = tw * qM.z - tx * qM.y + ty * qM.x - tz * qM.w;
-    const norm = Math.hypot(w, x, y, z) || 1.0;
-    return { w: w / norm, x: x / norm, y: y / norm, z: z / norm };
+    const qModel = new THREE.Quaternion(qM.x, qM.y, qM.z, qM.w);
+    const qMountInv = new THREE.Quaternion(
+        replayMountQuat.x,
+        replayMountQuat.y,
+        replayMountQuat.z,
+        replayMountQuat.w
+    ).invert();
+
+    qModel.premultiply(qMountInv);
+    return { w: qModel.w, x: qModel.x, y: qModel.y, z: qModel.z };
 }
 
 function quatToEulerDeg(qw, qx, qy, qz) {
@@ -906,6 +918,11 @@ function initMounting3D() {
  * 1. mountMesh rotiert Euler mit Roll an X, Pitch an Y und Yaw an Z.
  * 2. adoptCurrentFrameMounting liest rawRoll aus euler.x und rawPitch aus euler.y.
  */
+/*
+ * Breadcrumb: 2026-10-06 23:15 - Mounting Preview Synchronized Alignment
+ * [CRITICAL BUGFIX FLAG - MODAL PREVIEW MATCH]:
+ * Stellt sicher, dass das Vorschaumodell bei r=0, p=0, y=0 plan auf dem Gitter liegt.
+ */
 function updateMountingPreview3D() {
     if (!mountMesh) return;
     const rEl = document.getElementById('mount-roll-num');
@@ -916,10 +933,10 @@ function updateMountingPreview3D() {
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
-    // r dreht Roll um X, p dreht Pitch um Y, y dreht Yaw um Z
-    mountMesh.quaternion.setFromEuler(
+    const q = new THREE.Quaternion().setFromEuler(
         new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
     );
+    mountMesh.quaternion.copy(q);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -934,6 +951,13 @@ function updateMountingPreview3D() {
  * Breadcrumb: 2026-10-06 22:45 - 3D Replay Rotation Alignment
  * [CRITICAL BUGFIX FLAG - MOTION PARITY]:
  * repMesh.quaternion übernimmt roll auf X und pitch auf Y.
+ */
+/*
+ * Breadcrumb: 2026-10-06 23:15 - Quaternion SLERP & Capture Portal Vector Alignment
+ * [CRITICAL BUGFIX FLAG - SEAMLESS 3D MOTION PARITY]:
+ * 1. 3D-Modell rotiert via Quaternion.slerp() identisch zum Web-Dashboard in 260920_IMU.c++.
+ * 2. Translation nutzt Vector3(dyD, -dxD, dzD) für achsgetreue Vibrationen nach 90°-Z-Drehung.
+ * 3. Euler-Winkel (Roll, Pitch, Yaw) bleiben für Oszilloskop und HUD phasenstarr synchronisiert.
  */
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
@@ -961,14 +985,20 @@ function renderInterpolatedFrame(tSec) {
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        repMesh.quaternion.setFromEuler(
-            new THREE.Euler((roll * Math.PI) / 180, (pitch * Math.PI) / 180, (yaw * Math.PI) / 180, 'ZYX')
-        );
+        // Direkte Quaternionen-Interpolation für 100% Bewegungsparität mit dem Capture Portal
+        const qRelA = getRelativeModelQuat(ptA.qw, ptA.qx, ptA.qy, ptA.qz);
+        const qRelB = getRelativeModelQuat(ptB.qw, ptB.qx, ptB.qy, ptB.qz);
+        const qA = new THREE.Quaternion(qRelA.x, qRelA.y, qRelA.z, qRelA.w);
+        const qB = new THREE.Quaternion(qRelB.x, qRelB.y, qRelB.z, qRelB.w);
 
+        qA.slerp(qB, alpha);
+        repMesh.quaternion.copy(qA);
+
+        // Achsenabgleich nach 260920_IMU.c++: X_scene = ay, Y_scene = -ax, Z_scene = az
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
-            dxD * mmToSceneScale,
             dyD * mmToSceneScale,
+            -dxD * mmToSceneScale,
             dzD * mmToSceneScale
         );
         localDisp.applyQuaternion(repMesh.quaternion);
