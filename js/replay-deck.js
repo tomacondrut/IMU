@@ -29,11 +29,23 @@ let selectCurrentX = 0;
 let canvasListenersAttached = false;
 let isDayMergedMode = false;
 
+/*
+ * Breadcrumb: 2026-10-06 22:30 - Mounting 3D Instance Declarations & Container Observers
+ * [CRITICAL BUGFIX FLAG - ELIMINATE REFERENCE ERROR]:
+ * 1. mountScene, mountCamera, mountRenderer, mountMesh, mountControls global mit let deklariert.
+ * 2. Behebt sofortigen Scriptabbruch durch 'mountRenderer is not defined'.
+ */
 // Three.js Replay Instanzen
 let repScene, repCamera, repRenderer, repMesh;
 let repControls = null;
 let repAnimId3D = null;
 let repContainerObserver = null;
+
+// Three.js Einbaulagen-Modal Instanzen
+let mountScene = null, mountCamera = null, mountRenderer = null, mountMesh = null;
+let mountControls = null;
+let mountAnimId = null;
+let mountContainerObserver = null;
 
 
 
@@ -367,7 +379,6 @@ function setupReplayModelMesh(gltfScene) {
         }
     });
 
-    // Basisausrichtung des CAD-Exports: -90° um X legt Bodenplatte plan auf XZ-Gitter
     gltfScene.rotation.x = -Math.PI / 2;
     gltfScene.updateMatrixWorld(true);
 
@@ -388,6 +399,11 @@ function setupReplayModelMesh(gltfScene) {
     attachImuAxes(repMesh);
     repScene.add(repMesh);
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
+
+    // Falls das Einbaulagen-Modal bereits aktiv ist, direkt aktualisieren
+    if (mountScene && (!mountMesh || mountMesh.name !== 'imuCadGroup')) {
+        setupMountingModelMesh(rawGltfScene.clone(true));
+    }
 }
 
 function loadReplayGLBModel() {
@@ -441,7 +457,7 @@ function loadMountingGLBModel() {
         loader.load(
             candidatePaths[index],
             (gltf) => {
-                rawGltfScene = gltf.scene.clone(true);
+                if (!rawGltfScene) rawGltfScene = gltf.scene.clone(true);
                 setupMountingModelMesh(gltf.scene);
             },
             undefined,
@@ -721,10 +737,11 @@ function checkAndApplySavedMounting() {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
+            replayMountConfig = { roll: 48, pitch: -2, yaw: 0 };
         }
     } else {
-        replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
+        // Standard-Ruhelage am Kipprahmen (Kipprahmen waagrecht = 0.0° Anzeige)
+        replayMountConfig = { roll: 48, pitch: -2, yaw: 0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
@@ -745,16 +762,22 @@ function openMountingConfigModal() {
     });
 
     initMounting3D();
-    requestAnimationFrame(() => {
+    loadMountingGLBModel();
+
+    setTimeout(() => {
         resizeMounting3D();
         updateMountingPreview3D();
-    });
+    }, 50);
 }
 window.openMountingConfigModal = openMountingConfigModal;
 
 function closeMountingConfigModal() {
     const modal = document.getElementById('mounting-config-modal');
     if (modal) modal.classList.add('hidden');
+    if (mountAnimId) {
+        cancelAnimationFrame(mountAnimId);
+        mountAnimId = null;
+    }
 }
 window.closeMountingConfigModal = closeMountingConfigModal;
 
@@ -795,12 +818,17 @@ function adoptCurrentFrameMounting() {
     const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
     const pt = replayFilteredData[exactIndex];
 
-    const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll) : 0;
-    const p = (pt.rawPitch !== undefined) ? Math.round(pt.rawPitch) : 0;
-    const y = (pt.rawYaw !== undefined) ? Math.round(pt.rawYaw) : 0;
+    // Absolute physikalische Rohwinkel des BNO085 vor Einbaulagen-Abzug
+    const qModel = sensorToModelQuat(pt.qw, pt.qx, pt.qy, pt.qz);
+    const eulerRaw = new THREE.Euler().setFromQuaternion(qModel, 'ZYX');
+
+    const r = Math.round(eulerRaw.x * (180 / Math.PI) * 10) / 10;
+    const p = Math.round(eulerRaw.y * (180 / Math.PI) * 10) / 10;
+    const y = Math.round(eulerRaw.z * (180 / Math.PI) * 10) / 10;
 
     setMountingPreset(r, p, y);
 }
+window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
 
 function saveMountingConfig() {
     const rEl = document.getElementById('mount-roll-num');
@@ -853,7 +881,8 @@ function createMountingFallbackCube() {
 }
 
 function setupMountingModelMesh(gltfScene) {
-    if (mountMesh && mountScene) mountScene.remove(mountMesh);
+    if (!mountScene) return;
+    if (mountMesh) mountScene.remove(mountMesh);
 
     gltfScene.traverse((child) => {
         if (child.isMesh && child.material) {
@@ -861,7 +890,6 @@ function setupMountingModelMesh(gltfScene) {
         }
     });
 
-    // Identische Basisausrichtung für das Modal-Vorschaumodell
     gltfScene.rotation.x = -Math.PI / 2;
     gltfScene.updateMatrixWorld(true);
 
@@ -871,6 +899,7 @@ function setupMountingModelMesh(gltfScene) {
     const maxDim = Math.max(size.x, size.y, size.z);
 
     const group = new THREE.Group();
+    group.name = 'imuCadGroup';
     if (maxDim > 0) {
         const s = 1.8 / maxDim;
         gltfScene.scale.set(s, s, s);
@@ -887,8 +916,10 @@ function setupMountingModelMesh(gltfScene) {
 function initMounting3D() {
     const container = document.getElementById('mounting-canvas-container');
     if (!container) return;
+
     if (mountRenderer) {
         resizeMounting3D();
+        if (!mountAnimId) anim();
         return;
     }
 
@@ -902,7 +933,7 @@ function initMounting3D() {
     mountCamera.position.set(2.0, 1.5, 2.4);
     mountCamera.lookAt(0, 0, 0);
 
-    mountRenderer = new THREE.WebGLRenderer({ antialias: true });
+    mountRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     mountRenderer.setSize(w, h);
     mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(mountRenderer.domElement);
@@ -924,16 +955,19 @@ function initMounting3D() {
     mountScene.add(l2);
     mountScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
-    // Bodengitter direkt unter der Gehäusebasis positioniert
     const grid = new THREE.GridHelper(4, 10, 0x009B4C, 0xcbd5e1);
     grid.position.y = -0.22;
     mountScene.add(grid);
 
-    createMountingFallbackCube();
-    loadMountingGLBModel();
+    if (!mountContainerObserver && window.ResizeObserver) {
+        mountContainerObserver = new ResizeObserver(() => {
+            resizeMounting3D();
+        });
+        mountContainerObserver.observe(container);
+    }
 
     function anim() {
-        requestAnimationFrame(anim);
+        mountAnimId = requestAnimationFrame(anim);
         const c = document.getElementById('mounting-canvas-container');
         if (!c || c.clientWidth === 0) return;
         if (mountControls) mountControls.update();
