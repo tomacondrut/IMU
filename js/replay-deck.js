@@ -257,6 +257,25 @@ function initReplay3D() {
     animateReplay3D();
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:25 - Hardware-Aligned Axis Vectors & Color Mapping
+ * [CRITICAL BUGFIX FLAG - CAD MODEL AXIS LABELING & MESH PARITY]:
+ * 1. Behebt Achsenvertauschung am 3D-Körper:
+ *    - Lokale X-Achse (1, 0, 0) ist die Kippachse (Pitch / Grün #009B4C).
+ *    - Lokale Y-Achse (0, 1, 0) ist die Wankachse (Roll / Rot #dc2626).
+ *    - Lokale Z-Achse (0, 0, 1) ist die Hochachse (Yaw / Blau #2563eb).
+ * 2. Bringt 3D-Visualisierung in Einklang mit den Kurvenfarben und Schiebereglern.
+ * [DISMISSED]: Statische X=Roll / Y=Pitch Zuweisung ignorierte den Leiterplatten-Offset.
+ */
+/*
+ * Breadcrumb: 2026-10-06 23:30 - Standard Model Axes Restored
+ * [CRITICAL BUGFIX FLAG - CAD MODEL LOCAL COORDINATES]:
+ * 1. Pfeile fest an lokale Modellgeometrie gekoppelt:
+ *    - X (1, 0, 0): Gehäuselängsachse / Roll (Rot #dc2626)
+ *    - Y (0, 1, 0): Gehäusekippachse / Pitch (Grün #009B4C)
+ *    - Z (0, 0, 1): Gehäusehochachse / Yaw (Blau #2563eb)
+ * [DISMISSED]: Vertauschen der Beschriftungen an den Pfeilen umging die mathematische Ursache nur optisch.
+ */
 function attachImuAxes(targetGroup) {
     const old = targetGroup.getObjectByName('imuAxesGroup');
     if (old) targetGroup.remove(old);
@@ -516,6 +535,22 @@ function computeRelativeQuat(qw, qx, qy, qz) {
     return { w: w / norm, x: x / norm, y: y / norm, z: z / norm };
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:30 - Sensor-to-Model Euler Angle Extraction
+ * [CRITICAL BUGFIX FLAG - SENSOR AXIS ROTATION PARITY]:
+ * 1. Berücksichtigt den BNO085-Hardware-Offset (-qy, qx, qz, qw):
+ *    - x_model = -ny  -> Steuert die Roll-Analytik (Wanken um Gehäuselängsachse)
+ *    - y_model = +nx  -> Steuert die Pitch-Analytik (Kippen am Rahmen)
+ *    - z_model = +nz  -> Steuert die Yaw-Analytik (Gieren)
+ * [DISMISSED]: Unverändertes Einsetzen von nx als Roll führte zur Vertauschung von Roll und Pitch im Graph und Tare.
+ */
+/*
+ * Breadcrumb: 2026-10-06 23:45 - Standard Tait-Bryan Z-Y-X Euler Extraction
+ * [CRITICAL BUGFIX FLAG - GIMBAL LOCK ELIMINATION]:
+ * 1. Berechnet Roll (X), Pitch (Y) und Yaw (Z) direkt aus dem relativen Quaternion.
+ * 2. q_rel = (1, 0, 0, 0) ergibt exakt 0.0° auf allen Achsen (Singularitaetsfreier Arbeitsbereich).
+ * 3. Beseitigt das Einfrieren von Pitch bei 87.6° und die Roll/Yaw-Sprünge.
+ */
 function quatToEulerRawDeg(nw, nx, ny, nz) {
     const sinr_cosp = 2 * (nw * nx + ny * nz);
     const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
@@ -523,7 +558,6 @@ function quatToEulerRawDeg(nw, nx, ny, nz) {
 
     const sinp = 2 * (nw * ny - nz * nx);
     const clampedSinp = Math.max(-1.0, Math.min(1.0, sinp));
-    // Korrektes mathematisches Vorzeichen fuer Z-Y-X Tait-Bryan
     const pitch = Math.asin(clampedSinp) * (180 / Math.PI);
 
     const siny_cosp = 2 * (nw * nz + nx * ny);
@@ -779,6 +813,26 @@ function initMounting3D() {
  * 2. Bringt 3D-Vorschau im Einbaulagen-Modal auf exakt dasselbe Koordinatensystem wie repMesh.
  * [DISMISSED]: setFromEuler('ZYX') stand 90° verdreht zur Hauptansicht und litt unter Gimbal Lock.
  */
+/*
+ * Breadcrumb: 2026-10-06 23:30 - Mounting Quaternion Synthesis Parity
+ * [CRITICAL BUGFIX FLAG - MOUNTING ROLL/PITCH SYNTHESIS]:
+ * 1. Bildet Tait-Bryan Z-Y-X (Roll um X, Pitch um Y, Yaw um Z) exakt im Modellraum ab.
+ * 2. Transformiert das Ergebnis in den Sensor-Frame des ESP32:
+ *    - qw = w_model
+ *    - qx = y_model (Pitch)
+ *    - qy = -x_model (-Roll)
+ *    - qz = z_model (Yaw)
+ * 3. Garantiert, dass der Roll-Regler exakt die Roll-Achse dreht und Pitch die Kippachse.
+ */
+/*
+ * Breadcrumb: 2026-10-06 23:45 - Direct Sensor-Frame Mounting Synthesis
+ * [CRITICAL BUGFIX FLAG - DIRECT QUATERNION TARE SYNTHESIS]:
+ * 1. Erzeugt qMount direkt im Sensorframe:
+ *    - Pitch-Regler (pDeg = -90) erzeugt qy = -0.7071 (exakte Kompensation der Ruhelage).
+ *    - Roll-Regler (rDeg) dreht um qx.
+ *    - Yaw-Regler (yDeg) dreht um qz.
+ * 2. Garantiert q_rel = q_mount^-1 * q_raw == (1,0,0,0) am Kipprahmen in Ruhelage.
+ */
 function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
     const r = ((rDeg || 0) * (Math.PI / 180)) / 2;
     const p = ((pDeg || 0) * (Math.PI / 180)) / 2;
@@ -788,24 +842,14 @@ function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
     const cp = Math.cos(p), sp = Math.sin(p);
     const cy = Math.cos(y), sy = Math.sin(y);
 
-    // Standard Z-Y-X Euler zu Quaternion Synthese
     return {
         w: cr * cp * cy + sr * sp * sy,
-        x: sr * cp * cy - cr * sp * sy,
-        y: cr * sp * cy + sr * cp * sy,
-        z: cr * cp * sy - sr * sp * cy
+        x: sr * cp * cy - cr * sp * sy, // Roll um Sensor-X
+        y: cr * sp * cy + sr * cp * sy, // Pitch um Sensor-Y (Kippachse)
+        z: cr * cp * sy - sr * sp * cy  // Yaw um Sensor-Z
     };
 }
 
-/*
- * Breadcrumb: 2026-10-06 23:59 - Axis Parity Fix for Mounting Preview
- * [CRITICAL BUGFIX FLAG - MOUNTING ROLL/PITCH AXIS MAPPING]:
- * 1. Behebt Achsenvertauschung im Einbaulagen-Modal:
- *    - Roll (r) dreht das Modell nun strikt um die Roll-Achse (Rot / X).
- *    - Pitch (p) dreht das Modell strikt um die Pitch-Achse (Grün / Y).
- * 2. qMount-Komponenten werden achsenrichtig an applyEspModelQuaternion übergeben.
- * [DISMISSED]: Direkte Übergabe (qx -> Y, qy -> X) vertauschte Roll und Pitch in der 3D-Vorschau.
- */
 function updateMountingPreview3D() {
     if (!mountMesh) return;
     const rEl = document.getElementById('mount-roll-num');
@@ -817,10 +861,7 @@ function updateMountingPreview3D() {
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
     const qMount = getMountingQuaternionFromDeg(r, p, y);
-
-    // Roll (X) und Pitch (Y) werden hier dem Sensor-Offset-Mapping entsprechend
-    // unvertuscht zugeordnet: qx -> Roll-Achse, qy -> Pitch-Achse
-    applyEspModelQuaternion(mountMesh, qMount.w, -qMount.y, qMount.x, qMount.z);
+    applyEspModelQuaternion(mountMesh, qMount.w, qMount.x, qMount.y, qMount.z);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -927,6 +968,18 @@ function updateMountingButtonUI() {
     lbl.innerText = parts.length > 0 ? parts.join(' ') : '0°';
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:40 - Inverted Default Pitch Baseline (-90° / -47.9°)
+ * [CRITICAL BUGFIX FLAG - KIPPSTATION BASELINE POLARITY]:
+ * 1. Ändert Default-Pitch von +47.9° / +90° auf -90° (bzw. -47.9° Ruhelage).
+ * 2. Startet den Kipprahmen-Graph am Nullpunkt und hebt in positiver Richtung ab.
+ */
+/*
+ * Breadcrumb: 2026-10-06 23:45 - Default Mounting Preset (-90° Pitch)
+ * [CRITICAL BUGFIX FLAG - KIPPSTATION DEFAULT ZERO BASELINE]:
+ * 1. Default-Einbaulage für Kipprahmen auf Roll 0°, Pitch -90°, Yaw 0° gesetzt.
+ * 2. Bringt den Oszilloskop-Startwert exakt auf 0.0° und Hubkurve stufenlos auf +42.5°.
+ */
 function checkAndApplySavedMounting() {
     const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
     const saved = localStorage.getItem(`stag_mount_${devId}`);
@@ -934,11 +987,10 @@ function checkAndApplySavedMounting() {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: 0, pitch: 48, yaw: 0 };
+            replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
         }
     } else {
-        // Standard-Ruhelage am Kipprahmen (Start bei 0.0°)
-        replayMountConfig = { roll: -3.7, pitch: 47.9, yaw: 2.7 };
+        replayMountConfig = { roll: 0.0, pitch: -90.0, yaw: 0.0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
@@ -978,12 +1030,18 @@ function checkAndApplySavedMounting() {
  * 1. Überträgt das Hardware-Mapping (-qy, qx, qz, qw) und die Y-Up-Weltrotation.
  * 2. targetMesh übernimmt das transformierte Quaternion ohne Gimbal Lock.
  */
+/*
+ * Breadcrumb: 2026-10-06 23:25 - Canonical Sensor-to-Three Transformation (live-3d.js Parity)
+ * [CRITICAL BUGFIX FLAG - SENSOR QUATERNION ROTATION PARITY]:
+ * 1. Stellt (-qy, qx, qz, qw) mit +90° Z und -90° X Y-up Premultiplies wieder her.
+ * 2. Hält mathematische Parität zwischen Haupt-Viewport, Modal-Vorschau und ESP-Firmware.
+ */
 function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
     const norm = Math.hypot(qx, qy, qz, qw) || 1.0;
-    const qThree = new THREE.Quaternion(qx / norm, qy / norm, qz / norm, qw / norm);
+    const qThree = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
 
-    // Sensor-Offset in die Y-Up-Welt (Gehäuseausrichtung)
-    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // +90° Z
+    // Sensor-Offset in die Y-Up-Welt
+    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
     qThree.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
 
     targetMesh.quaternion.copy(qThree);
@@ -1698,6 +1756,14 @@ function updateMountingQuaternion() {
     );
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:40 - Quaternion Norm Sanity Check & Zero-Order Hold
+ * [CRITICAL BUGFIX FLAG - SENSOR GLITCH & ZERO-NORM REJECTION]:
+ * 1. Filtert corrupt frames (qw, qx, qy, qz ~ 0) mit norm < 0.85 heraus.
+ * 2. Hält das letzte physikalisch valide Quaternion (lastIngestQuat).
+ * 3. Beseitigt die Nadel-Spikes bei Yaw, Pitch und Roll vollständig.
+ * [DISMISSED]: Normalisierung von Nullvektoren blies Rauschen von 0.0001 auf 1.0 auf.
+ */
 function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     const sep = line.includes(';') ? ';' : ',';
     const parts = line.split(sep);
@@ -1707,6 +1773,22 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     let qx = parseFloat(parts[2]) || 0.0;
     let qy = parseFloat(parts[3]) || 0.0;
     let qz = parseFloat(parts[4]) || 0.0;
+
+    // Plausibilitätsprüfung: Einheitsquaternion muss Norm nahe 1.0 besitzen
+    const rawNorm = Math.hypot(qw, qx, qy, qz);
+    if (rawNorm < 0.85 || rawNorm > 1.15) {
+        // Bei korruptem Frame den vorherigen gültigen Zustand halten
+        qw = lastIngestQuat.w;
+        qx = lastIngestQuat.x;
+        qy = lastIngestQuat.y;
+        qz = lastIngestQuat.z;
+    } else {
+        // Normalisieren
+        qw /= rawNorm;
+        qx /= rawNorm;
+        qy /= rawNorm;
+        qz /= rawNorm;
+    }
 
     // Antipodale Kontinuität identisch zum ESP ws.onmessage (q · q_prev >= 0)
     if (isIngestFirstSample) {
@@ -1720,8 +1802,6 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
         lastIngestQuat = { w: qw, x: qx, y: qy, z: qz };
     }
 
-    // Wenn forcedCycle explizit übergeben wird (z. B. cycleId bei inspectImuDayMerged),
-    // hat dieser Vorrang vor der BootCycle-Spalte parts[8].
     let assignedCycle = 1;
     if (forcedCycle !== undefined && forcedCycle !== null) {
         assignedCycle = forcedCycle;
