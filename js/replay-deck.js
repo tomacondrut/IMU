@@ -581,11 +581,6 @@ function calculateAllDisplacements() {
  * [DISMISSED]: { roll: -90, pitch: 0, yaw: 0 } als Hardcoded-Default führte zu gekippter Voransicht.
  */
 
-// Globaler Status für Einbaulage (Standard: 0° = Gehäuse liegt plan mit Bodenplatte auf)
-let replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
-let replayMountQuat = null;
-
-let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
 
 // Three.js-basierte Euler-zu-Quaternion Konvertierung (Roll=X, Pitch=Y, Yaw=Z)
 function eulerDegToQuat(rDeg, pDeg, yDeg) {
@@ -600,10 +595,13 @@ function eulerDegToQuat(rDeg, pDeg, yDeg) {
 }
 
 function updateMountingQuaternion() {
-    replayMountQuat = eulerDegToQuat(
-        replayMountConfig.roll,
-        replayMountConfig.pitch,
-        replayMountConfig.yaw
+    replayMountQuat = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+            (replayMountConfig.roll * Math.PI) / 180,
+            (replayMountConfig.pitch * Math.PI) / 180,
+            (replayMountConfig.yaw * Math.PI) / 180,
+            'ZYX'
+        )
     );
 }
 
@@ -615,17 +613,19 @@ function updateMountingQuaternion() {
  * 3. getRelativeModelQuat nutzt native Three.js Invertierung gegen Vorzeichenfehler.
  * [DISMISSED]: sensorToModelQuat ohne Pre-Multiplikation erforderte künstlichen -90° Mount-Offset.
  */
+// Exakte Achstransformation aus 260920_IMU.c++
+// Globaler Status für Einbaulage (Standard: Roll -90° = Gehäuse liegt plan mit Bodenplatte auf)
+let replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
+let replayMountQuat = null;
+
+let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
+
+// Exakte Achstransformation aus 260920_IMU.c++
 function sensorToModelQuat(qw, qx, qy, qz) {
     const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
     const q = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
-    // Exakte Phasenkorrektur aus 260920_IMU.c++:
     q.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-    return {
-        w: q.w,
-        x: q.x,
-        y: q.y,
-        z: q.z
-    };
+    return q;
 }
 
 function getRelativeModelQuat(qw, qx, qy, qz) {
@@ -660,10 +660,22 @@ function quatToEulerDeg(qw, qx, qy, qz) {
 function recalculateAllEuler() {
     for (let i = 0; i < replayDataRaw.length; i++) {
         const item = replayDataRaw[i];
-        const e = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
-        item.roll = e.roll;
-        item.pitch = e.pitch;
-        item.yaw = e.yaw;
+        const qModel = sensorToModelQuat(item.qw, item.qx, item.qy, item.qz);
+        const euler = new THREE.Euler().setFromQuaternion(qModel, 'ZYX');
+
+        // Physische Rohwinkel des Sensors
+        const rawRoll = euler.x * (180 / Math.PI);
+        const rawPitch = euler.y * (180 / Math.PI);
+        const rawYaw = euler.z * (180 / Math.PI);
+
+        item.rawRoll = rawRoll;
+        item.rawPitch = rawPitch;
+        item.rawYaw = rawYaw;
+
+        // Relative Winkel für Oszilloskop-Graph und HUD (Ausgangslage getart = 0°)
+        item.roll = rawRoll - replayMountConfig.roll;
+        item.pitch = rawPitch - replayMountConfig.pitch;
+        item.yaw = rawYaw - replayMountConfig.yaw;
     }
 }
 
@@ -674,7 +686,7 @@ function updateMountingButtonUI() {
     if (replayMountConfig.roll !== 0) parts.push(`R:${replayMountConfig.roll}°`);
     if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
     if (replayMountConfig.yaw !== 0) parts.push(`Y:${replayMountConfig.yaw}°`);
-    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0° (Plan / Bodenplatte)';
+    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0°';
 }
 
 function checkAndApplySavedMounting() {
@@ -684,10 +696,10 @@ function checkAndApplySavedMounting() {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
+            replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
         }
     } else {
-        replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
+        replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
@@ -704,7 +716,7 @@ function openMountingConfigModal() {
     modal.classList.remove('hidden');
 
     ['roll', 'pitch', 'yaw'].forEach(axis => {
-        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : 0;
+        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : (axis === 'roll' ? -90 : 0);
         const numEl = document.getElementById(`mount-${axis}-num`);
         const rngEl = document.getElementById(`mount-${axis}-range`);
         if (numEl) numEl.value = val;
@@ -762,15 +774,11 @@ function adoptCurrentFrameMounting() {
     const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
     const pt = replayFilteredData[exactIndex];
 
-    const qM = sensorToModelQuat(pt.qw, pt.qx, pt.qy, pt.qz);
-    const q = new THREE.Quaternion(qM.x, qM.y, qM.z, qM.w);
-    const euler = new THREE.Euler().setFromQuaternion(q, 'ZYX');
+    const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll) : -90;
+    const p = (pt.rawPitch !== undefined) ? Math.round(pt.rawPitch) : 0;
+    const y = (pt.rawYaw !== undefined) ? Math.round(pt.rawYaw) : 0;
 
-    const rawRoll = Math.round(euler.x * (180 / Math.PI));
-    const rawPitch = Math.round(euler.y * (180 / Math.PI));
-    const rawYaw = Math.round(euler.z * (180 / Math.PI));
-
-    setMountingPreset(rawRoll, rawPitch, rawYaw);
+    setMountingPreset(r, p, y);
 }
 window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
 
@@ -779,7 +787,7 @@ function saveMountingConfig() {
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
@@ -929,14 +937,13 @@ function updateMountingPreview3D() {
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
-    const q = new THREE.Quaternion().setFromEuler(
+    mountMesh.quaternion.setFromEuler(
         new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
     );
-    mountMesh.quaternion.copy(q);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -959,6 +966,13 @@ function updateMountingPreview3D() {
  * 2. Translation nutzt Vector3(dyD, -dxD, dzD) für achsgetreue Vibrationen nach 90°-Z-Drehung.
  * 3. Euler-Winkel (Roll, Pitch, Yaw) bleiben für Oszilloskop und HUD phasenstarr synchronisiert.
  */
+/*
+ * Breadcrumb: 2026-10-06 23:45 - 3D Replay Ground-Alignment & Seamless Tilt Sync
+ * [CRITICAL BUGFIX FLAG - 3D REPLAY ORIENTATION MATCH]:
+ * 1. repMesh addiert die relative Bewegung auf die Einbaulage (Startet bei Roll -90° plan auf Bodenplatte).
+ * 2. Translation nutzt Vector3(dyD, -dxD, dzD) analog zu 260920_IMU.c++.
+ * 3. HUD und Graphen zeigen die relativen Ausschläge (Start bei 0.0°, Kippung z.B. +42.5°).
+ */
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -972,6 +986,7 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
+    // Relative Bewegungen für Graphen und HUD
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
@@ -985,16 +1000,16 @@ function renderInterpolatedFrame(tSec) {
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        // Direkte Quaternionen-Interpolation für 100% Bewegungsparität mit dem Capture Portal
-        const qRelA = getRelativeModelQuat(ptA.qw, ptA.qx, ptA.qy, ptA.qz);
-        const qRelB = getRelativeModelQuat(ptB.qw, ptB.qx, ptB.qy, ptB.qz);
-        const qA = new THREE.Quaternion(qRelA.x, qRelA.y, qRelA.z, qRelA.w);
-        const qB = new THREE.Quaternion(qRelB.x, qRelB.y, qRelB.z, qRelB.w);
+        // Absolute Orientierung im 3D-Raum: Ausgangslage (Roll -90°) + relatives Delta
+        const meshRoll = (replayMountConfig.roll + roll) * (Math.PI / 180);
+        const meshPitch = (replayMountConfig.pitch + pitch) * (Math.PI / 180);
+        const meshYaw = (replayMountConfig.yaw + yaw) * (Math.PI / 180);
 
-        qA.slerp(qB, alpha);
-        repMesh.quaternion.copy(qA);
+        repMesh.quaternion.setFromEuler(
+            new THREE.Euler(meshRoll, meshPitch, meshYaw, 'ZYX')
+        );
 
-        // Achsenabgleich nach 260920_IMU.c++: X_scene = ay, Y_scene = -ax, Z_scene = az
+        // Translations-Mapping aus 260920_IMU.c++ (X=ay, Y=-ax, Z=az)
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dyD * mmToSceneScale,
@@ -1015,7 +1030,7 @@ function renderInterpolatedFrame(tSec) {
     const hud = document.getElementById('replay-overlay-hud');
     if (hud) {
         hud.innerHTML =
-            `ANG: R:${roll.toFixed(1)}° P:${pitch.toFixed(1)}° Y:${yaw.toFixed(1)}°<br>` +
+            `ANG: R:${roll >= 0 ? '+' : ''}${roll.toFixed(1)}° P:${pitch >= 0 ? '+' : ''}${pitch.toFixed(1)}° Y:${yaw >= 0 ? '+' : ''}${yaw.toFixed(1)}°<br>` +
             `ACC: X:${axD.toFixed(2)} Y:${ayD.toFixed(2)} Z:${azD.toFixed(2)} m/s²<br>` +
             `HUB: X:${dxD.toFixed(2)} Y:${dyD.toFixed(2)} Z:${dzD.toFixed(2)} mm | Zyklus #${ptA.cycle}`;
     }
