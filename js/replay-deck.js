@@ -337,8 +337,17 @@ function createReplayFallbackCube() {
 
 }
 
+/*
+ * Breadcrumb: 2026-10-06 21:55 - Shared GLB Scene Cache for Instant Popup 3D Model
+ * [CRITICAL FEATURE PARITY - ZERO RELOAD LATENCY]:
+ * 1. Speichert geladene GLTF-Szene global in cachedGltfScene.
+ * 2. loadMountingGLBModel klont direkt die bereits geladene Szene (kein HTTP-Neuabruf).
+ */
+let cachedGltfScene = null;
+
 function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
+    cachedGltfScene = gltfScene;
 
     const box = new THREE.Box3().setFromObject(gltfScene);
     const center = box.getCenter(new THREE.Vector3());
@@ -359,7 +368,6 @@ function setupReplayModelMesh(gltfScene) {
     }
     group.add(gltfScene);
 
-    // Ersetze das doppelte Hinzufügen am Ende der Funktion:
     repMesh = group;
     attachImuAxes(repMesh);
     repScene.add(repMesh);
@@ -520,8 +528,29 @@ function calculateAllDisplacements() {
  * 4. 3D-Translation im Replay bildet exakt den berechneten Schwingweg (dx, dy, dz in mm) phasenstarr ab.
  */
 
-// Globaler Status für Einbaulage
-let replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+/*
+ * Breadcrumb: 2026-10-06 21:30 - Physical Mounting Roll -90° & GLB 3D Modal Loader
+ * [CRITICAL BUGFIX & FEATURE PARITY]:
+ * 1. Default-Einbaulage auf Roll: -90° (Kippstation) gesetzt; Null-Werte vor Fallback-Überschreibung geschützt.
+ * 2. loadMountingGLBModel() lädt das echte IMU.glb auch im Einbaulagen-Popup (mit Achsen-Visualisierung).
+ * 3. 3D-Orientierung in renderInterpolatedFrame() und updateMountingPreview3D() exakt an die 
+ *    ESP32-Transformation angepasst: qModel = (-qy, qx, qz, qw) premultiplied by 90° Z.
+ * 4. 3D-Translation koppelt direkt an den berechneten Schwingweg (dx, dy, dz in mm).
+ */
+
+// Globaler Status für Einbaulage (Standard: Roll -90° für Kippstation)
+/*
+ * Breadcrumb: 2026-10-06 22:05 - Unified Mounting Logic, GLB Popup & ESP32 Axis Alignment
+ * [CRITICAL BUGFIX FLAG - SENSOR TO MODEL COORDINATES & ZERO SYNTAX LEAK]:
+ * 1. sensorToModelQuat & getRelativeModelQuat implementiert (-qy, qx, qz, qw).
+ * 2. Kippbewegung liegt nun phasen- und farbgenau auf Roll (Rot / X).
+ * 3. SyntaxError durch doppelten setMountingPreset-Kopf restlos beseitigt.
+ * 4. loadMountingGLBModel nutzt cachedGltfScene für sofortige GLB-3D-Vorschau im Popup.
+ * 5. Translation in renderInterpolatedFrame phasenstarr an Schwingweg (dx, dy, dz) gekoppelt.
+ */
+
+// Globaler Status für Einbaulage (Standard: Roll -90° für Kippstation)
+let replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
 let replayMountQuat = null;
 
 // Three.js Instanzen für das Einbaulagen-Modal
@@ -550,28 +579,45 @@ function updateMountingQuaternion() {
     );
 }
 
-function quatToEulerDeg(qw, qx, qy, qz) {
-    let w = qw, x = qx, y = qy, z = qz;
+// Wandelt Sensor-Rohdaten gemäss ESP32 (-qy, qx, qz, qw) in das 3D-Modell-System um
+function sensorToModelQuat(qw, qx, qy, qz) {
+    const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
+    return {
+        w: qw / norm,
+        x: -qy / norm,
+        y: qx / norm,
+        z: qz / norm
+    };
+}
 
-    // Relative Drehung zur konfigurierten Einbaulage: q_rel = q_mount^-1 * q_raw
-    if (replayMountQuat) {
-        const tw = replayMountQuat.w, tx = replayMountQuat.x, ty = replayMountQuat.y, tz = replayMountQuat.z;
-        w = tw * qw + tx * qx + ty * qy + tz * qz;
-        x = tw * qx - tx * qw - ty * qz + tz * qy;
-        y = tw * qy + tx * qz - ty * qw - tz * qx;
-        z = tw * qz - tx * qy + ty * qx - tz * qw;
-    }
+// Relative Drehung im Modell-Koordinatensystem: q_rel = q_mount^-1 * q_model
+function getRelativeModelQuat(qw, qx, qy, qz) {
+    const qM = sensorToModelQuat(qw, qx, qy, qz);
+    if (!replayMountQuat) return qM;
 
+    const tw = replayMountQuat.w, tx = replayMountQuat.x, ty = replayMountQuat.y, tz = replayMountQuat.z;
+    const w = tw * qM.w + tx * qM.x + ty * qM.y + tz * qM.z;
+    const x = tw * qM.x - tx * qM.w - ty * qM.z + tz * qM.y;
+    const y = tw * qM.y + tx * qM.z - ty * qM.w - tz * qM.x;
+    const z = tw * qM.z - tx * qM.y + ty * qM.x - tz * qM.w;
     const norm = Math.hypot(w, x, y, z) || 1.0;
-    const nw = w / norm, nx = x / norm, ny = y / norm, nz = z / norm;
+    return { w: w / norm, x: x / norm, y: y / norm, z: z / norm };
+}
 
+function quatToEulerDeg(qw, qx, qy, qz) {
+    const qRel = getRelativeModelQuat(qw, qx, qy, qz);
+    const nw = qRel.w, nx = qRel.x, ny = qRel.y, nz = qRel.z;
+
+    // Roll: Rotation um Modell-X (Kippachse der Station)
     const sinr_cosp = 2 * (nw * nx + ny * nz);
     const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
     const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
 
+    // Pitch: Rotation um Modell-Y (Querachse)
     const sinp = 2 * (nw * ny - nz * nx);
     const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
 
+    // Yaw: Rotation um Modell-Z (Hochachse)
     const siny_cosp = 2 * (nw * nz + nx * ny);
     const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
     const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
@@ -593,8 +639,8 @@ function updateMountingButtonUI() {
     const lbl = document.getElementById('btn-replay-mounting-label');
     if (!lbl) return;
     const parts = [];
-    if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
     if (replayMountConfig.roll !== 0) parts.push(`R:${replayMountConfig.roll}°`);
+    if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
     if (replayMountConfig.yaw !== 0) parts.push(`Y:${replayMountConfig.yaw}°`);
     lbl.innerText = parts.length > 0 ? parts.join(' ') : '0° (Eben)';
 }
@@ -606,10 +652,10 @@ function checkAndApplySavedMounting() {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+            replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
         }
     } else {
-        replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+        replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
@@ -617,7 +663,7 @@ function checkAndApplySavedMounting() {
 }
 
 // ----------------------------------------------------------------------------
-// MODAL-STEUERUNG & 3D-VORSCHAU FÜR EINBAULAGE
+// MODAL-STEUERUNG & GLB-3D-VORSCHAU FÜR EINBAULAGE
 // ----------------------------------------------------------------------------
 
 function openMountingConfigModal() {
@@ -626,7 +672,7 @@ function openMountingConfigModal() {
     modal.classList.remove('hidden');
 
     ['roll', 'pitch', 'yaw'].forEach(axis => {
-        const val = replayMountConfig[axis] || 0;
+        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : 0;
         const numEl = document.getElementById(`mount-${axis}-num`);
         const rngEl = document.getElementById(`mount-${axis}-range`);
         if (numEl) numEl.value = val;
@@ -634,6 +680,7 @@ function openMountingConfigModal() {
     });
 
     initMounting3D();
+    setTimeout(resizeMounting3D, 50);
     updateMountingPreview3D();
 }
 window.openMountingConfigModal = openMountingConfigModal;
@@ -643,6 +690,19 @@ function closeMountingConfigModal() {
     if (modal) modal.classList.add('hidden');
 }
 window.closeMountingConfigModal = closeMountingConfigModal;
+
+function resizeMounting3D() {
+    const container = document.getElementById('mounting-canvas-container');
+    if (!container || !mountRenderer || !mountCamera) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w > 0 && h > 0) {
+        mountCamera.aspect = w / h;
+        mountCamera.updateProjectionMatrix();
+        mountRenderer.setSize(w, h);
+        if (mountScene) mountRenderer.render(mountScene, mountCamera);
+    }
+}
 
 function syncMountingInput(axis, val) {
     const num = Math.max(-180, Math.min(180, parseFloat(val) || 0));
@@ -668,9 +728,8 @@ function adoptCurrentFrameMounting() {
     const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
     const pt = replayFilteredData[exactIndex];
 
-    // Rohe Euler-Winkel ohne Offset ermitteln
-    const norm = Math.hypot(pt.qw, pt.qx, pt.qy, pt.qz) || 1.0;
-    const nw = pt.qw / norm, nx = pt.qx / norm, ny = pt.qy / norm, nz = pt.qz / norm;
+    const qM = sensorToModelQuat(pt.qw, pt.qx, pt.qy, pt.qz);
+    const nw = qM.w, nx = qM.x, ny = qM.y, nz = qM.z;
 
     const sinr_cosp = 2 * (nw * nx + ny * nz);
     const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
@@ -687,18 +746,13 @@ function adoptCurrentFrameMounting() {
 }
 window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
 
-/*
- * Breadcrumb: 2026-10-06 21:25 - Fix Falsy Pitch Zero Fallback in saveMountingConfig
- * [CRITICAL BUGFIX FLAG - PREVENT ZERO-DEGREE OVERWRITE]:
- * Explizite isNaN-Prüfung verhindert, dass Pitch 0° durch den Fallback || -90 überschrieben wird.
- */
 function saveMountingConfig() {
     const rEl = document.getElementById('mount-roll-num');
     const pEl = document.getElementById('mount-pitch-num');
     const yEl = document.getElementById('mount-yaw-num');
 
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
-    const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : -90;
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
+    const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
     replayMountConfig = { roll: r, pitch: p, yaw: y };
@@ -716,9 +770,99 @@ function saveMountingConfig() {
 }
 window.saveMountingConfig = saveMountingConfig;
 
+function createMountingFallbackCube() {
+    if (mountMesh && mountScene) mountScene.remove(mountMesh);
+    const group = new THREE.Group();
+
+    const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.2, roughness: 0.5 });
+    group.add(new THREE.Mesh(bodyGeo, bodyMat));
+
+    const topGeo = new THREE.BoxGeometry(1.68, 0.04, 0.82);
+    const topMat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.3 });
+    const topMesh = new THREE.Mesh(topGeo, topMat);
+    topMesh.position.y = 0.21;
+    group.add(topMesh);
+
+    const frontGeo = new THREE.BoxGeometry(0.5, 0.08, 0.04);
+    const frontMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0 });
+    const frontMesh = new THREE.Mesh(frontGeo, frontMat);
+    frontMesh.position.set(0, 0.1, 0.48);
+    group.add(frontMesh);
+
+    mountMesh = group;
+    attachImuAxes(mountMesh);
+    mountScene.add(mountMesh);
+    updateMountingPreview3D();
+}
+
+function setupMountingModelMesh(gltfScene) {
+    if (mountMesh && mountScene) mountScene.remove(mountMesh);
+
+    const box = new THREE.Box3().setFromObject(gltfScene);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+
+    gltfScene.traverse((child) => {
+        if (child.isMesh && child.material) {
+            child.material.side = THREE.DoubleSide;
+        }
+    });
+
+    const group = new THREE.Group();
+    if (maxDim > 0) {
+        const s = 1.8 / maxDim;
+        gltfScene.scale.set(s, s, s);
+        gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
+    }
+    group.add(gltfScene);
+
+    mountMesh = group;
+    attachImuAxes(mountMesh);
+    mountScene.add(mountMesh);
+    updateMountingPreview3D();
+}
+
+function loadMountingGLBModel() {
+    if (cachedGltfScene) {
+        setupMountingModelMesh(cachedGltfScene.clone(true));
+        return;
+    }
+
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createMountingFallbackCube();
+        return;
+    }
+
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            createMountingFallbackCube();
+            return;
+        }
+        loader.load(
+            candidatePaths[index],
+            (gltf) => {
+                cachedGltfScene = gltf.scene;
+                setupMountingModelMesh(gltf.scene);
+            },
+            undefined,
+            () => { tryLoad(index + 1); }
+        );
+    }
+    tryLoad(0);
+}
+
 function initMounting3D() {
     const container = document.getElementById('mounting-canvas-container');
-    if (!container || mountRenderer) return;
+    if (!container) return;
+    if (mountRenderer) {
+        resizeMounting3D();
+        return;
+    }
 
     const w = container.clientWidth || 280;
     const h = container.clientHeight || 224;
@@ -740,29 +884,20 @@ function initMounting3D() {
         mountControls.dampingFactor = 0.08;
     }
 
-    const l1 = new THREE.DirectionalLight(0xffffff, 1.2);
+    const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
     l1.position.set(5, 10, 7);
     mountScene.add(l1);
+    const l2 = new THREE.DirectionalLight(0xffffff, 0.7);
+    l2.position.set(-5, -5, -3);
+    mountScene.add(l2);
     mountScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
     const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
     grid.position.y = -0.5;
     mountScene.add(grid);
 
-    // Modellgruppe mit Achsen
-    mountMesh = new THREE.Group();
-    const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.2, roughness: 0.5 });
-    mountMesh.add(new THREE.Mesh(bodyGeo, bodyMat));
-
-    const topGeo = new THREE.BoxGeometry(1.68, 0.04, 0.82);
-    const topMat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.3 });
-    const topMesh = new THREE.Mesh(topGeo, topMat);
-    topMesh.position.y = 0.21;
-    mountMesh.add(topMesh);
-
-    attachImuAxes(mountMesh);
-    mountScene.add(mountMesh);
+    createMountingFallbackCube();
+    loadMountingGLBModel();
 
     function anim() {
         requestAnimationFrame(anim);
@@ -778,178 +913,29 @@ function initMounting3D() {
 
 function updateMountingPreview3D() {
     if (!mountMesh) return;
-    const r = parseFloat(document.getElementById('mount-roll-num')?.value) || 0;
-    const p = parseFloat(document.getElementById('mount-pitch-num')?.value) || 0;
-    const y = parseFloat(document.getElementById('mount-yaw-num')?.value) || 0;
+    const rEl = document.getElementById('mount-roll-num');
+    const pEl = document.getElementById('mount-pitch-num');
+    const yEl = document.getElementById('mount-yaw-num');
 
-    mountMesh.rotation.set(
-        (r * Math.PI) / 180,
-        (p * Math.PI) / 180,
-        (y * Math.PI) / 180,
-        'ZYX'
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : -90;
+    const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
+    const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
+
+    const qRot = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
     );
+    const qBase = new THREE.Quaternion(0, 0, 0.707107, 0.707107);
+    mountMesh.quaternion.copy(qRot).premultiply(qBase);
+
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
     }
 }
 
-function setReplayGraphMode(mode) {
-    replayGraphMode = mode;
-    const btnAcc = document.getElementById('btn-replay-mode-acc');
-    const btnEuler = document.getElementById('btn-replay-mode-euler');
+// ----------------------------------------------------------------------------
+// 3. FRAME-INTERPOLATION & 3D RENDERING (MIT SCHWINGWEG-TRANSLATION)
+// ----------------------------------------------------------------------------
 
-    const activeClass = 'px-2.5 py-1 text-[11px] font-bold rounded bg-stag-green text-white transition shadow-sm';
-    const inactiveClass = 'px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition';
-
-    if (mode === 'accel') {
-        if (btnAcc) btnAcc.className = activeClass;
-        if (btnEuler) btnEuler.className = inactiveClass;
-    } else {
-        if (btnEuler) btnEuler.className = activeClass;
-        if (btnAcc) btnAcc.className = inactiveClass;
-    }
-    drawReplayGraph(replayCurrentTimeSec);
-}
-
-function formatReplayTimestamp(tsStr, withSec = true) {
-    if (!tsStr) return '';
-    const d = new Date(tsStr);
-    if (!isNaN(d.getTime())) {
-        return d.toLocaleTimeString('de-CH', {
-            hour: '2-digit',
-            minute: '2-digit',
-            ...(withSec ? { second: '2-digit' } : {})
-        });
-    }
-    const m = String(tsStr).match(/(\d{2}:\d{2}(?::\d{2})?)/);
-    return m ? m[1] : String(tsStr);
-}
-
-/*
- * Breadcrumb: 2026-10-06 20:00 - Performance Fix: Bulk Calculation Outside CSV Parse Loop
- * [CRITICAL BUGFIX FLAG - ELIMINATE O(N^2) PARSE FREEZE]:
- * 1. recalculateAllEuler() and calculateAllDisplacements() moved strictly after loop completion.
- * 2. Prevents catastrophic main-thread locking on multi-thousand line telemetry files.
- */
-async function inspectImuFile(downloadUrl, fileName) {
-    const deck = document.getElementById('imu-replay-deck');
-    if (!deck) return;
-
-    isDayMergedMode = false;
-    if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
-
-    deck.classList.remove('hidden');
-    deck.scrollIntoView({ behavior: 'smooth' });
-
-    document.getElementById('replay-file-title').innerText = fileName;
-    document.getElementById('replay-meta-info').innerText = 'Lade Daten (Cache / Cloud)...';
-
-    initReplay3D();
-
-    try {
-        const text = await fetchCachedCsv(downloadUrl);
-        const lines = text.split('\n');
-        replayDataRaw = [];
-        const cyclesMap = new Set();
-
-        for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            const sep = line.includes(';') ? ';' : ',';
-            const parts = line.split(sep);
-            if (parts.length >= 8) {
-                const qw = parseFloat(parts[1]) || 1.0;
-                const qx = parseFloat(parts[2]) || 0.0;
-                const qy = parseFloat(parts[3]) || 0.0;
-                const qz = parseFloat(parts[4]) || 0.0;
-                const euler = quatToEulerDeg(qw, qx, qy, qz);
-
-                const item = {
-                    ts: parts[0],
-                    qw, qx, qy, qz,
-                    ax: parseFloat(parts[5]) || 0.0,
-                    ay: parseFloat(parts[6]) || 0.0,
-                    az: parseFloat(parts[7]) || 0.0,
-                    roll: euler.roll,
-                    pitch: euler.pitch,
-                    yaw: euler.yaw,
-                    cycle: parts[8] ? parseInt(parts[8], 10) : 0
-                };
-
-                replayDataRaw.push(item);
-                if (item.cycle) cyclesMap.add(item.cycle);
-            }
-        }
-
-        if (replayDataRaw.length === 0) {
-            document.getElementById('replay-meta-info').innerText = 'Datei enthält keine gültigen Messzeilen.';
-            return;
-        }
-
-        // [WICHTIG]: Erst nach vollständigem Einlesen genau EINMAL im RAM durchrechnen!
-        recalculateAllEuler();
-        calculateAllDisplacements();
-
-        const select = document.getElementById('replay-cycle-select');
-        select.innerHTML = '<option value="ALL">Alle Zyklen der Datei (' + replayDataRaw.length + ' Pkt)</option>';
-
-        Array.from(cyclesMap).sort((a, b) => a - b).forEach(c => {
-            const cyclePts = replayDataRaw.filter(d => d.cycle === c);
-            const count = cyclePts.length;
-            const firstPt = cyclePts[0];
-            const eventTime = (firstPt && firstPt.ts) ? formatReplayTimestamp(firstPt.ts) : '';
-            const timeLabel = eventTime ? `${eventTime} Uhr - ` : '';
-            select.innerHTML += `<option value="${c}">Aufweckzyklus #${c} (${timeLabel}${count} Samples)</option>`;
-        });
-
-        /*
-         * Breadcrumb: 2026-10-06 21:15 - Mount Configuration Hook in inspectImuFile
-         * [CRITICAL BUGFIX FLAG - ELIMINATE TARE REFERENCE ERROR]:
-         * Ersetzt den Aufruf der gelöschten Tare-Funktion durch checkAndApplySavedMounting().
-         */
-        // Ersetze checkAndApplySavedTare(); durch:
-        checkAndApplySavedMounting();
-        onReplayCycleSelect('ALL');
-    } catch (err) {
-        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
-    }
-}
-
-function onReplayCycleSelect(cycleVal) {
-    const select = document.getElementById('replay-cycle-select');
-    if (select) select.value = cycleVal;
-
-    if (cycleVal === 'ALL') {
-        replayFilteredData = replayDataRaw;
-    } else {
-        const cNum = parseInt(cycleVal, 10);
-        replayFilteredData = replayDataRaw.filter(d => d.cycle === cNum);
-    }
-
-    const total = replayFilteredData.length;
-    const durSec = total > 0 ? ((total - 1) * 0.1).toFixed(1) : "0.0";
-
-    document.getElementById('replay-meta-info').innerText =
-        `${total} Messpunkte geladen | Dauer: ${durSec} s | 100 ms Raster`;
-
-    const durLabel = document.getElementById('replay-duration-label');
-    if (durLabel) durLabel.innerText = durSec + ' s';
-    const totalTimeLabel = document.getElementById('replay-total-time-label');
-    if (totalTimeLabel) totalTimeLabel.innerText = durSec + 's';
-
-    if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
-
-    resetReplayZoom();
-    if (replayAccThreshold > 0 && typeof setReplayThreshold === 'function') {
-        setReplayThreshold(replayAccThreshold);
-    }
-}
-
-// ============================================================================
-// 3. FRAME-INTERPOLATION & 3D RENDERING
-// ============================================================================
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -971,30 +957,31 @@ function renderInterpolatedFrame(tSec) {
     const ayD = ptA.ay + (ptB.ay - ptA.ay) * alpha;
     const azD = ptA.az + (ptB.az - ptA.az) * alpha;
 
-    // Phasenstarre Interpolation des berechneten Schwingwegs (mm)
     const dxD = ((ptA.dx || 0) + ((ptB.dx || 0) - (ptA.dx || 0)) * alpha);
     const dyD = ((ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha);
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        // 1. Drehung: Relativ zur definierten Einbaulage
-        repMesh.rotation.set(
-            (roll * Math.PI) / 180,
-            (pitch * Math.PI) / 180,
-            (yaw * Math.PI) / 180,
-            'ZYX'
-        );
+        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
+        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
+        const qRawA = new THREE.Quaternion(ptA.qx / normA, ptA.qy / normA, ptA.qz / normA, ptA.qw / normA);
+        const qRawB = new THREE.Quaternion(ptB.qx / normB, ptB.qy / normB, ptB.qz / normB, ptB.qw / normB);
+        if (qRawA.dot(qRawB) < 0) qRawB.set(-qRawB.x, -qRawB.y, -qRawB.z, -qRawB.w);
+        qRawA.slerp(qRawB, alpha);
 
-        // 2. Translation: Bildet exakt die errechneten Millimeter-Ausschläge ab
-        // 10 mm Schwingweg = 0.25 Einheiten im 3D-Raum für deutliche optische Sichtbarkeit
+        const qRel = getRelativeModelQuat(qRawA.w, qRawA.x, qRawA.y, qRawA.z);
+
+        const qModel = new THREE.Quaternion(qRel.x, qRel.y, qRel.z, qRel.w);
+        qModel.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+        repMesh.quaternion.copy(qModel);
+
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dxD * mmToSceneScale,
             dyD * mmToSceneScale,
             dzD * mmToSceneScale
         );
-        // Translation richtet sich mit der Drehung des Gehäuses aus
-        localDisp.applyEuler(repMesh.rotation);
+        localDisp.applyQuaternion(repMesh.quaternion);
 
         repMesh.position.set(
             Math.max(-0.85, Math.min(0.85, localDisp.x)),
