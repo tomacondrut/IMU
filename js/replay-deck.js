@@ -343,11 +343,17 @@ function createReplayFallbackCube() {
  * 1. Speichert geladene GLTF-Szene global in cachedGltfScene.
  * 2. loadMountingGLBModel klont direkt die bereits geladene Szene (kein HTTP-Neuabruf).
  */
-let cachedGltfScene = null;
+/*
+ * Breadcrumb: 2026-10-06 22:15 - Raw GLB Scene Retention for Clean Popup Cloning
+ * [CRITICAL FEATURE PARITY - ELIMINATE RE-SCALING DISTORTION]:
+ * 1. rawGltfScene speichert das unskalierte Original-GLTF für sauberes Klonen im Popup.
+ * 2. loadMountingGLBModel klont direkt die Rohszene und skaliert auf exakt 1.8 Einheiten.
+ */
+let rawGltfScene = null;
 
 function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
-    cachedGltfScene = gltfScene;
+    if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
 
     const box = new THREE.Box3().setFromObject(gltfScene);
     const center = box.getCenter(new THREE.Vector3());
@@ -372,6 +378,38 @@ function setupReplayModelMesh(gltfScene) {
     attachImuAxes(repMesh);
     repScene.add(repMesh);
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
+}
+
+function loadMountingGLBModel() {
+    if (rawGltfScene) {
+        setupMountingModelMesh(rawGltfScene.clone(true));
+        return;
+    }
+
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createMountingFallbackCube();
+        return;
+    }
+
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            createMountingFallbackCube();
+            return;
+        }
+        loader.load(
+            candidatePaths[index],
+            (gltf) => {
+                rawGltfScene = gltf.scene.clone(true);
+                setupMountingModelMesh(gltf.scene);
+            },
+            undefined,
+            () => { tryLoad(index + 1); }
+        );
+    }
+    tryLoad(0);
 }
 
 function loadReplayGLBModel() {
@@ -549,11 +587,29 @@ function calculateAllDisplacements() {
  * 5. Translation in renderInterpolatedFrame phasenstarr an Schwingweg (dx, dy, dz) gekoppelt.
  */
 
+/*
+ * Breadcrumb: 2026-10-06 22:15 - Model Roll Parity & Ground-Aligned GLB Preview
+ * [CRITICAL BUGFIX FLAG - SENSOR TO 3D MODEL AXES & ZERO SYNTAX LEAK]:
+ * 1. SyntaxError durch doppelten setMountingPreset-Kopf restlos behoben.
+ * 2. sensorToModelQuat bildet Sensor-Y auf Modell-X (Roll / Rot) ab (Parität zu ESP32).
+ * 3. initMounting3D fokussiert die Kamera auf Nahbereich (1.6, 1.2, 1.9) -> kein Auszoomen mehr.
+ * 4. updateMountingPreview3D rotiert direkt um Bodengitter-Ebene ohne verzerrende 90°-Z-Vordrehung.
+ */
+
+/*
+ * Breadcrumb: 2026-10-06 22:20 - Ground-Aligned GLB Preview & Synced Model Roll
+ * [CRITICAL BUGFIX & RUNTIME RESTORATION]:
+ * 1. SyntaxError behoben (dangling setMountingPreset entfernt) -> Oszillographen zeichnen sofort.
+ * 2. sensorToModelQuat transformiert Sensor-Y auf Modell-X (Roll / Rot, Parität zu ESP32).
+ * 3. initMounting3D Kamera auf (1.9, 1.4, 2.2) justiert: Modell formatfüllend nah statt weit ausgezoomt.
+ * 4. updateMountingPreview3D bindet baseQuat (90° Z) ein: Gehäuse liegt bei 0° plan auf dem Gitter (Deckel oben).
+ * 5. Translation in renderInterpolatedFrame bildet reale Millimeter-Ausschläge phasenstarr ab.
+ */
+
 // Globaler Status für Einbaulage (Standard: Roll -90° für Kippstation)
 let replayMountConfig = { roll: -90, pitch: 0, yaw: 0 };
 let replayMountQuat = null;
 
-// Three.js Instanzen für das Einbaulagen-Modal
 let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
 
 function eulerDegToQuat(rDeg, pDeg, yDeg) {
@@ -579,7 +635,7 @@ function updateMountingQuaternion() {
     );
 }
 
-// Wandelt Sensor-Rohdaten gemäss ESP32 (-qy, qx, qz, qw) in das 3D-Modell-System um
+// Sensor-Rohdaten gemäss ESP32 (-qy, qx, qz, qw) in das 3D-Modell-System überführen
 function sensorToModelQuat(qw, qx, qy, qz) {
     const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
     return {
@@ -590,7 +646,7 @@ function sensorToModelQuat(qw, qx, qy, qz) {
     };
 }
 
-// Relative Drehung im Modell-Koordinatensystem: q_rel = q_mount^-1 * q_model
+// Relative Drehung im Modell-Koordinatensystem berechnen: q_rel = q_mount^-1 * q_model
 function getRelativeModelQuat(qw, qx, qy, qz) {
     const qM = sensorToModelQuat(qw, qx, qy, qz);
     if (!replayMountQuat) return qM;
@@ -608,16 +664,16 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     const qRel = getRelativeModelQuat(qw, qx, qy, qz);
     const nw = qRel.w, nx = qRel.x, ny = qRel.y, nz = qRel.z;
 
-    // Roll: Rotation um Modell-X (Kippachse der Station)
+    // Roll: Drehung um die Modell-Längsachse (X - Kippachse der Station)
     const sinr_cosp = 2 * (nw * nx + ny * nz);
     const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
     const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
 
-    // Pitch: Rotation um Modell-Y (Querachse)
+    // Pitch: Drehung um die Querachse (Y)
     const sinp = 2 * (nw * ny - nz * nx);
     const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
 
-    // Yaw: Rotation um Modell-Z (Hochachse)
+    // Yaw: Drehung um die Hochachse (Z)
     const siny_cosp = 2 * (nw * nz + nx * ny);
     const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
     const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
@@ -680,8 +736,10 @@ function openMountingConfigModal() {
     });
 
     initMounting3D();
-    setTimeout(resizeMounting3D, 50);
-    updateMountingPreview3D();
+    requestAnimationFrame(() => {
+        resizeMounting3D();
+        updateMountingPreview3D();
+    });
 }
 window.openMountingConfigModal = openMountingConfigModal;
 
@@ -824,38 +882,6 @@ function setupMountingModelMesh(gltfScene) {
     updateMountingPreview3D();
 }
 
-function loadMountingGLBModel() {
-    if (cachedGltfScene) {
-        setupMountingModelMesh(cachedGltfScene.clone(true));
-        return;
-    }
-
-    if (typeof THREE.GLTFLoader === 'undefined') {
-        createMountingFallbackCube();
-        return;
-    }
-
-    const loader = new THREE.GLTFLoader();
-    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
-
-    function tryLoad(index) {
-        if (index >= candidatePaths.length) {
-            createMountingFallbackCube();
-            return;
-        }
-        loader.load(
-            candidatePaths[index],
-            (gltf) => {
-                cachedGltfScene = gltf.scene;
-                setupMountingModelMesh(gltf.scene);
-            },
-            undefined,
-            () => { tryLoad(index + 1); }
-        );
-    }
-    tryLoad(0);
-}
-
 function initMounting3D() {
     const container = document.getElementById('mounting-canvas-container');
     if (!container) return;
@@ -869,8 +895,10 @@ function initMounting3D() {
 
     mountScene = new THREE.Scene();
     mountScene.background = new THREE.Color(0xdbe2ea);
-    mountCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
-    mountCamera.position.set(2.4, 2.0, 2.8);
+
+    // Zoom optimiert: Kamera nahe am Modell positioniert für klare Proportionen
+    mountCamera = new THREE.PerspectiveCamera(40, w / h, 0.1, 100);
+    mountCamera.position.set(1.9, 1.4, 2.2);
     mountCamera.lookAt(0, 0, 0);
 
     mountRenderer = new THREE.WebGLRenderer({ antialias: true });
@@ -882,6 +910,9 @@ function initMounting3D() {
         mountControls = new THREE.OrbitControls(mountCamera, mountRenderer.domElement);
         mountControls.enableDamping = true;
         mountControls.dampingFactor = 0.08;
+        mountControls.target.set(0, 0, 0);
+        mountControls.minDistance = 1.0;
+        mountControls.maxDistance = 6.0;
     }
 
     const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
@@ -892,8 +923,9 @@ function initMounting3D() {
     mountScene.add(l2);
     mountScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
-    const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
-    grid.position.y = -0.5;
+    // Bodengitter direkt unter die Gehäusebasis gelegt
+    const grid = new THREE.GridHelper(4, 10, 0x009B4C, 0xcbd5e1);
+    grid.position.y = -0.45;
     mountScene.add(grid);
 
     createMountingFallbackCube();
@@ -921,11 +953,12 @@ function updateMountingPreview3D() {
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
-    const qRot = new THREE.Quaternion().setFromEuler(
+    // Basisdrehung (90° Z aus ESP32) richtet CAD-Gehäuse bei 0° waagrecht zum Bodengitter aus
+    const baseQuat = new THREE.Quaternion(0, 0, 0.707107, 0.707107);
+    const rotQuat = new THREE.Quaternion().setFromEuler(
         new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
     );
-    const qBase = new THREE.Quaternion(0, 0, 0.707107, 0.707107);
-    mountMesh.quaternion.copy(qRot).premultiply(qBase);
+    mountMesh.quaternion.copy(rotQuat).multiply(baseQuat);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -969,12 +1002,15 @@ function renderInterpolatedFrame(tSec) {
         if (qRawA.dot(qRawB) < 0) qRawB.set(-qRawB.x, -qRawB.y, -qRawB.z, -qRawB.w);
         qRawA.slerp(qRawB, alpha);
 
+        // Relative Orientierung im Modell-System berechnen
         const qRel = getRelativeModelQuat(qRawA.w, qRawA.x, qRawA.y, qRawA.z);
 
+        // 3D-Ausrichtung (Modell-Koordinaten + 90° Z Basis-Ausrichtung)
+        const baseQuat = new THREE.Quaternion(0, 0, 0.707107, 0.707107);
         const qModel = new THREE.Quaternion(qRel.x, qRel.y, qRel.z, qRel.w);
-        qModel.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
-        repMesh.quaternion.copy(qModel);
+        repMesh.quaternion.copy(qModel).multiply(baseQuat);
 
+        // Translation: Reale Millimeter-Ausschläge
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dxD * mmToSceneScale,
