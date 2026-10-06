@@ -197,3 +197,14 @@ button, select, input[type="range"] {
 	-webkit-user-select: none;
 	user-select: none;
 }
+
+/*
+ * Breadcrumb: 2026-10-07 02:15 - HUD Overlay Layout Stabilization
+ * [CRITICAL BUGFIX FLAG - HUD FLICKER & RESIZE ELIMINATION]:
+ * 1. min-width & whitespace: pre fixieren die Box und verhindern Whitespace-Kollaps.
+ * 2. tabular-nums garantiert identische Glyphenbreiten für alle Ziffern.
+ */
+#replay-overlay-hud {
+	min-width: 250px;
+	font-variant-numeric: tabular-nums;
+}
