@@ -209,9 +209,9 @@
 
             <!-- Breadcrumb: 2026-10-06 20:45 - Replay Deck Vertical Stack & Per-Channel Filter Toggles -->
             <!-- [CRITICAL WORKFLOW & VIEWPORT REFACTORING]:
-         1. 3D-Fenster oben auf voller Breite mit Raum für Drehachsen-Visualisierung.
-         2. Alle 3 Oszillographen über 100% Breite mit dedizierten Kanal-Filtern (X, Y, Z / Roll, Pitch, Yaw).
-         3. Play- und Transport-Leiste sauber am unteren Rand positioniert. -->
+            1. 3D-Fenster oben auf voller Breite mit Raum für Drehachsen-Visualisierung.
+            2. Alle 3 Oszillographen über 100% Breite mit dedizierten Kanal-Filtern (X, Y, Z / Roll, Pitch, Yaw).
+            3. Play- und Transport-Leiste sauber am unteren Rand positioniert. -->
             <!-- 1. OBERE SEKTION: 3D-VIEWPORT (Volle Breite) -->
             <div class="w-full rounded-lg border border-slate-300 relative overflow-hidden h-64 sm:h-72 mb-4" style="background-color: #dbe2ea;">
                 <!-- Schnellauswahl Blickwinkel -->
@@ -233,16 +233,13 @@
             <div class="w-full flex flex-col bg-white p-3 sm:p-4 rounded-lg border border-slate-300 mb-4">
                 <!-- Obere Funktionsleiste: Tare, Schwelle, globaler Zoom-Reset, CSV-Export & Zeit -->
                 <div class="flex flex-wrap justify-between items-center gap-2 mb-3 pb-2 border-b border-slate-200">
+                    <!-- Breadcrumb: 2026-10-06 21:05 - Mounting Configuration Toolbar Trigger -->
                     <div class="flex items-center gap-1.5 flex-wrap">
-                        <button id="btn-replay-tare" onclick="setReplayTareCurrentFrame()"
-                                class="px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition flex items-center gap-1"
-                                title="Aktuellen Zeitpunkt als 0°-Grundstellung (Tare) definieren">
-                            🎯 Nulllage hier setzen
-                        </button>
-                        <button id="btn-replay-tare-reset" onclick="resetReplayTare()"
-                                class="hidden px-2 py-1 text-[11px] font-bold rounded bg-red-50 hover:bg-red-100 border border-red-300 text-red-700 transition"
-                                title="Auf Rohdaten zurücksetzen">
-                            ↺ Rohdaten
+                        <button id="btn-replay-mounting" type="button" onclick="openMountingConfigModal()"
+                                class="px-2.5 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition flex items-center gap-1.5 shadow-xs"
+                                title="Physikalische Einbaulage (Roll, Pitch, Yaw) konfigurieren">
+                            <span>📐 Einbaulage:</span>
+                            <span id="btn-replay-mounting-label" class="font-mono text-green-700 font-bold">Pitch -90°</span>
                         </button>
                     </div>
 
@@ -1200,15 +1197,15 @@
 
             <!-- RECHTER SIDEBAR: LEITFADEN FÜR SERVICEMITARBEITER & INTERAKTIVE SCHNELL-NAVIGATION -->
             <!-- Breadcrumb: 2026-10-04 17:55 - Shift Lock Guidance Strictly to Wi-Fi Fallback Step
-         [CRITICAL WORKFLOW REFACTORING - LEAN INGRESS & CONTEXTUAL UNLOCK]:
-         1. Ingress kept purely operational (Turn on AP -> Connect Wi-Fi -> Open browser).
-         2. Step 1 (LTE-Test) requires zero authentication and finishes standard path if OK.
-         3. Step 2 (Fallback when LTE missing):
-            - Schritt A: Deactivate LTE module for battery conservation.
-            - Schritt B: ONLY HERE the lock mechanism is introduced: explains position (top-right next to ONLINE),
-              password 'stag2026', and configuring local Wi-Fi / smartphone hotspot + periodic double-tap.
-            - Schritt C: Live check on GitHub Pages.
-            - Schritt D: Physical SD extraction. -->
+            [CRITICAL WORKFLOW REFACTORING - LEAN INGRESS & CONTEXTUAL UNLOCK]:
+            1. Ingress kept purely operational (Turn on AP -> Connect Wi-Fi -> Open browser).
+            2. Step 1 (LTE-Test) requires zero authentication and finishes standard path if OK.
+            3. Step 2 (Fallback when LTE missing):
+               - Schritt A: Deactivate LTE module for battery conservation.
+               - Schritt B: ONLY HERE the lock mechanism is introduced: explains position (top-right next to ONLINE),
+                 password 'stag2026', and configuring local Wi-Fi / smartphone hotspot + periodic double-tap.
+               - Schritt C: Live check on GitHub Pages.
+               - Schritt D: Physical SD extraction. -->
             <div class="w-full lg:w-96 bg-white rounded-2xl border border-slate-300 shadow-xl p-4 sm:p-5 flex flex-col justify-between max-h-[670px] overflow-y-auto">
                 <div class="space-y-3.5">
                     <!-- Header -->
@@ -1348,6 +1345,118 @@
                         class="w-full mt-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold py-2 rounded-lg text-xs transition">
                     Simulator schließen
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================================================== -->
+    <!-- MODAL: PHYSIKALISCHE EINBAULAGE (ROLL / PITCH / YAW MIT 3D-VORSCHAU)       -->
+    <!-- Breadcrumb: 2026-10-06 21:05 - 3D Mounting Orientation Configuration Modal -->
+    <!-- ========================================================================== -->
+    <div id="mounting-config-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden select-none">
+        <div class="card bg-white border border-slate-300 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div class="p-3.5 sm:p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div class="flex items-center gap-2">
+                    <span class="text-base text-green-700">📐</span>
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800">Physikalische Einbaulage konfigurieren</h3>
+                </div>
+                <button type="button" onclick="closeMountingConfigModal()" class="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-md transition">✕</button>
+            </div>
+
+            <div class="p-4 overflow-y-auto space-y-4">
+                <!-- Schnell-Presets -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-[11px] font-bold text-slate-500 font-mono uppercase">Voreinstellungen:</span>
+                    <button type="button" onclick="setMountingPreset(0, -90, 0)" class="px-2.5 py-1 text-xs font-bold rounded bg-stag-green text-white hover:opacity-90 shadow-sm transition">
+                        🏭 Kippstation (Pitch -90°)
+                    </button>
+                    <button type="button" onclick="setMountingPreset(0, 0, 0)" class="px-2.5 py-1 text-xs font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition">
+                        ➡️ Horizontal (0° / 0° / 0°)
+                    </button>
+                    <button type="button" onclick="adoptCurrentFrameMounting()" class="px-2.5 py-1 text-xs font-bold rounded bg-blue-50 hover:bg-blue-100 border border-blue-300 text-blue-700 transition" title="Übernimmt die Orientierung des aktuellen Replay-Cursors">
+                        🎯 Aus aktueller Lage
+                    </button>
+                </div>
+
+                <!-- 3D Preview Viewport & Regler nebeneinander -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- 3D Vorschau -->
+                    <div class="rounded-lg border border-slate-300 relative overflow-hidden h-56 bg-[#dbe2ea]">
+                        <div id="mounting-canvas-container" class="w-full h-full"></div>
+                        <div class="absolute bottom-2 left-2 bg-white/90 backdrop-blur-sm border border-slate-300 px-2 py-0.5 rounded text-[10px] font-mono text-slate-700 pointer-events-none">
+                            Einbaulage (Referenz)
+                        </div>
+                    </div>
+
+                    <!-- Schieberegler & Zahlenfelder -->
+                    <div class="space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs">
+                        <!-- Roll -->
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="font-bold text-red-600 font-mono">Roll-Winkel (X)</span>
+                                <div class="flex items-center gap-1">
+                                    <input type="number" id="mount-roll-num" min="-180" max="180" step="1" value="0"
+                                           oninput="syncMountingInput('roll', this.value)"
+                                           class="w-16 px-1.5 py-0.5 text-right font-mono font-bold border border-slate-300 rounded bg-white text-slate-800">
+                                    <span class="text-slate-500 font-mono">°</span>
+                                </div>
+                            </div>
+                            <input type="range" id="mount-roll-range" min="-180" max="180" step="1" value="0"
+                                   oninput="syncMountingInput('roll', this.value)"
+                                   class="w-full h-1.5 bg-slate-300 rounded cursor-pointer accent-red-600">
+                        </div>
+
+                        <!-- Pitch -->
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="font-bold text-emerald-600 font-mono">Pitch-Winkel (Y)</span>
+                                <div class="flex items-center gap-1">
+                                    <input type="number" id="mount-pitch-num" min="-180" max="180" step="1" value="-90"
+                                           oninput="syncMountingInput('pitch', this.value)"
+                                           class="w-16 px-1.5 py-0.5 text-right font-mono font-bold border border-slate-300 rounded bg-white text-slate-800">
+                                    <span class="text-slate-500 font-mono">°</span>
+                                </div>
+                            </div>
+                            <input type="range" id="mount-pitch-range" min="-180" max="180" step="1" value="-90"
+                                   oninput="syncMountingInput('pitch', this.value)"
+                                   class="w-full h-1.5 bg-slate-300 rounded cursor-pointer accent-emerald-600">
+                        </div>
+
+                        <!-- Yaw -->
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="font-bold text-purple-600 font-mono">Yaw-Winkel (Z)</span>
+                                <div class="flex items-center gap-1">
+                                    <input type="number" id="mount-yaw-num" min="-180" max="180" step="1" value="0"
+                                           oninput="syncMountingInput('yaw', this.value)"
+                                           class="w-16 px-1.5 py-0.5 text-right font-mono font-bold border border-slate-300 rounded bg-white text-slate-800">
+                                    <span class="text-slate-500 font-mono">°</span>
+                                </div>
+                            </div>
+                            <input type="range" id="mount-yaw-range" min="-180" max="180" step="1" value="0"
+                                   oninput="syncMountingInput('yaw', this.value)"
+                                   class="w-full h-1.5 bg-slate-300 rounded cursor-pointer accent-purple-600">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-blue-50 border border-blue-200 p-2.5 rounded text-[11px] text-blue-900 leading-relaxed">
+                    💡 <strong>Hinweis zur Einbaulage:</strong> Definiert die Ruhelage des Sensors im montierten Zustand (Standard: 90° nach unten geneigt am Kipprahmen). Die Winkel- und Schwingweg-Diagramme messen anschließend relativ zu dieser Grundausrichtung.
+                </div>
+            </div>
+
+            <div class="p-3 bg-slate-50 border-t border-slate-200 flex justify-between items-center gap-2">
+                <button type="button" onclick="setMountingPreset(0, -90, 0)" class="text-xs text-slate-500 hover:text-slate-700 underline font-semibold">
+                    Standard (Pitch -90°)
+                </button>
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="closeMountingConfigModal()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-xs text-slate-700 font-semibold transition">
+                        Abbrechen
+                    </button>
+                    <button type="button" onclick="saveMountingConfig()" class="px-4 py-1.5 bg-stag-green text-white font-bold rounded text-xs hover:opacity-90 shadow-sm transition">
+                        ✓ Einbaulage speichern
+                    </button>
+                </div>
             </div>
         </div>
     </div>
