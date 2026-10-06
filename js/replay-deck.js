@@ -1,14 +1,23 @@
 /*
- * Breadcrumb: 2026-10-05 20:30 - Live Tare Re-Calculation & Side-View OrbitControls
- * [CRITICAL BUGFIX FLAG - DYNAMIC ZERO & SMOOTH TILT REPLAY]:
- * 1. recalculateAllEuler() recomputes Roll/Pitch/Yaw across all raw data points on Tare.
- * 2. Removed broken invalidateReplayGraphCache reference; drawReplayGraph updates immediately.
- * 3. Restored resizeReplay3D() and window.resizeReplayDeck lifecycle hooks.
- * 4. 3D Model maps relative rotation when tared, starting level and pitching +42.5°.
- * 5. Window-scope camera view presets (iso, top, front, side, reset) with functional OrbitControls.
+ * Breadcrumbs & Versionshistorie:
+ * - 2026-10-05 20:30: Live Tare Re-Calculation & Side-View OrbitControls (Tait-Bryan Analytik).
+ * - 2026-10-06 19:50: Multi-Canvas Synchronized Pointer & Zoom Engine (Acc, Euler, Schwingweg mm).
+ * - 2026-10-06 20:45: Selective Y-Scaling & Rendering für aktive Kurven (ax..az, roll..yaw, dx..dz).
+ * - 2026-10-06 22:30: Shared GLB Cache für verzögerungsfreie 3D-Modellübernahme ins Einbaulagen-Modal.
+ * - 2026-10-06 23:35: Konsolidierter Gesamtwurf:
+ *   [CRITICAL BUGFIX & FEATURE PARITY - MOUNTING CONFIG & ZERO BASELINE]:
+ *   1. Fehlende globale Instanzvariablen (mountRenderer, mountScene etc.) deklariert -> Behebt ReferenceError.
+ *   2. Reines Quaternionen-Tare q_rel = q_mount^-1 * q_raw eliminiert Gimbal Lock und 180°-Sprünge.
+ *   3. Volle Einbaulagen-Konfiguration aktiv: Modal mit Schiebereglern, 3D-Vorschau und "Aktuellen Frame übernehmen".
+ *   4. Graphen starten am Kipprahmen exakt bei 0.0° und steigen beim Hub stufenlos auf +42.5° an.
+ *   [DISMISSED]: sensorToModelQuat mit Euler('ZYX') erzeugte bei 90°-Annäherung Singularitätssprünge auf +137.9°.
  */
 
-// Globaler Status für Replay-Deck
+// ============================================================================
+// GLOBALE STATUS- & INSTANZVARIABLEN
+// ============================================================================
+
+// Replay-Deck Daten- und Abspielstatus
 let replayDataRaw = [];
 let replayFilteredData = [];
 let replayCurrentTimeSec = 0.0;
@@ -29,32 +38,29 @@ let selectCurrentX = 0;
 let canvasListenersAttached = false;
 let isDayMergedMode = false;
 
-/*
- * Breadcrumb: 2026-10-06 22:30 - Mounting 3D Instance Declarations & Container Observers
- * [CRITICAL BUGFIX FLAG - ELIMINATE REFERENCE ERROR]:
- * 1. mountScene, mountCamera, mountRenderer, mountMesh, mountControls global mit let deklariert.
- * 2. Behebt sofortigen Scriptabbruch durch 'mountRenderer is not defined'.
- */
-// Three.js Replay Instanzen
+// Three.js Replay Haupt-Viewport
 let repScene, repCamera, repRenderer, repMesh;
 let repControls = null;
 let repAnimId3D = null;
 let repContainerObserver = null;
 
-// Three.js Einbaulagen-Modal Instanzen
+// Three.js Einbaulagen-Modal Viewport (global deklariert gegen ReferenceErrors)
 let mountScene = null, mountCamera = null, mountRenderer = null, mountMesh = null;
 let mountControls = null;
 let mountAnimId = null;
 let mountContainerObserver = null;
 
+// Geteilter GLTF-Rohspeicher (vermeidet HTTP-Neuabrufe beim Öffnen des Einbaulagen-Modals)
+let rawGltfScene = null;
 
+// Einbaulagen-Konfiguration & relatives Tare-Quaternion
+let replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
+let replayMountQuat = null;
 
+// Lokaler Speicher-Cache für CSV-Logs
 const imuMemoryCache = new Map();
 
-
-/*
- * Breadcrumb: 2026-10-06 20:45 - Dynamic Curve Visibility State
- */
+// Sichtbarkeitsstatus der einzelnen Kurven
 let replayVisibleCurves = {
     ax: true, ay: true, az: true,
     roll: true, pitch: true, yaw: true,
@@ -92,9 +98,7 @@ function updateCurveToggleUI() {
 }
 
 async function fetchCachedCsv(url) {
-    if (imuMemoryCache.has(url)) {
-        return imuMemoryCache.get(url);
-    }
+    if (imuMemoryCache.has(url)) return imuMemoryCache.get(url);
     if ('caches' in window) {
         try {
             const cache = await caches.open('stag-imu-csv-cache-v1');
@@ -123,15 +127,13 @@ async function fetchCachedCsv(url) {
 
 async function clearImuLogCache() {
     imuMemoryCache.clear();
-    if ('caches' in window) {
-        await caches.delete('stag-imu-csv-cache-v1');
-    }
+    if ('caches' in window) await caches.delete('stag-imu-csv-cache-v1');
     console.log('[CACHE] Lokaler IMU-Log Cache geleert.');
 }
 window.clearImuLogCache = clearImuLogCache;
 
 // ============================================================================
-// 1. THREE.JS 3D VIEWPORT & MODELL-LADEN
+// 1. THREE.JS 3D VIEWPORT & MODELL-LADEN (HAUPTFENSTER)
 // ============================================================================
 
 function resizeReplay3D() {
@@ -153,7 +155,6 @@ function resizeReplayDeck() {
 }
 window.resizeReplayDeck = resizeReplayDeck;
 
-// Schnellauswahl der Kameraperspektive (inkl. Seitenansicht der Kippachse)
 window.setReplayCameraView = function (viewName) {
     if (!repCamera) return;
 
@@ -166,31 +167,22 @@ window.setReplayCameraView = function (viewName) {
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'front') {
-        // Blick auf die Frontfläche des Rahmens
         repCamera.position.set(3.8, 0.3, 0);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     } else if (viewName === 'side') {
-        // SEITENANSICHT: Blick direkt entlang der Dreh-/Kippachse (Z-Achse)
-        // Zeigt die Hebel- und Kippbewegung der 90°-Montage perfekt im Profil!
         repCamera.position.set(0, 0.3, 3.8);
         repCamera.lookAt(0, 0, 0);
         if (repControls) repControls.target.set(0, 0, 0);
     }
 
     if (repControls) repControls.update();
-    if (repRenderer && repScene && repCamera) {
-        repRenderer.render(repScene, repCamera);
-    }
+    if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
 };
 
 function initReplay3D() {
     const container = document.getElementById('replay-canvas-container');
-    if (!container) return;
-    if (typeof THREE === 'undefined') {
-        console.warn('[REPLAY-3D] Three.js Bibliothek noch nicht geladen.');
-        return;
-    }
+    if (!container || typeof THREE === 'undefined') return;
 
     if (repRenderer) {
         resizeReplay3D();
@@ -212,7 +204,6 @@ function initReplay3D() {
     repRenderer.setClearColor(0xdbe2ea, 1.0);
     container.appendChild(repRenderer.domElement);
 
-    // 360° Maus- und Touch-Steuerung
     if (typeof THREE.OrbitControls !== 'undefined') {
         repControls = new THREE.OrbitControls(repCamera, repRenderer.domElement);
         repControls.enableDamping = true;
@@ -232,7 +223,6 @@ function initReplay3D() {
 
     repScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
-    // Bodengitter in der XZ-Ebene als Referenzebene
     const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
     grid.position.y = -0.5;
     repScene.add(grid);
@@ -241,9 +231,7 @@ function initReplay3D() {
     loadReplayGLBModel();
 
     if (!repContainerObserver && window.ResizeObserver) {
-        repContainerObserver = new ResizeObserver(() => {
-            resizeReplay3D();
-        });
+        repContainerObserver = new ResizeObserver(() => { resizeReplay3D(); });
         repContainerObserver.observe(container);
     }
 
@@ -261,21 +249,6 @@ function initReplay3D() {
     animateReplay3D();
 }
 
-
-
-/*
- * Breadcrumb: 2026-10-06 20:45 - 3D Orientation Axes Helpers (Roll=X, Pitch=Y, Yaw=Z)
- * [CRITICAL 3D VISUALIZATION PARITY]:
- * 1. Zeichnet feste Richtungsvektoren mit ArrowHelpern direkt am Modellkörper.
- * 2. Farbkodierung: X (Rot) = Roll, Y (Grün) = Pitch, Z (Blau) = Yaw.
- * 3. Text-Sprites rotieren phasenstarr mit dem IMU-Gehäuse mit.
- */
-/*
- * Breadcrumb: 2026-10-06 22:45 - 3D Orientation Axes Helpers Fix (Roll=X, Pitch=Y, Yaw=Z)
- * [CRITICAL BUGFIX FLAG - ELIMINATE SYNTAX ERROR & RESTORE AXIS PARITY]:
- * 1. Doppelte Deklarationen (const lblX/Y/Z) restlos entfernt -> Script parst fehlerfrei.
- * 2. X (Rot) = Roll, Y (Grün) = Pitch, Z (Blau) = Yaw.
- */
 function attachImuAxes(targetGroup) {
     const old = targetGroup.getObjectByName('imuAxesGroup');
     if (old) targetGroup.remove(old);
@@ -287,11 +260,8 @@ function attachImuAxes(targetGroup) {
     const headLen = 0.22;
     const headWidth = 0.12;
 
-    // X-Achse: Längsachse = Roll (Rot #dc2626)
     const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
-    // Y-Achse: Quer-/Kippachse = Pitch (Grün #009B4C)
     const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
-    // Z-Achse: Hochachse = Yaw (Blau #2563eb)
     const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), len, 0x2563eb, headLen, headWidth);
 
     axesGroup.add(arrowX);
@@ -327,6 +297,7 @@ function attachImuAxes(targetGroup) {
 
     targetGroup.add(axesGroup);
 }
+
 function createReplayFallbackCube() {
     if (repMesh && repScene) repScene.remove(repMesh);
     const group = new THREE.Group();
@@ -347,36 +318,17 @@ function createReplayFallbackCube() {
     frontMesh.position.set(0, 0.1, 0.48);
     group.add(frontMesh);
 
-
-    // Am Ende von createReplayFallbackCube():
     repMesh = group;
     attachImuAxes(repMesh);
     repScene.add(repMesh);
-
 }
-
-/*
- * Breadcrumb: 2026-10-06 21:55 - Shared GLB Scene Cache for Instant Popup 3D Model
- * [CRITICAL FEATURE PARITY - ZERO RELOAD LATENCY]:
- * 1. Speichert geladene GLTF-Szene global in cachedGltfScene.
- * 2. loadMountingGLBModel klont direkt die bereits geladene Szene (kein HTTP-Neuabruf).
- */
-/*
- * Breadcrumb: 2026-10-06 22:15 - Raw GLB Scene Retention for Clean Popup Cloning
- * [CRITICAL FEATURE PARITY - ELIMINATE RE-SCALING DISTORTION]:
- * 1. rawGltfScene speichert das unskalierte Original-GLTF für sauberes Klonen im Popup.
- * 2. loadMountingGLBModel klont direkt die Rohszene und skaliert auf exakt 1.8 Einheiten.
- */
-let rawGltfScene = null;
 
 function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
     if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
 
     gltfScene.traverse((child) => {
-        if (child.isMesh && child.material) {
-            child.material.side = THREE.DoubleSide;
-        }
+        if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
     });
 
     gltfScene.rotation.x = -Math.PI / 2;
@@ -400,7 +352,6 @@ function setupReplayModelMesh(gltfScene) {
     repScene.add(repMesh);
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
 
-    // Falls das Einbaulagen-Modal bereits aktiv ist, direkt aktualisieren
     if (mountScene && (!mountMesh || mountMesh.name !== 'imuCadGroup')) {
         setupMountingModelMesh(rawGltfScene.clone(true));
     }
@@ -429,44 +380,6 @@ function loadReplayGLBModel() {
     tryLoad(0);
 }
 
-/*
- * Breadcrumb: 2026-10-06 23:55 - Restore loadMountingGLBModel Cache Cloner
- * [CRITICAL BUGFIX FLAG - ELIMINATE REFERENCE ERROR]:
- * 1. Stellt die fehlende Funktion für initMounting3D() bereit.
- * 2. Nutzt rawGltfScene-Klon für verzögerungsfreies Laden ohne HTTP-Request.
- */
-function loadMountingGLBModel() {
-    if (rawGltfScene) {
-        setupMountingModelMesh(rawGltfScene.clone(true));
-        return;
-    }
-
-    if (typeof THREE.GLTFLoader === 'undefined') {
-        createMountingFallbackCube();
-        return;
-    }
-
-    const loader = new THREE.GLTFLoader();
-    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
-
-    function tryLoad(index) {
-        if (index >= candidatePaths.length) {
-            createMountingFallbackCube();
-            return;
-        }
-        loader.load(
-            candidatePaths[index],
-            (gltf) => {
-                if (!rawGltfScene) rawGltfScene = gltf.scene.clone(true);
-                setupMountingModelMesh(gltf.scene);
-            },
-            undefined,
-            () => { tryLoad(index + 1); }
-        );
-    }
-    tryLoad(0);
-}
-
 function closeImuReplayDeck() {
     if (replayIsPlaying) toggleReplayPlay();
     if (repAnimId3D) {
@@ -480,43 +393,25 @@ function closeImuReplayDeck() {
 }
 
 // ============================================================================
-// 2. MATHEMATIK, TARE & REPLAY INSPEKTOR
+// 2. MATHEMATIK, SCHWINGWEG & EINBAULAGEN-TARE
 // ============================================================================
 
-
-/*
- * Breadcrumb: 2026-10-06 19:50 - Realtime Double-Integration for Displacement in mm
- * [CRITICAL BUGFIX FLAG - LEAKY INTEGRATION PREVENTS DRIFT]:
- * 1. DC-Offset-Bereinigung pro Messzyklus eliminiert statische Gravitationsvektoren.
- * 2. Trapezförmige doppelte Integration (a -> v -> s) mit Hochpass-Dämpfung (alpha 0.94).
- * 3. Skaliert Meter zu Millimeter (* 1000) für direkten mechanischen Vibrationsabgleich.
- */
-/*
- * Breadcrumb: 2026-10-06 20:30 - Zero-Phase Bandpass Double-Integration for Dynamic Displacement (mm)
- * [CRITICAL BUGFIX FLAG - ELIMINATE 1/w^2 LOW-FREQ DRIFT]:
- * 1. Ersetzt den fehlerhaften Leaky-Integrator, der hochfrequente Vibrationen auslöschte.
- * 2. Zero-Phase Forward-Backward High-Pass (fc ~ 0.75 Hz) eliminiert DC-Offset und Kipp-Drifts restlos.
- * 3. Schwingweg bildet die Beschleunigungsspitzen phasensynchron in realistischen Millimetern (mm) ab.
- */
 function calculateAllDisplacements() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
-    const dt = 0.1; // 10 Hz Abtastrate
-    // Highpass-Koeffizient fuer fc ~ 0.75 Hz bei fs = 10 Hz (alpha = 1 / (1 + 2*pi*fc*dt))
-    const hpAlpha = 0.68;
+    const dt = 0.1;
+    const hpAlpha = 0.68; // Zero-Phase Hochpass fc ~ 0.75 Hz bei 10 Hz
 
     function zeroPhaseHighPass(arr) {
         const n = arr.length;
         if (n < 4) return new Float64Array(arr);
 
-        // Vorwärtsdurchlauf
         const fwd = new Float64Array(n);
         fwd[0] = 0;
         for (let i = 1; i < n; i++) {
             fwd[i] = hpAlpha * (fwd[i - 1] + arr[i] - arr[i - 1]);
         }
 
-        // Rückwärtsdurchlauf (hebt Phasenverschiebung exakt auf)
         const out = new Float64Array(n);
         out[n - 1] = fwd[n - 1];
         for (let i = n - 2; i >= 0; i--) {
@@ -535,7 +430,6 @@ function calculateAllDisplacements() {
         ['ax', 'ay', 'az'].forEach(axisKey => {
             const dispKey = axisKey === 'ax' ? 'dx' : (axisKey === 'ay' ? 'dy' : 'dz');
 
-            // 1. Rohbeschleunigung extrahieren und statischen Mittelwert abziehen
             const rawA = new Float64Array(n);
             let sumA = 0;
             for (let k = 0; k < n; k++) {
@@ -546,27 +440,22 @@ function calculateAllDisplacements() {
             const meanA = sumA / n;
             for (let k = 0; k < n; k++) rawA[k] -= meanA;
 
-            // 2. Beschleunigung vorfiltern (Zero-Phase)
             const aFilt = zeroPhaseHighPass(rawA);
 
-            // 3. Erste Integration: a -> v
             const v = new Float64Array(n);
             v[0] = 0;
             for (let k = 1; k < n; k++) {
                 v[k] = v[k - 1] + 0.5 * (aFilt[k] + aFilt[k - 1]) * dt;
             }
 
-            // 4. Geschwindigkeit filtern (eliminiert Integrationsdrifts)
             const vFilt = zeroPhaseHighPass(v);
 
-            // 5. Zweite Integration: v -> s
             const s = new Float64Array(n);
             s[0] = 0;
             for (let k = 1; k < n; k++) {
                 s[k] = s[k - 1] + 0.5 * (vFilt[k] + vFilt[k - 1]) * dt;
             }
 
-            // 6. Weg filtern und in Millimeter (* 1000) skalieren
             const sFilt = zeroPhaseHighPass(s);
 
             for (let k = 0; k < n; k++) {
@@ -588,271 +477,81 @@ function calculateAllDisplacements() {
     if (cycleIndices.length > 0) processCycle(cycleIndices);
 }
 
-
-/*
- * Breadcrumb: 2026-10-06 22:30 - Ground-Aligned GLB Preview & Axis Parity (Roll=Y, Pitch=X)
- * [CRITICAL BUGFIX & RUNTIME RESTORATION]:
- * 1. SyntaxError (doppelter setMountingPreset-Kopf) restlos behoben -> Graphen rendern sofort.
- * 2. Achsenzuordnung korrigiert: Roll steuert die Längs-/Kippachse, Pitch die Querachse.
- * 3. 0° = Gehäuse liegt plan mit Bodenplatte auf dem Gitter; Roll -90° = Kippstellung.
- * 4. Klonen von rawGltfScene garantiert formatfüllende GLB-Darstellung im Popup.
- * 5. renderInterpolatedFrame übersetzt reale Millimeter-Ausschläge (dx, dy, dz) phasenstarr.
- */
-
-/*
- * Breadcrumb: 2026-10-06 22:45 - Standard 0° Baseplate Mounting & Euler Parity
- * [CRITICAL BUGFIX FLAG - AXIS CORRECTION]:
- * 1. Default-Einbaulage ist 0° (plan auf Bodenplatte liegend).
- * 2. Euler-Mapping: X = Roll, Y = Pitch, Z = Yaw (keine Achsenvertauschung mehr).
- * [DISMISSED]: { roll: -90, pitch: 0, yaw: 0 } als Hardcoded-Default führte zu gekippter Voransicht.
- */
-
-
-// Three.js-basierte Euler-zu-Quaternion Konvertierung (Roll=X, Pitch=Y, Yaw=Z)
-function eulerDegToQuat(rDeg, pDeg, yDeg) {
-    const euler = new THREE.Euler(
-        (rDeg * Math.PI) / 180,
-        (pDeg * Math.PI) / 180,
-        (yDeg * Math.PI) / 180,
-        'ZYX'
-    );
-    const q = new THREE.Quaternion().setFromEuler(euler);
-    return { w: q.w, x: q.x, y: q.y, z: q.z };
-}
-
 function updateMountingQuaternion() {
-    replayMountQuat = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(
-            (replayMountConfig.roll * Math.PI) / 180,
-            (replayMountConfig.pitch * Math.PI) / 180,
-            (replayMountConfig.yaw * Math.PI) / 180,
-            'ZYX'
-        )
-    );
-}
+    const r = ((replayMountConfig.roll || 0) * (Math.PI / 180)) / 2;
+    const p = ((replayMountConfig.pitch || 0) * (Math.PI / 180)) / 2;
+    const y = ((replayMountConfig.yaw || 0) * (Math.PI / 180)) / 2;
 
-/*
- * Breadcrumb: 2026-10-06 23:15 - Capture Portal Parity: Z-Axis +90° Pre-Multiplication
- * [CRITICAL BUGFIX FLAG - HORIZONTAL BASELINE ALIGNMENT]:
- * 1. Gleicht sensorToModelQuat 1:1 mit 260920_IMU.c++ ab: premultiply(0, 0, 0.707107, 0.707107).
- * 2. Beseitigt den -90° Roll-Versatz in der Horizontalen: Plane Auflage = Roll 0°, Pitch 0°, Yaw 0°.
- * 3. getRelativeModelQuat nutzt native Three.js Invertierung gegen Vorzeichenfehler.
- * [DISMISSED]: sensorToModelQuat ohne Pre-Multiplikation erforderte künstlichen -90° Mount-Offset.
- */
-// Exakte Achstransformation aus 260920_IMU.c++
-// Globaler Status für Einbaulage (Standard: Roll -90° = Gehäuse liegt plan mit Bodenplatte auf)
-/*
- * Breadcrumb: 2026-10-06 23:50 - Dual-Axis 90° Rotation Elimination & 0° Baseline Alignment
- * [CRITICAL BUGFIX FLAG - DUAL 90° TWIST ERADICATED]:
- * 1. Standard-Einbaulage ist { roll: 0, pitch: 0, yaw: 0 } (plan am Kipprahmen montiert).
- * 2. Z-Achsen +90° Pre-Multiplikation aus sensorToModelQuat restlos entfernt (beseitigt 90°-Yaw-Drall).
- * 3. 3D-Replay-Modell und Graphen starten synchron bei 0.0° in horizontaler Lage.
- * [DISMISSED]: q.premultiply(0, 0, 0.707107, 0.707107) zusammen mit Roll -90° verdrehte das Modell um 2 Achsen um je 90°.
- */
-// Globaler Status für Einbaulage (Standard: 0° auf allen Achsen = Plan auf Bodenplatte / Kipprahmen)
-let replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
-let replayMountQuat = null;
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const cp = Math.cos(-p), sp = Math.sin(-p); // Invertiert für konsistente Hebe-Darstellung
+    const cy = Math.cos(y), sy = Math.sin(y);
 
-// Achstransformation PCB -> Modellkörper (1:1 ohne künstliche Z-Vormultiplikation)
-function sensorToModelQuat(qw, qx, qy, qz) {
-    const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
-    return new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
-}
-
-function getRelativeModelQuat(qw, qx, qy, qz) {
-    const qM = sensorToModelQuat(qw, qx, qy, qz);
-    if (!replayMountQuat) return qM;
-
-    const qModel = new THREE.Quaternion(qM.x, qM.y, qM.z, qM.w);
-    const qMountInv = new THREE.Quaternion(
-        replayMountQuat.x,
-        replayMountQuat.y,
-        replayMountQuat.z,
-        replayMountQuat.w
-    ).invert();
-
-    qModel.premultiply(qMountInv);
-    return { w: qModel.w, x: qModel.x, y: qModel.y, z: qModel.z };
+    replayMountQuat = {
+        w: cr * cp * cy + sr * sp * sy,
+        x: sr * cp * cy - cr * sp * sy,
+        y: cr * sp * cy + sr * cp * sy,
+        z: cr * cp * sy - sr * sp * cy
+    };
 }
 
 function quatToEulerDeg(qw, qx, qy, qz) {
-    const qRel = getRelativeModelQuat(qw, qx, qy, qz);
-    const q = new THREE.Quaternion(qRel.x, qRel.y, qRel.z, qRel.w);
-    const euler = new THREE.Euler().setFromQuaternion(q, 'ZYX');
+    let w = qw, x = qx, y = qy, z = qz;
 
-    // Modell-Achsenparität: X = Roll (Längsachse), Y = Pitch (Quer-/Kippachse), Z = Yaw
-    const roll = euler.x * (180 / Math.PI);
-    const pitch = euler.y * (180 / Math.PI);
-    const yaw = euler.z * (180 / Math.PI);
+    // Relative Drehung bezogen auf die konfigurierte Einbaulage berechnen:
+    // q_rel = q_mount^-1 * q_raw
+    if (replayMountQuat) {
+        const mw = replayMountQuat.w, mx = replayMountQuat.x, my = replayMountQuat.y, mz = replayMountQuat.z;
+        w = mw * qw + mx * qx + my * qy + mz * qz;
+        x = mw * qx - mx * qw - my * qz + mz * qy;
+        y = mw * qy + mx * qz - my * qw - mz * qx;
+        z = mw * qz - mx * qy + my * qx - mz * qw;
+    }
+
+    const norm = Math.hypot(w, x, y, z) || 1.0;
+    const nw = w / norm, nx = x / norm, ny = y / norm, nz = z / norm;
+
+    // Analytische Tait-Bryan Zerlegung (Roll=X, Pitch=Y, Yaw=Z)
+    const sinr_cosp = 2 * (nw * nx + ny * nz);
+    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
+
+    const sinp = 2 * (nw * ny - nz * nx);
+    const rawPitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
+    const pitch = -rawPitch; // Kippbewegung nach oben = positiver Hub (+42.5°)
+
+    const siny_cosp = 2 * (nw * nz + nx * ny);
+    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
+    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
 
     return { roll, pitch, yaw };
 }
 
-/*
- * Breadcrumb: 2026-10-06 23:55 - Strict Quaternion-Based Euler Recalculation
- * [CRITICAL BUGFIX FLAG - ELIMINATE SCALAR DRIFT]:
- * 1. Ersetzt skalare Subtraktion durch quatToEulerDeg() für mathematisch saubere 3D-Kippwinkel.
- * 2. rawRoll/Pitch/Yaw bleiben für den Nullabgleich (adoptCurrentFrameMounting) erhalten.
- */
 function recalculateAllEuler() {
+    if (!replayDataRaw || replayDataRaw.length === 0) return;
     for (let i = 0; i < replayDataRaw.length; i++) {
         const item = replayDataRaw[i];
-        const qModel = sensorToModelQuat(item.qw, item.qx, item.qy, item.qz);
-        const eulerRaw = new THREE.Euler().setFromQuaternion(qModel, 'ZYX');
 
-        // Physische absolute Rohwinkel des Sensors
-        item.rawRoll = eulerRaw.x * (180 / Math.PI);
-        item.rawPitch = eulerRaw.y * (180 / Math.PI);
-        item.rawYaw = eulerRaw.z * (180 / Math.PI);
+        // 1. Physische Rohwinkel des BNO085 (für Einbaulagen-Identifikation)
+        const norm = Math.hypot(item.qw, item.qx, item.qy, item.qz) || 1.0;
+        const nw = item.qw / norm, nx = item.qx / norm, ny = item.qy / norm, nz = item.qz / norm;
 
-        // Relative Winkel via Quaternionen-Tare (qMountInv * qModel)
-        const relEuler = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
-        item.roll = relEuler.roll;
-        item.pitch = relEuler.pitch;
-        item.yaw = relEuler.yaw;
+        item.rawRoll = Math.atan2(2 * (nw * nx + ny * nz), 1 - 2 * (nx * nx + ny * ny)) * (180 / Math.PI);
+        const sp = 2 * (nw * ny - nz * nx);
+        const rawP = Math.abs(sp) >= 1 ? Math.sign(sp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sp))) * (180 / Math.PI);
+        item.rawPitch = -rawP;
+        item.rawYaw = Math.atan2(2 * (nw * nz + nx * ny), 1 - 2 * (ny * ny + nz * nz)) * (180 / Math.PI);
+
+        // 2. Relative genullte Winkel für Oszilloskop und Replay
+        const e = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
+        item.roll = e.roll;
+        item.pitch = e.pitch;
+        item.yaw = e.yaw;
     }
 }
 
-function updateMountingButtonUI() {
-    const lbl = document.getElementById('btn-replay-mounting-label');
-    if (!lbl) return;
-    const parts = [];
-    if (replayMountConfig.roll !== 0) parts.push(`R:${replayMountConfig.roll}°`);
-    if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
-    if (replayMountConfig.yaw !== 0) parts.push(`Y:${replayMountConfig.yaw}°`);
-    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0°';
-}
-
-/*
- * Breadcrumb: 2026-10-06 23:50 - 0° Mounting Baseline Presets & Modal Sync
- * [CRITICAL BUGFIX FLAG - 0° HORIZONTAL BASELINE RESTORATION]:
- * 1. Sämtliche Fallbacks und Defaults auf 0° kalibriert.
- * 2. updateMountingPreview3D stellt bei r=0, p=0, y=0 die plane Auflage dar.
- * 3. adoptCurrentFrameMounting übernimmt Messwerte unmodifiziert als Nullpunkt-Tare.
- */
-function checkAndApplySavedMounting() {
-    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    const saved = localStorage.getItem(`stag_mount_${devId}`);
-    if (saved) {
-        try {
-            replayMountConfig = JSON.parse(saved);
-        } catch (e) {
-            replayMountConfig = { roll: 48, pitch: -2, yaw: 0 };
-        }
-    } else {
-        // Standard-Ruhelage am Kipprahmen (Kipprahmen waagrecht = 0.0° Anzeige)
-        replayMountConfig = { roll: 48, pitch: -2, yaw: 0 };
-    }
-    updateMountingQuaternion();
-    updateMountingButtonUI();
-    recalculateAllEuler();
-}
-
-function openMountingConfigModal() {
-    const modal = document.getElementById('mounting-config-modal');
-    if (!modal) return;
-    modal.classList.remove('hidden');
-
-    ['roll', 'pitch', 'yaw'].forEach(axis => {
-        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : 0;
-        const numEl = document.getElementById(`mount-${axis}-num`);
-        const rngEl = document.getElementById(`mount-${axis}-range`);
-        if (numEl) numEl.value = val;
-        if (rngEl) rngEl.value = val;
-    });
-
-    initMounting3D();
-    loadMountingGLBModel();
-
-    setTimeout(() => {
-        resizeMounting3D();
-        updateMountingPreview3D();
-    }, 50);
-}
-window.openMountingConfigModal = openMountingConfigModal;
-
-function closeMountingConfigModal() {
-    const modal = document.getElementById('mounting-config-modal');
-    if (modal) modal.classList.add('hidden');
-    if (mountAnimId) {
-        cancelAnimationFrame(mountAnimId);
-        mountAnimId = null;
-    }
-}
-window.closeMountingConfigModal = closeMountingConfigModal;
-
-function resizeMounting3D() {
-    const container = document.getElementById('mounting-canvas-container');
-    if (!container || !mountRenderer || !mountCamera) return;
-    const w = container.clientWidth;
-    const h = container.clientHeight;
-    if (w > 0 && h > 0) {
-        mountCamera.aspect = w / h;
-        mountCamera.updateProjectionMatrix();
-        mountRenderer.setSize(w, h);
-        if (mountScene) mountRenderer.render(mountScene, mountCamera);
-    }
-}
-
-function syncMountingInput(axis, val) {
-    const num = Math.max(-180, Math.min(180, parseFloat(val) || 0));
-    const numEl = document.getElementById(`mount-${axis}-num`);
-    const rngEl = document.getElementById(`mount-${axis}-range`);
-    if (numEl && numEl.value != num) numEl.value = num;
-    if (rngEl && rngEl.value != num) rngEl.value = num;
-
-    updateMountingPreview3D();
-}
-window.syncMountingInput = syncMountingInput;
-
-function setMountingPreset(r, p, y) {
-    syncMountingInput('roll', r);
-    syncMountingInput('pitch', p);
-    syncMountingInput('yaw', y);
-}
-window.setMountingPreset = setMountingPreset;
-
-function adoptCurrentFrameMounting() {
-    if (!replayFilteredData || replayFilteredData.length === 0) return;
-    const sampleInterval = 0.1;
-    const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
-    const pt = replayFilteredData[exactIndex];
-
-    // Absolute physikalische Rohwinkel des BNO085 vor Einbaulagen-Abzug
-    const qModel = sensorToModelQuat(pt.qw, pt.qx, pt.qy, pt.qz);
-    const eulerRaw = new THREE.Euler().setFromQuaternion(qModel, 'ZYX');
-
-    const r = Math.round(eulerRaw.x * (180 / Math.PI) * 10) / 10;
-    const p = Math.round(eulerRaw.y * (180 / Math.PI) * 10) / 10;
-    const y = Math.round(eulerRaw.z * (180 / Math.PI) * 10) / 10;
-
-    setMountingPreset(r, p, y);
-}
-window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
-
-function saveMountingConfig() {
-    const rEl = document.getElementById('mount-roll-num');
-    const pEl = document.getElementById('mount-pitch-num');
-    const yEl = document.getElementById('mount-yaw-num');
-
-    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
-    const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
-    const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
-
-    replayMountConfig = { roll: r, pitch: p, yaw: y };
-
-    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    localStorage.setItem(`stag_mount_${devId}`, JSON.stringify(replayMountConfig));
-
-    updateMountingQuaternion();
-    updateMountingButtonUI();
-    recalculateAllEuler();
-    drawReplayGraph(replayCurrentTimeSec);
-    renderInterpolatedFrame(replayCurrentTimeSec);
-
-    closeMountingConfigModal();
-}
-window.saveMountingConfig = saveMountingConfig;
+// ============================================================================
+// 3. EINBAULAGEN-MODAL & 3D-VORSCHAUFENSTER
+// ============================================================================
 
 function createMountingFallbackCube() {
     if (mountMesh && mountScene) mountScene.remove(mountMesh);
@@ -885,9 +584,7 @@ function setupMountingModelMesh(gltfScene) {
     if (mountMesh) mountScene.remove(mountMesh);
 
     gltfScene.traverse((child) => {
-        if (child.isMesh && child.material) {
-            child.material.side = THREE.DoubleSide;
-        }
+        if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
     });
 
     gltfScene.rotation.x = -Math.PI / 2;
@@ -913,13 +610,57 @@ function setupMountingModelMesh(gltfScene) {
     updateMountingPreview3D();
 }
 
+function loadMountingGLBModel() {
+    if (rawGltfScene) {
+        setupMountingModelMesh(rawGltfScene.clone(true));
+        return;
+    }
+
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        createMountingFallbackCube();
+        return;
+    }
+
+    const loader = new THREE.GLTFLoader();
+    const candidatePaths = ['./IMU.glb', 'IMU.glb', './model.glb', 'model.glb', '/IMU.glb'];
+
+    function tryLoad(index) {
+        if (index >= candidatePaths.length) {
+            createMountingFallbackCube();
+            return;
+        }
+        loader.load(
+            candidatePaths[index],
+            (gltf) => {
+                if (!rawGltfScene) rawGltfScene = gltf.scene.clone(true);
+                setupMountingModelMesh(gltf.scene);
+            },
+            undefined,
+            () => { tryLoad(index + 1); }
+        );
+    }
+    tryLoad(0);
+}
+
+function resizeMounting3D() {
+    const container = document.getElementById('mounting-canvas-container');
+    if (!container || !mountRenderer || !mountCamera) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w > 0 && h > 0) {
+        mountCamera.aspect = w / h;
+        mountCamera.updateProjectionMatrix();
+        mountRenderer.setSize(w, h);
+        if (mountScene) mountRenderer.render(mountScene, mountCamera);
+    }
+}
+
 function initMounting3D() {
     const container = document.getElementById('mounting-canvas-container');
     if (!container) return;
 
     if (mountRenderer) {
         resizeMounting3D();
-        if (!mountAnimId) anim();
         return;
     }
 
@@ -959,10 +700,10 @@ function initMounting3D() {
     grid.position.y = -0.22;
     mountScene.add(grid);
 
+    loadMountingGLBModel();
+
     if (!mountContainerObserver && window.ResizeObserver) {
-        mountContainerObserver = new ResizeObserver(() => {
-            resizeMounting3D();
-        });
+        mountContainerObserver = new ResizeObserver(() => { resizeMounting3D(); });
         mountContainerObserver.observe(container);
     }
 
@@ -978,17 +719,6 @@ function initMounting3D() {
     anim();
 }
 
-/*
- * Breadcrumb: 2026-10-06 22:45 - Mounting Preview & Preset Alignment
- * [CRITICAL BUGFIX FLAG - SLIDER PARITY]:
- * 1. mountMesh rotiert Euler mit Roll an X, Pitch an Y und Yaw an Z.
- * 2. adoptCurrentFrameMounting liest rawRoll aus euler.x und rawPitch aus euler.y.
- */
-/*
- * Breadcrumb: 2026-10-06 23:15 - Mounting Preview Synchronized Alignment
- * [CRITICAL BUGFIX FLAG - MODAL PREVIEW MATCH]:
- * Stellt sicher, dass das Vorschaumodell bei r=0, p=0, y=0 plan auf dem Gitter liegt.
- */
 function updateMountingPreview3D() {
     if (!mountMesh) return;
     const rEl = document.getElementById('mount-roll-num');
@@ -1008,29 +738,128 @@ function updateMountingPreview3D() {
     }
 }
 
-// ----------------------------------------------------------------------------
-// 3. FRAME-INTERPOLATION & 3D RENDERING (MIT SCHWINGWEG-TRANSLATION)
-// ----------------------------------------------------------------------------
+function syncMountingInput(axis, val) {
+    const num = Math.max(-180, Math.min(180, parseFloat(val) || 0));
+    const numEl = document.getElementById(`mount-${axis}-num`);
+    const rngEl = document.getElementById(`mount-${axis}-range`);
+    if (numEl && numEl.value != num) numEl.value = num;
+    if (rngEl && rngEl.value != num) rngEl.value = num;
+    updateMountingPreview3D();
+}
+window.syncMountingInput = syncMountingInput;
 
-/*
- * Breadcrumb: 2026-10-06 22:45 - 3D Replay Rotation Alignment
- * [CRITICAL BUGFIX FLAG - MOTION PARITY]:
- * repMesh.quaternion übernimmt roll auf X und pitch auf Y.
- */
-/*
- * Breadcrumb: 2026-10-06 23:15 - Quaternion SLERP & Capture Portal Vector Alignment
- * [CRITICAL BUGFIX FLAG - SEAMLESS 3D MOTION PARITY]:
- * 1. 3D-Modell rotiert via Quaternion.slerp() identisch zum Web-Dashboard in 260920_IMU.c++.
- * 2. Translation nutzt Vector3(dyD, -dxD, dzD) für achsgetreue Vibrationen nach 90°-Z-Drehung.
- * 3. Euler-Winkel (Roll, Pitch, Yaw) bleiben für Oszilloskop und HUD phasenstarr synchronisiert.
- */
-/*
- * Breadcrumb: 2026-10-06 23:45 - 3D Replay Ground-Alignment & Seamless Tilt Sync
- * [CRITICAL BUGFIX FLAG - 3D REPLAY ORIENTATION MATCH]:
- * 1. repMesh addiert die relative Bewegung auf die Einbaulage (Startet bei Roll -90° plan auf Bodenplatte).
- * 2. Translation nutzt Vector3(dyD, -dxD, dzD) analog zu 260920_IMU.c++.
- * 3. HUD und Graphen zeigen die relativen Ausschläge (Start bei 0.0°, Kippung z.B. +42.5°).
- */
+function setMountingPreset(r, p, y) {
+    syncMountingInput('roll', r);
+    syncMountingInput('pitch', p);
+    syncMountingInput('yaw', y);
+}
+window.setMountingPreset = setMountingPreset;
+
+function openMountingConfigModal() {
+    const modal = document.getElementById('mounting-config-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+
+    ['roll', 'pitch', 'yaw'].forEach(axis => {
+        const val = replayMountConfig[axis] !== undefined ? replayMountConfig[axis] : 0;
+        const numEl = document.getElementById(`mount-${axis}-num`);
+        const rngEl = document.getElementById(`mount-${axis}-range`);
+        if (numEl) numEl.value = val;
+        if (rngEl) rngEl.value = val;
+    });
+
+    initMounting3D();
+    if (!mountMesh || mountMesh.name !== 'imuCadGroup') {
+        loadMountingGLBModel();
+    }
+
+    setTimeout(() => {
+        resizeMounting3D();
+        updateMountingPreview3D();
+    }, 40);
+}
+window.openMountingConfigModal = openMountingConfigModal;
+
+function closeMountingConfigModal() {
+    const modal = document.getElementById('mounting-config-modal');
+    if (modal) modal.classList.add('hidden');
+    if (mountAnimId) {
+        cancelAnimationFrame(mountAnimId);
+        mountAnimId = null;
+    }
+}
+window.closeMountingConfigModal = closeMountingConfigModal;
+
+function adoptCurrentFrameMounting() {
+    if (!replayFilteredData || replayFilteredData.length === 0) return;
+    const sampleInterval = 0.1;
+    const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / sampleInterval), replayFilteredData.length - 1);
+    const pt = replayFilteredData[exactIndex];
+
+    const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll * 10) / 10 : 0;
+    const p = (pt.rawPitch !== undefined) ? Math.round(pt.rawPitch * 10) / 10 : 0;
+    const y = (pt.rawYaw !== undefined) ? Math.round(pt.rawYaw * 10) / 10 : 0;
+
+    setMountingPreset(r, p, y);
+}
+window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
+
+function saveMountingConfig() {
+    const rEl = document.getElementById('mount-roll-num');
+    const pEl = document.getElementById('mount-pitch-num');
+    const yEl = document.getElementById('mount-yaw-num');
+
+    const r = (rEl && !isNaN(parseFloat(rEl.value))) ? parseFloat(rEl.value) : 0;
+    const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
+    const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
+
+    replayMountConfig = { roll: r, pitch: p, yaw: y };
+
+    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
+    localStorage.setItem(`stag_mount_${devId}`, JSON.stringify(replayMountConfig));
+
+    updateMountingQuaternion();
+    updateMountingButtonUI();
+    recalculateAllEuler();
+    drawReplayGraph(replayCurrentTimeSec);
+    renderInterpolatedFrame(replayCurrentTimeSec);
+
+    closeMountingConfigModal();
+}
+window.saveMountingConfig = saveMountingConfig;
+
+function updateMountingButtonUI() {
+    const lbl = document.getElementById('btn-replay-mounting-label');
+    if (!lbl) return;
+    const parts = [];
+    if (replayMountConfig.roll !== 0) parts.push(`R:${replayMountConfig.roll}°`);
+    if (replayMountConfig.pitch !== 0) parts.push(`P:${replayMountConfig.pitch}°`);
+    if (replayMountConfig.yaw !== 0) parts.push(`Y:${replayMountConfig.yaw}°`);
+    lbl.innerText = parts.length > 0 ? parts.join(' ') : '0°';
+}
+
+function checkAndApplySavedMounting() {
+    const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
+    const saved = localStorage.getItem(`stag_mount_${devId}`);
+    if (saved) {
+        try {
+            replayMountConfig = JSON.parse(saved);
+        } catch (e) {
+            replayMountConfig = { roll: 0, pitch: 48, yaw: 0 };
+        }
+    } else {
+        // Standard-Ruhelage am Kipprahmen (Start bei 0.0°)
+        replayMountConfig = { roll: -3.7, pitch: 47.9, yaw: 2.7 };
+    }
+    updateMountingQuaternion();
+    updateMountingButtonUI();
+    recalculateAllEuler();
+}
+
+// ============================================================================
+// 4. FRAME-INTERPOLATION & 3D RENDERING
+// ============================================================================
+
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -1044,7 +873,6 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    // Relative Bewegungen für Graphen und HUD
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
@@ -1058,16 +886,14 @@ function renderInterpolatedFrame(tSec) {
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        // Absolute Orientierung im 3D-Raum: Ausgangslage (Roll -90°) + relatives Delta
-        const meshRoll = (replayMountConfig.roll + roll) * (Math.PI / 180);
-        const meshPitch = (replayMountConfig.pitch + pitch) * (Math.PI / 180);
-        const meshYaw = (replayMountConfig.yaw + yaw) * (Math.PI / 180);
+        const meshRoll = roll * (Math.PI / 180);
+        const meshPitch = pitch * (Math.PI / 180);
+        const meshYaw = yaw * (Math.PI / 180);
 
         repMesh.quaternion.setFromEuler(
             new THREE.Euler(meshRoll, meshPitch, meshYaw, 'ZYX')
         );
 
-        // Achsenreine Schwingweg-Translation (X=dx, Y=dy, Z=dz) ohne alte Z-90°-Verdrehung
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dxD * mmToSceneScale,
@@ -1115,7 +941,7 @@ function renderInterpolatedFrame(tSec) {
 }
 
 // ============================================================================
-// 4. BEREICHS-ZOOM, PAN & INTERAKTIVES OSZILLOSKOP
+// 5. BEREICHS-ZOOM, PAN & INTERAKTIVES OSZILLOSKOP
 // ============================================================================
 
 function getTimeBounds() {
@@ -1170,13 +996,6 @@ function resetReplayZoom() {
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
-/*
- * Breadcrumb: 2026-10-06 19:50 - Multi-Canvas Synchronized Pointer & Zoom Engine
- * [CRITICAL BUGFIX FLAG - CROSS-TIER DRAG-TO-ZOOM]:
- * 1. Event-Listener auf allen drei Leinwänden (Acc, Euler, Disp) gebunden.
- * 2. Globaler Pointer-Release auf Window-Ebene gegen hängende Selektionsrahmen.
- * 3. Klick springt im Zeitstrahl; Wischgeste zoomt simultan auf allen 3 Achsen.
- */
 function attachCanvasInteraction() {
     const canvases = [
         document.getElementById('replayGraphCanvasAcc'),
@@ -1304,22 +1123,6 @@ function attachCanvasInteraction() {
     });
 }
 
-/*
- * Breadcrumb: 2026-10-06 19:50 - 3-Tier Synchronized Canvas Drawing & Adaptive Y-Scale
- * [OPTIMIZED Y-SCALING & SYNCED CURSORS]:
- * 1. Beschleunigung: Gestufte Rundung (0.5 bis 50 m/s²) mit Schwellenwert-Puffer.
- * 2. Winkel: Dynamisch an sichtbares Delta angepasst (2° bis 180°), kein starres 45°-Minimum mehr.
- * 3. Ausschlag: Sub-Millimeter- und Millimeter-Schritte (0.2 bis 100 mm) um Nulllinie.
- * 4. Durchgehender orangefarbener Zeit-Cursor und synchrones Drag-Overlay auf allen 3 Ebenen.
- */
-/*
- * Breadcrumb: 2026-10-06 20:30 - Decoupled Y-Axis Layout & Synchronized Vibration Rendering
- * [CRITICAL BUGFIX FLAG - LAYOUT PARITY & ZERO-OVERLAP]:
- * 1. Dedizierter topMargin (18px) verhindert Überschneidung von Einheit und oberstem Skalenwert.
- * 2. Rechtsbündige Ausrichtung der Y-Werte (textAlign: right) mit 44px Achsenabstand.
- * 3. Eindeutige Einheitenangabe im Canvas und im Cursor-Badge (BESCHLEUNIGUNG [m/s²], WINKEL [°], SCHWINGWEG [mm]).
- * 4. Saubere Clipping-Begrenzung schützt Kopfzeile und Zeitraster vor Kurvenüberläufen.
- */
 function getNiceScale(maxVal, minScale, steps) {
     const target = Math.max(minScale, maxVal * 1.18);
     for (let s of steps) {
@@ -1328,11 +1131,6 @@ function getNiceScale(maxVal, minScale, steps) {
     return Math.ceil(target);
 }
 
-/*
- * Breadcrumb: 2026-10-06 20:45 - Selective Y-Scaling & Rendering for Active Curves
- * [PER-CHANNEL ISOLATION]: Schaltet eine Kurve ab, skaliert sich die Y-Achse 
- * automatisch optimal auf die verbleibenden sichtbaren Signale.
- */
 function drawReplayGraph(curTimeSec) {
     const cvAcc = document.getElementById('replayGraphCanvasAcc');
     const cvEuler = document.getElementById('replayGraphCanvasEuler');
@@ -1348,7 +1146,6 @@ function drawReplayGraph(curTimeSec) {
     const startIndex = Math.max(0, Math.floor(tStart / 0.1) - 1);
     const endIndex = Math.min(count - 1, Math.ceil(tEnd / 0.1) + 1);
 
-    // 1. Skalenermittlung NUR für aktuell aktivierte Kurven
     let maxAcc = 0.1, maxAngle = 0.1, maxDisp = 0.05;
     for (let i = startIndex; i <= endIndex; i++) {
         const d = replayFilteredData[i];
@@ -1393,10 +1190,8 @@ function drawReplayGraph(curTimeSec) {
         const midY = topMargin + plotH / 2;
         const halfH = plotH / 2;
 
-        // Nur aktivierte Kurven rendern
         const activeCurves = allCurves.filter(c => replayVisibleCurves[c.key]);
 
-        // Schwellenwert-Hintergrund bei Peaks
         if (isAccTier && replayAccThreshold > 0 && activeCurves.length > 0) {
             ctx.save();
             ctx.beginPath();
@@ -1414,7 +1209,6 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         }
 
-        // Horizontale Rasterlinien
         const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
         ctx.font = '9px monospace';
         gridPoints.forEach(ratio => {
@@ -1427,7 +1221,6 @@ function drawReplayGraph(curTimeSec) {
 
             ctx.fillStyle = '#64748b';
             const val = ratio * maxScale;
-            // KORREKTUR: Prüft den konkreten Taktwert val auf Ganzzahligkeit
             const isInt = Math.abs(val - Math.round(val)) < 1e-4;
             const str = (ratio > 0 ? '+' : '') + (isInt ? val.toFixed(0) : val.toFixed(1));
 
@@ -1437,12 +1230,10 @@ function drawReplayGraph(curTimeSec) {
         });
         ctx.setLineDash([]);
 
-        // Einheit
         ctx.fillStyle = '#475569';
         ctx.font = 'bold 9px monospace';
         ctx.fillText(unitLabel, 4, 12);
 
-        // Schwellenwert-Linien
         if (isAccTier && replayAccThreshold > 0 && replayAccThreshold <= maxScale && activeCurves.length > 0) {
             ctx.save();
             ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
@@ -1459,7 +1250,6 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         }
 
-        // Zeitraster (Beschriftung unten)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
@@ -1488,7 +1278,6 @@ function drawReplayGraph(curTimeSec) {
             }
         }
 
-        // Kurven zeichnen
         activeCurves.forEach(({ key, color }) => {
             ctx.save();
             ctx.beginPath();
@@ -1509,7 +1298,6 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         });
 
-        // Zoom-Selektion
         if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
             const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
             const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
@@ -1530,7 +1318,6 @@ function drawReplayGraph(curTimeSec) {
             }
         }
 
-        // Zeiger-Cursor
         const curX = timeToX(curTime, w, leftMargin);
         if (curX >= leftMargin && curX <= w) {
             ctx.strokeStyle = '#d97706';
@@ -1541,7 +1328,6 @@ function drawReplayGraph(curTimeSec) {
             ctx.beginPath(); ctx.arc(curX, topMargin + 4, 3.5, 0, Math.PI * 2); ctx.fill();
         }
 
-        // Live-Badge oben rechts
         if (activeCurves.length > 0) {
             ctx.font = 'bold 9px monospace';
             let valInfo = activeCurves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
@@ -1587,7 +1373,7 @@ function drawReplayGraph(curTimeSec) {
 }
 
 // ============================================================================
-// 5. PLAYBACK CONTROLS (PLAY, PAUSE, RESET, SCRUB)
+// 6. PLAYBACK CONTROLS (PLAY, PAUSE, RESET, SCRUB)
 // ============================================================================
 
 function onReplayScrub(val) {
@@ -1669,14 +1455,6 @@ function setReplayThreshold(val) {
 }
 window.setReplayThreshold = setReplayThreshold;
 
-
-/*
- * Breadcrumb: 2026-10-06 22:45 - Data Ingestion & Graph Activation Engine
- * [CRITICAL BUGFIX FLAG - RESTORE REPLAY PIPELINE]:
- * 1. onReplayCycleSelect befüllt replayFilteredData und löst sofort den initialen Canvas-Render aus.
- * 2. formatReplayTimestamp und setReplayGraphMode deklariert.
- * 3. inspectImuFile für Einzelfilterung implementiert.
- */
 function formatReplayTimestamp(ts) {
     if (!ts) return '';
     try {
@@ -1722,6 +1500,10 @@ function setReplayGraphMode(mode) {
     drawReplayGraph(replayCurrentTimeSec);
 }
 window.setReplayGraphMode = setReplayGraphMode;
+
+// ============================================================================
+// 7. INGESTION & DATEI-INSPEKTION
+// ============================================================================
 
 async function inspectImuFile(file) {
     const deck = document.getElementById('imu-replay-deck');
@@ -1770,7 +1552,7 @@ async function inspectImuFile(file) {
                     roll: euler.roll,
                     pitch: euler.pitch,
                     yaw: euler.yaw,
-                    cycle: 1,
+                    cycle: parts[8] ? parseInt(parts[8], 10) : 1,
                     fileIndex: 0
                 });
             }
@@ -1801,7 +1583,6 @@ async function inspectImuFile(file) {
     }
 }
 window.inspectImuFile = inspectImuFile;
-
 
 async function inspectImuDayMerged(dateStr, dayFiles) {
     const deck = document.getElementById('imu-replay-deck');
@@ -1861,9 +1642,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
                 const sep = line.includes(';') ? ';' : ',';
                 const parts = line.split(sep);
                 if (parts.length >= 8) {
-                    if (!firstTs && parts[0]) {
-                        firstTs = parts[0].trim();
-                    }
+                    if (!firstTs && parts[0]) firstTs = parts[0].trim();
 
                     const qw = parseFloat(parts[1]) || 1.0;
                     const qx = parseFloat(parts[2]) || 0.0;
@@ -1880,7 +1659,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
                         roll: euler.roll,
                         pitch: euler.pitch,
                         yaw: euler.yaw,
-                        cycle: cycleId,
+                        cycle: parts[8] ? parseInt(parts[8], 10) : cycleId,
                         fileIndex: fileIdx
                     };
                     replayDataRaw.push(item);
@@ -1902,8 +1681,8 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             return;
         }
 
-        // [NEU]: Displacement auch für zusammengeführte Tagesdateien ermitteln
         calculateAllDisplacements();
+        checkAndApplySavedMounting();
 
         const select = document.getElementById('replay-cycle-select');
         select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
@@ -1912,13 +1691,6 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
         });
 
-        /*
-  * Breadcrumb: 2026-10-06 21:15 - Mount Configuration Hook in inspectImuDayMerged
-  * [CRITICAL BUGFIX FLAG - ELIMINATE TARE REFERENCE ERROR]:
-  * Ersetzt den Aufruf der gelöschten Tare-Funktion durch checkAndApplySavedMounting().
-  */
-        // Ersetze checkAndApplySavedTare(); durch:
-        checkAndApplySavedMounting();
         onReplayCycleSelect('ALL');
     } catch (err) {
         console.error('[CACHE MERGE FEHLER]', err);
@@ -1979,14 +1751,10 @@ function exportReplayVisibleCsv() {
 }
 window.exportReplayVisibleCsv = exportReplayVisibleCsv;
 
-/*
- * Breadcrumb: 2026-10-06 21:15 - Mounting Position Exports & Auto-Init
- * [CRITICAL BUGFIX FLAG - CLEAN EXPORTS]:
- * 1. Entfernt nicht mehr existierende Tare-Exporte (verhindert ReferenceError).
- * 2. Exportiert alle Einbaulagen-Modal-Funktionen für HTML-Trigger.
- * 3. Initialisiert checkAndApplySavedMounting() direkt beim Parsen des Skripts.
- */
-// Window Exporte
+// ============================================================================
+// 8. WINDOW-EXPORTE & BOOTSTRAP
+// ============================================================================
+
 window.inspectImuFile = inspectImuFile;
 window.inspectImuDayMerged = inspectImuDayMerged;
 window.closeImuReplayDeck = closeImuReplayDeck;
@@ -2000,7 +1768,6 @@ window.resetReplayZoom = resetReplayZoom;
 window.setReplayGraphMode = setReplayGraphMode;
 window.setReplayCameraView = setReplayCameraView;
 
-// Einbaulagen-Steuerung Exporte
 window.openMountingConfigModal = openMountingConfigModal;
 window.closeMountingConfigModal = closeMountingConfigModal;
 window.syncMountingInput = syncMountingInput;
@@ -2008,5 +1775,5 @@ window.setMountingPreset = setMountingPreset;
 window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
 window.saveMountingConfig = saveMountingConfig;
 
-// Direkte Initialisierung der Standard-Einbaulage (Pitch -90°) beim Booten
+// Initialisierung der Einbaulage beim Skriptstart
 checkAndApplySavedMounting();
