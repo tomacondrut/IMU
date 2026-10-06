@@ -323,6 +323,13 @@ function createReplayFallbackCube() {
     repScene.add(repMesh);
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:50 - ESP Captive Portal Parity: Native CAD Mesh Orientation
+ * [CRITICAL BUGFIX & FEATURE PARITY - GLTF BASIS ALIGNMENT]:
+ * 1. Entfernt 'gltfScene.rotation.x = -Math.PI / 2', das eine 90°-Vordrehung erzwang.
+ * 2. Übernimmt die native Orientierung aus setupModelMesh() des ESP32-Dashboards.
+ * [DISMISSED]: rotation.x = -Math.PI / 2 erforderte kompensierende Euler-Kippungen.
+ */
 function setupReplayModelMesh(gltfScene) {
     if (repMesh && repScene) repScene.remove(repMesh);
     if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
@@ -330,9 +337,6 @@ function setupReplayModelMesh(gltfScene) {
     gltfScene.traverse((child) => {
         if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
     });
-
-    gltfScene.rotation.x = -Math.PI / 2;
-    gltfScene.updateMatrixWorld(true);
 
     const box = new THREE.Box3().setFromObject(gltfScene);
     const center = box.getCenter(new THREE.Vector3());
@@ -477,28 +481,21 @@ function calculateAllDisplacements() {
     if (cycleIndices.length > 0) processCycle(cycleIndices);
 }
 
-function updateMountingQuaternion() {
-    const r = ((replayMountConfig.roll || 0) * (Math.PI / 180)) / 2;
-    const p = ((replayMountConfig.pitch || 0) * (Math.PI / 180)) / 2;
-    const y = ((replayMountConfig.yaw || 0) * (Math.PI / 180)) / 2;
+/*
+ * Breadcrumb: 2026-10-06 23:50 - Continuous Euler Unwrapping & Direct Quat Tare
+ * [CRITICAL BUGFIX & FEATURE PARITY - ZERO JUMPS & DISCONTINUITY ELIMINATION]:
+ * 1. Implementiert antipodale Vorzeichen-Kontinuität (q · q_prev >= 0) identisch zum ESP-Websocket.
+ * 2. Relatives Tare q_rel = q_mount^-1 * q_raw eliminiert Singularitäten vollständig.
+ * 3. Phasen-Unwrapping verhindert 360°-Sägezahnsprünge an den Schnittstellen (+180° / -180°).
+ * 4. clamp(sinp, -1, 1) verhindert NaN-Ausrutscher bei exakten 90°-Zuständen.
+ * [DISMISSED]: setFromEuler('ZYX') im Renderloop erzeugte Sprünge bei Annäherung an 90°.
+ */
 
-    const cr = Math.cos(r), sr = Math.sin(r);
-    const cp = Math.cos(-p), sp = Math.sin(-p); // Invertiert für konsistente Hebe-Darstellung
-    const cy = Math.cos(y), sy = Math.sin(y);
 
-    replayMountQuat = {
-        w: cr * cp * cy + sr * sp * sy,
-        x: sr * cp * cy - cr * sp * sy,
-        y: cr * sp * cy + sr * cp * sy,
-        z: cr * cp * sy - sr * sp * cy
-    };
-}
-
-function quatToEulerDeg(qw, qx, qy, qz) {
+function computeRelativeQuat(qw, qx, qy, qz) {
     let w = qw, x = qx, y = qy, z = qz;
 
-    // Relative Drehung bezogen auf die konfigurierte Einbaulage berechnen:
-    // q_rel = q_mount^-1 * q_raw
+    // Relatives Quaternion: q_rel = q_mount^-1 * q_raw
     if (replayMountQuat) {
         const mw = replayMountQuat.w, mx = replayMountQuat.x, my = replayMountQuat.y, mz = replayMountQuat.z;
         w = mw * qw + mx * qx + my * qy + mz * qz;
@@ -508,16 +505,17 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     }
 
     const norm = Math.hypot(w, x, y, z) || 1.0;
-    const nw = w / norm, nx = x / norm, ny = y / norm, nz = z / norm;
+    return { w: w / norm, x: x / norm, y: y / norm, z: z / norm };
+}
 
-    // Analytische Tait-Bryan Zerlegung (Roll=X, Pitch=Y, Yaw=Z)
+function quatToEulerRawDeg(nw, nx, ny, nz) {
     const sinr_cosp = 2 * (nw * nx + ny * nz);
     const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
     const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
 
     const sinp = 2 * (nw * ny - nz * nx);
-    const rawPitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
-    const pitch = -rawPitch; // Kippbewegung nach oben = positiver Hub (+42.5°)
+    const clampedSinp = Math.max(-1.0, Math.min(1.0, sinp));
+    const pitch = -Math.asin(clampedSinp) * (180 / Math.PI);
 
     const siny_cosp = 2 * (nw * nz + nx * ny);
     const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
@@ -526,28 +524,77 @@ function quatToEulerDeg(qw, qx, qy, qz) {
     return { roll, pitch, yaw };
 }
 
+function unwrapAngle(current, previous) {
+    let diff = current - previous;
+    while (diff > 180) { current -= 360; diff -= 360; }
+    while (diff < -180) { current += 360; diff += 360; }
+    return current;
+}
+
+/*
+ * Breadcrumb: 2026-10-06 23:55 - Cycle-Bounded Euler Unwrapping
+ * [CRITICAL BUGFIX FLAG - MULTI-CYCLE BASELINE INTEGRITY]:
+ * 1. Setzt prevRoll/Pitch/Yaw bei jedem Zykluswechsel (item.cycle) gezielt zurück.
+ * 2. Verhindert das Verschleppen von 360°-Wicklungsphasen zwischen getrennten Hub-Events.
+ */
 function recalculateAllEuler() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
+
+    let prevRoll = null, prevPitch = null, prevYaw = null;
+    let prevRawRoll = null, prevRawPitch = null, prevRawYaw = null;
+    let activeCycle = null;
+
     for (let i = 0; i < replayDataRaw.length; i++) {
         const item = replayDataRaw[i];
 
-        // 1. Physische Rohwinkel des BNO085 (für Einbaulagen-Identifikation)
-        const norm = Math.hypot(item.qw, item.qx, item.qy, item.qz) || 1.0;
-        const nw = item.qw / norm, nx = item.qx / norm, ny = item.qy / norm, nz = item.qz / norm;
+        // An Zyklus- bzw. Eventgrenzen Unwrapping-Gedächtnis zurücksetzen
+        if (activeCycle === null || item.cycle !== activeCycle) {
+            activeCycle = item.cycle;
+            prevRoll = null; prevPitch = null; prevYaw = null;
+            prevRawRoll = null; prevRawPitch = null; prevRawYaw = null;
+        }
 
-        item.rawRoll = Math.atan2(2 * (nw * nx + ny * nz), 1 - 2 * (nx * nx + ny * ny)) * (180 / Math.PI);
-        const sp = 2 * (nw * ny - nz * nx);
-        const rawP = Math.abs(sp) >= 1 ? Math.sign(sp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sp))) * (180 / Math.PI);
-        item.rawPitch = -rawP;
-        item.rawYaw = Math.atan2(2 * (nw * nz + nx * ny), 1 - 2 * (ny * ny + nz * nz)) * (180 / Math.PI);
+        // 1. Physische Rohwinkel berechnen
+        const rNorm = Math.hypot(item.qw, item.qx, item.qy, item.qz) || 1.0;
+        const rawE = quatToEulerRawDeg(item.qw / rNorm, item.qx / rNorm, item.qy / rNorm, item.qz / rNorm);
 
-        // 2. Relative genullte Winkel für Oszilloskop und Replay
-        const e = quatToEulerDeg(item.qw, item.qx, item.qy, item.qz);
-        item.roll = e.roll;
-        item.pitch = e.pitch;
-        item.yaw = e.yaw;
+        if (prevRawRoll === null) {
+            item.rawRoll = rawE.roll;
+            item.rawPitch = rawE.pitch;
+            item.rawYaw = rawE.yaw;
+        } else {
+            item.rawRoll = unwrapAngle(rawE.roll, prevRawRoll);
+            item.rawPitch = unwrapAngle(rawE.pitch, prevRawPitch);
+            item.rawYaw = unwrapAngle(rawE.yaw, prevRawYaw);
+        }
+        prevRawRoll = item.rawRoll;
+        prevRawPitch = item.rawPitch;
+        prevRawYaw = item.rawYaw;
+
+        // 2. Relatives genulltes Quaternion berechnen & ablegen (für 3D-Viewer)
+        const qRel = computeRelativeQuat(item.qw, item.qx, item.qy, item.qz);
+        item.relQw = qRel.w;
+        item.relQx = qRel.x;
+        item.relQy = qRel.y;
+        item.relQz = qRel.z;
+
+        // 3. Genullte Winkel für Oszilloskop berechnen & phasenglätten
+        const eRel = quatToEulerRawDeg(qRel.w, qRel.x, qRel.y, qRel.z);
+        if (prevRoll === null) {
+            item.roll = eRel.roll;
+            item.pitch = eRel.pitch;
+            item.yaw = eRel.yaw;
+        } else {
+            item.roll = unwrapAngle(eRel.roll, prevRoll);
+            item.pitch = unwrapAngle(eRel.pitch, prevPitch);
+            item.yaw = unwrapAngle(eRel.yaw, prevYaw);
+        }
+        prevRoll = item.roll;
+        prevPitch = item.pitch;
+        prevYaw = item.yaw;
     }
 }
+
 
 // ============================================================================
 // 3. EINBAULAGEN-MODAL & 3D-VORSCHAUFENSTER
@@ -586,9 +633,6 @@ function setupMountingModelMesh(gltfScene) {
     gltfScene.traverse((child) => {
         if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
     });
-
-    gltfScene.rotation.x = -Math.PI / 2;
-    gltfScene.updateMatrixWorld(true);
 
     const box = new THREE.Box3().setFromObject(gltfScene);
     const center = box.getCenter(new THREE.Vector3());
@@ -719,6 +763,30 @@ function initMounting3D() {
     anim();
 }
 
+/*
+ * Breadcrumb: 2026-10-06 23:55 - ESP Parity Mounting Preview & Quaternion Alignment
+ * [CRITICAL BUGFIX & FEATURE PARITY - MODAL 3D COORDINATE SYSTEM]:
+ * 1. Ersetzt mountMesh.quaternion.setFromEuler('ZYX') durch applyEspModelQuaternion().
+ * 2. Bringt 3D-Vorschau im Einbaulagen-Modal auf exakt dasselbe Koordinatensystem wie repMesh.
+ * [DISMISSED]: setFromEuler('ZYX') stand 90° verdreht zur Hauptansicht und litt unter Gimbal Lock.
+ */
+function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
+    const r = ((rDeg || 0) * (Math.PI / 180)) / 2;
+    const p = ((pDeg || 0) * (Math.PI / 180)) / 2;
+    const y = ((yDeg || 0) * (Math.PI / 180)) / 2;
+
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const cp = Math.cos(-p), sp = Math.sin(-p);
+    const cy = Math.cos(y), sy = Math.sin(y);
+
+    return {
+        w: cr * cp * cy + sr * sp * sy,
+        x: sr * cp * cy - cr * sp * sy,
+        y: cr * sp * cy + sr * cp * sy,
+        z: cr * cp * sy - sr * sp * cy
+    };
+}
+
 function updateMountingPreview3D() {
     if (!mountMesh) return;
     const rEl = document.getElementById('mount-roll-num');
@@ -729,9 +797,8 @@ function updateMountingPreview3D() {
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
-    mountMesh.quaternion.setFromEuler(
-        new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
-    );
+    const qMount = getMountingQuaternionFromDeg(r, p, y);
+    applyEspModelQuaternion(mountMesh, qMount.w, qMount.x, qMount.y, qMount.z);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -860,6 +927,21 @@ function checkAndApplySavedMounting() {
 // 4. FRAME-INTERPOLATION & 3D RENDERING
 // ============================================================================
 
+/*
+ * Breadcrumb: 2026-10-06 23:50 - ESP Direct Quaternion Orientation & SLERP Blending
+ * [CRITICAL BUGFIX & FEATURE PARITY - HARDWARE 3D MODEL SYNCHRONIZATION]:
+ * 1. Rotiert repMesh direkt über die Portal-Quaternions-Gleichung:
+ *    q_three = (-qy, qx, qz, qw) gefolgt von premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)).
+ * 2. Eliminiert repMesh.quaternion.setFromEuler(), wodurch 3D-Kippsprünge unmöglich werden.
+ * 3. Nutzt direkte sphärische/normalisierte Interpolation zwischen Frame A und B.
+ */
+function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
+    const norm = Math.hypot(qx, qy, qz, qw) || 1.0;
+    const qThree = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
+    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));
+    targetMesh.quaternion.copy(qThree);
+}
+
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
@@ -873,6 +955,7 @@ function renderInterpolatedFrame(tSec) {
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
+    // Kontinuierliche Winkelanzeige im HUD
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
@@ -886,13 +969,19 @@ function renderInterpolatedFrame(tSec) {
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        const meshRoll = roll * (Math.PI / 180);
-        const meshPitch = pitch * (Math.PI / 180);
-        const meshYaw = yaw * (Math.PI / 180);
+        // Lineare Quaternion-Interpolation mit Vorzeichen-Gleichheit
+        let dot = ptA.relQw * ptB.relQw + ptA.relQx * ptB.relQx + ptA.relQy * ptB.relQy + ptA.relQz * ptB.relQz;
+        let bScale = alpha;
+        let aScale = 1.0 - alpha;
+        if (dot < 0.0) bScale = -bScale;
 
-        repMesh.quaternion.setFromEuler(
-            new THREE.Euler(meshRoll, meshPitch, meshYaw, 'ZYX')
-        );
+        const iqw = aScale * ptA.relQw + bScale * ptB.relQw;
+        const iqx = aScale * ptA.relQx + bScale * ptB.relQx;
+        const iqy = aScale * ptA.relQy + bScale * ptB.relQy;
+        const iqz = aScale * ptA.relQz + bScale * ptB.relQz;
+
+        // Direktes Anwenden der hardware-identischen Portal-Transformation
+        applyEspModelQuaternion(repMesh, iqw, iqx, iqy, iqz);
 
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
@@ -1505,6 +1594,76 @@ window.setReplayGraphMode = setReplayGraphMode;
 // 7. INGESTION & DATEI-INSPEKTION
 // ============================================================================
 
+/*
+ * Breadcrumb: 2026-10-06 23:55 - Antipodal Stream Ingestion & ReferenceError Fix
+ * [CRITICAL BUGFIX & FEATURE PARITY - CSV INGESTION PIPELINE]:
+ * 1. Behebt ReferenceError: quatToEulerDeg is not defined durch zentrale Routine parseImuCsvRecord().
+ * 2. Glättet antipodale Vorzeichenwechsel (q · q_prev < 0) direkt beim Einlesen der CSV-Zeilen.
+ * 3. Initialisiert roll/pitch/yaw mit 0.0; die finale Berechnung erfolgt via recalculateAllEuler().
+ */
+let lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+let isIngestFirstSample = true;
+
+/*
+ * Breadcrumb: 2026-10-06 23:58 - Deduplicated Mounting Quaternion & Forced Cycle Override
+ * [CRITICAL BUGFIX FLAG - MULTI-CHUNK EVENT SEPARATION]:
+ * 1. updateMountingQuaternion() greift direkt auf getMountingQuaternionFromDeg() zu (DRY).
+ * 2. parseImuCsvRecord priorisiert forcedCycle, falls übergeben (trennt Tages-Chunks sauber).
+ * 3. Schützt calculateAllDisplacements() und Dropdown-Filter vor BootCycle-Kollisionen.
+ */
+function updateMountingQuaternion() {
+    replayMountQuat = getMountingQuaternionFromDeg(
+        replayMountConfig.roll,
+        replayMountConfig.pitch,
+        replayMountConfig.yaw
+    );
+}
+
+function parseImuCsvRecord(line, fileIndex, forcedCycle) {
+    const sep = line.includes(';') ? ';' : ',';
+    const parts = line.split(sep);
+    if (parts.length < 8) return null;
+
+    let qw = parseFloat(parts[1]) || 1.0;
+    let qx = parseFloat(parts[2]) || 0.0;
+    let qy = parseFloat(parts[3]) || 0.0;
+    let qz = parseFloat(parts[4]) || 0.0;
+
+    // Antipodale Kontinuität identisch zum ESP ws.onmessage (q · q_prev >= 0)
+    if (isIngestFirstSample) {
+        lastIngestQuat = { w: qw, x: qx, y: qy, z: qz };
+        isIngestFirstSample = false;
+    } else {
+        const dot = qw * lastIngestQuat.w + qx * lastIngestQuat.x + qy * lastIngestQuat.y + qz * lastIngestQuat.z;
+        if (dot < 0.0) {
+            qw = -qw; qx = -qx; qy = -qy; qz = -qz;
+        }
+        lastIngestQuat = { w: qw, x: qx, y: qy, z: qz };
+    }
+
+    // Wenn forcedCycle explizit übergeben wird (z. B. cycleId bei inspectImuDayMerged),
+    // hat dieser Vorrang vor der BootCycle-Spalte parts[8].
+    let assignedCycle = 1;
+    if (forcedCycle !== undefined && forcedCycle !== null) {
+        assignedCycle = forcedCycle;
+    } else if (parts[8]) {
+        assignedCycle = parseInt(parts[8], 10) || 1;
+    }
+
+    return {
+        ts: parts[0].trim(),
+        qw, qx, qy, qz,
+        ax: parseFloat(parts[5]) || 0.0,
+        ay: parseFloat(parts[6]) || 0.0,
+        az: parseFloat(parts[7]) || 0.0,
+        roll: 0.0,
+        pitch: 0.0,
+        yaw: 0.0,
+        cycle: assignedCycle,
+        fileIndex: fileIndex
+    };
+}
+
 async function inspectImuFile(file) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -1530,32 +1689,13 @@ async function inspectImuFile(file) {
 
         const lines = text.split('\n');
         replayDataRaw = [];
+        isIngestFirstSample = true;
 
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            const sep = line.includes(';') ? ';' : ',';
-            const parts = line.split(sep);
-            if (parts.length >= 8) {
-                const qw = parseFloat(parts[1]) || 1.0;
-                const qx = parseFloat(parts[2]) || 0.0;
-                const qy = parseFloat(parts[3]) || 0.0;
-                const qz = parseFloat(parts[4]) || 0.0;
-                const euler = quatToEulerDeg(qw, qx, qy, qz);
-
-                replayDataRaw.push({
-                    ts: parts[0],
-                    qw, qx, qy, qz,
-                    ax: parseFloat(parts[5]) || 0.0,
-                    ay: parseFloat(parts[6]) || 0.0,
-                    az: parseFloat(parts[7]) || 0.0,
-                    roll: euler.roll,
-                    pitch: euler.pitch,
-                    yaw: euler.yaw,
-                    cycle: parts[8] ? parseInt(parts[8], 10) : 1,
-                    fileIndex: 0
-                });
-            }
+            const item = parseImuCsvRecord(line, 0, 1);
+            if (item) replayDataRaw.push(item);
         }
 
         if (replayDataRaw.length === 0) {
@@ -1627,6 +1767,7 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
         const results = await Promise.all(fetchPromises);
         replayDataRaw = [];
         const chunkStats = [];
+        isIngestFirstSample = true;
 
         results.forEach(({ file, fileIdx, text }) => {
             if (!text) return;
@@ -1639,29 +1780,10 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
-                const sep = line.includes(';') ? ';' : ',';
-                const parts = line.split(sep);
-                if (parts.length >= 8) {
-                    if (!firstTs && parts[0]) firstTs = parts[0].trim();
+                if (!firstTs && line.split(/[;,]/)[0]) firstTs = line.split(/[;,]/)[0].trim();
 
-                    const qw = parseFloat(parts[1]) || 1.0;
-                    const qx = parseFloat(parts[2]) || 0.0;
-                    const qy = parseFloat(parts[3]) || 0.0;
-                    const qz = parseFloat(parts[4]) || 0.0;
-                    const euler = quatToEulerDeg(qw, qx, qy, qz);
-
-                    const item = {
-                        ts: parts[0],
-                        qw, qx, qy, qz,
-                        ax: parseFloat(parts[5]) || 0.0,
-                        ay: parseFloat(parts[6]) || 0.0,
-                        az: parseFloat(parts[7]) || 0.0,
-                        roll: euler.roll,
-                        pitch: euler.pitch,
-                        yaw: euler.yaw,
-                        cycle: parts[8] ? parseInt(parts[8], 10) : cycleId,
-                        fileIndex: fileIdx
-                    };
+                const item = parseImuCsvRecord(line, fileIdx, cycleId);
+                if (item) {
                     replayDataRaw.push(item);
                     samplesInChunk++;
                 }
