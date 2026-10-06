@@ -346,59 +346,88 @@ function recalculateAllEuler() {
  * 2. Trapezförmige doppelte Integration (a -> v -> s) mit Hochpass-Dämpfung (alpha 0.94).
  * 3. Skaliert Meter zu Millimeter (* 1000) für direkten mechanischen Vibrationsabgleich.
  */
+/*
+ * Breadcrumb: 2026-10-06 20:30 - Zero-Phase Bandpass Double-Integration for Dynamic Displacement (mm)
+ * [CRITICAL BUGFIX FLAG - ELIMINATE 1/w^2 LOW-FREQ DRIFT]:
+ * 1. Ersetzt den fehlerhaften Leaky-Integrator, der hochfrequente Vibrationen auslöschte.
+ * 2. Zero-Phase Forward-Backward High-Pass (fc ~ 0.75 Hz) eliminiert DC-Offset und Kipp-Drifts restlos.
+ * 3. Schwingweg bildet die Beschleunigungsspitzen phasensynchron in realistischen Millimetern (mm) ab.
+ */
 function calculateAllDisplacements() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
-    const dt = 0.1;
-    const alpha = 0.94; // Verhindert quadratischen Drift bei 10 Hz Abtastung
+    const dt = 0.1; // 10 Hz Abtastrate
+    // Highpass-Koeffizient fuer fc ~ 0.75 Hz bei fs = 10 Hz (alpha = 1 / (1 + 2*pi*fc*dt))
+    const hpAlpha = 0.68;
+
+    function zeroPhaseHighPass(arr) {
+        const n = arr.length;
+        if (n < 4) return new Float64Array(arr);
+
+        // Vorwärtsdurchlauf
+        const fwd = new Float64Array(n);
+        fwd[0] = 0;
+        for (let i = 1; i < n; i++) {
+            fwd[i] = hpAlpha * (fwd[i - 1] + arr[i] - arr[i - 1]);
+        }
+
+        // Rückwärtsdurchlauf (hebt Phasenverschiebung exakt auf)
+        const out = new Float64Array(n);
+        out[n - 1] = fwd[n - 1];
+        for (let i = n - 2; i >= 0; i--) {
+            out[i] = hpAlpha * (out[i + 1] + fwd[i] - fwd[i + 1]);
+        }
+        return out;
+    }
 
     let currentCycle = null;
     let cycleIndices = [];
 
     function processCycle(indices) {
-        if (indices.length === 0) return;
+        const n = indices.length;
+        if (n === 0) return;
 
-        let sumAx = 0, sumAy = 0, sumAz = 0;
-        for (let idx of indices) {
-            sumAx += replayDataRaw[idx].ax;
-            sumAy += replayDataRaw[idx].ay;
-            sumAz += replayDataRaw[idx].az;
-        }
-        const meanAx = sumAx / indices.length;
-        const meanAy = sumAy / indices.length;
-        const meanAz = sumAz / indices.length;
+        ['ax', 'ay', 'az'].forEach(axisKey => {
+            const dispKey = axisKey === 'ax' ? 'dx' : (axisKey === 'ay' ? 'dy' : 'dz');
 
-        let vx = 0, vy = 0, vz = 0;
-        let sx = 0, sy = 0, sz = 0;
-        let prevAx = 0, prevAy = 0, prevAz = 0;
-        let prevVx = 0, prevVy = 0, prevVz = 0;
+            // 1. Rohbeschleunigung extrahieren und statischen Mittelwert abziehen
+            const rawA = new Float64Array(n);
+            let sumA = 0;
+            for (let k = 0; k < n; k++) {
+                const val = replayDataRaw[indices[k]][axisKey] || 0;
+                rawA[k] = val;
+                sumA += val;
+            }
+            const meanA = sumA / n;
+            for (let k = 0; k < n; k++) rawA[k] -= meanA;
 
-        for (let k = 0; k < indices.length; k++) {
-            const item = replayDataRaw[indices[k]];
-            const axF = item.ax - meanAx;
-            const ayF = item.ay - meanAy;
-            const azF = item.az - meanAz;
+            // 2. Beschleunigung vorfiltern (Zero-Phase)
+            const aFilt = zeroPhaseHighPass(rawA);
 
-            if (k === 0) {
-                vx = 0; vy = 0; vz = 0;
-                sx = 0; sy = 0; sz = 0;
-            } else {
-                vx = alpha * (vx + 0.5 * (axF + prevAx) * dt);
-                vy = alpha * (vy + 0.5 * (ayF + prevAy) * dt);
-                vz = alpha * (vz + 0.5 * (azF + prevAz) * dt);
-
-                sx = alpha * (sx + 0.5 * (vx + prevVx) * dt);
-                sy = alpha * (sy + 0.5 * (vy + prevVy) * dt);
-                sz = alpha * (sz + 0.5 * (vz + prevVz) * dt);
+            // 3. Erste Integration: a -> v
+            const v = new Float64Array(n);
+            v[0] = 0;
+            for (let k = 1; k < n; k++) {
+                v[k] = v[k - 1] + 0.5 * (aFilt[k] + aFilt[k - 1]) * dt;
             }
 
-            prevAx = axF; prevAy = ayF; prevAz = azF;
-            prevVx = vx; prevVy = vy; prevVz = vz;
+            // 4. Geschwindigkeit filtern (eliminiert Integrationsdrifts)
+            const vFilt = zeroPhaseHighPass(v);
 
-            item.dx = sx * 1000.0;
-            item.dy = sy * 1000.0;
-            item.dz = sz * 1000.0;
-        }
+            // 5. Zweite Integration: v -> s
+            const s = new Float64Array(n);
+            s[0] = 0;
+            for (let k = 1; k < n; k++) {
+                s[k] = s[k - 1] + 0.5 * (vFilt[k] + vFilt[k - 1]) * dt;
+            }
+
+            // 6. Weg filtern und in Millimeter (* 1000) skalieren
+            const sFilt = zeroPhaseHighPass(s);
+
+            for (let k = 0; k < n; k++) {
+                replayDataRaw[indices[k]][dispKey] = sFilt[k] * 1000.0;
+            }
+        });
     }
 
     for (let i = 0; i < replayDataRaw.length; i++) {
@@ -924,6 +953,14 @@ function attachCanvasInteraction() {
  * 3. Ausschlag: Sub-Millimeter- und Millimeter-Schritte (0.2 bis 100 mm) um Nulllinie.
  * 4. Durchgehender orangefarbener Zeit-Cursor und synchrones Drag-Overlay auf allen 3 Ebenen.
  */
+/*
+ * Breadcrumb: 2026-10-06 20:30 - Decoupled Y-Axis Layout & Synchronized Vibration Rendering
+ * [CRITICAL BUGFIX FLAG - LAYOUT PARITY & ZERO-OVERLAP]:
+ * 1. Dedizierter topMargin (18px) verhindert Überschneidung von Einheit und oberstem Skalenwert.
+ * 2. Rechtsbündige Ausrichtung der Y-Werte (textAlign: right) mit 44px Achsenabstand.
+ * 3. Eindeutige Einheitenangabe im Canvas und im Cursor-Badge (BESCHLEUNIGUNG [m/s²], WINKEL [°], SCHWINGWEG [mm]).
+ * 4. Saubere Clipping-Begrenzung schützt Kopfzeile und Zeitraster vor Kurvenüberläufen.
+ */
 function getNiceScale(maxVal, minScale, steps) {
     const target = Math.max(minScale, maxVal * 1.18);
     for (let s of steps) {
@@ -959,31 +996,35 @@ function drawReplayGraph(curTimeSec) {
         maxAcc = replayAccThreshold;
     }
 
-    const scaleAcc = getNiceScale(maxAcc, 1.0, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0]);
+    const scaleAcc = getNiceScale(maxAcc, 1.0, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0]);
     const scaleEuler = getNiceScale(maxAngle, 2.0, [2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180]);
-    const scaleDisp = getNiceScale(maxDisp, 0.5, [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0]);
+    const scaleDisp = getNiceScale(maxDisp, 0.5, [0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0]);
 
-    const leftMargin = 38;
+    const leftMargin = 44; // Genug Raum für 4-stellige Werte inkl. Vorzeichen
     const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
     const curExactIdx = Math.min(Math.floor(curTime / 0.1), count - 1);
     const curPt = replayFilteredData[Math.max(0, curExactIdx)] || replayFilteredData[0];
 
-    // Hilfsfunktion zum Zeichnen eines einzelnen Graphen
-    function renderTier(cv, maxScale, unitStr, curves, badgeTitle, isBottomTier, isAccTier) {
+    function renderTier(cv, maxScale, unitLabel, curves, badgeTitle, isBottomTier, isAccTier) {
         const w = cv.width = cv.clientWidth;
         const h = cv.height = cv.clientHeight;
         if (w === 0 || h === 0) return;
 
         const ctx = cv.getContext('2d');
         ctx.clearRect(0, 0, w, h);
-        const midY = h / 2;
-        const plotW = w - leftMargin;
 
-        // Peak-Highlighting bei Schwellenwert-Überschreitung (nur Beschleunigung)
+        const topMargin = 18; // Verhindert Überlappung der Einheit mit der +1.0 Linie
+        const bottomMargin = isBottomTier ? 16 : 8;
+        const plotW = w - leftMargin;
+        const plotH = h - topMargin - bottomMargin;
+        const midY = topMargin + plotH / 2;
+        const halfH = plotH / 2;
+
+        // Schwellenwert-Hintergrund bei Peaks (nur Beschleunigung)
         if (isAccTier && replayAccThreshold > 0) {
             ctx.save();
             ctx.beginPath();
-            ctx.rect(leftMargin, 0, plotW, h);
+            ctx.rect(leftMargin, topMargin, plotW, plotH);
             ctx.clip();
             ctx.fillStyle = 'rgba(239, 68, 68, 0.18)';
             for (let i = startIndex; i <= endIndex; i++) {
@@ -991,17 +1032,17 @@ function drawReplayGraph(curTimeSec) {
                 if (Math.hypot(d.ax, d.ay, d.az) >= replayAccThreshold) {
                     const px = timeToX(i * 0.1, w, leftMargin);
                     const stepW = Math.max(2, (0.1 / tSpan) * plotW);
-                    ctx.fillRect(px - stepW / 2, 0, stepW, h);
+                    ctx.fillRect(px - stepW / 2, topMargin, stepW, plotH);
                 }
             }
             ctx.restore();
         }
 
-        // Horizontale Amplituden-Rasterlinien mit Einheitenbeschriftung
+        // Horizontale Rasterlinien & Achsenwerte
         const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
         ctx.font = '9px monospace';
         gridPoints.forEach(ratio => {
-            const y = midY - ratio * (midY - 8);
+            const y = midY - ratio * halfH;
             ctx.strokeStyle = ratio === 0 ? 'rgba(15, 23, 42, 0.25)' : 'rgba(15, 23, 42, 0.07)';
             ctx.lineWidth = 1;
             if (ratio === 0) ctx.setLineDash([3, 3]); else ctx.setLineDash([]);
@@ -1011,13 +1052,18 @@ function drawReplayGraph(curTimeSec) {
             ctx.fillStyle = '#64748b';
             const val = ratio * maxScale;
             const str = (ratio > 0 ? '+' : '') + (Number.isInteger(maxScale) ? val.toFixed(0) : val.toFixed(1));
-            ctx.fillText(str, 2, y + 3);
+
+            // Rechtsbündig mit klarem Abstand zur Diagrammkante
+            ctx.textAlign = 'right';
+            ctx.fillText(str, leftMargin - 6, y + 3);
+            ctx.textAlign = 'left';
         });
         ctx.setLineDash([]);
 
-        // Einheit oben links
-        ctx.fillStyle = '#94a3b8';
-        ctx.fillText(unitStr, 2, 9);
+        // Einheit sauber oberhalb der Skalenlinie platziert
+        ctx.fillStyle = '#475569';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(unitLabel, 4, 12);
 
         // Schwellenwert-Grenzlinien
         if (isAccTier && replayAccThreshold > 0 && replayAccThreshold <= maxScale) {
@@ -1025,8 +1071,8 @@ function drawReplayGraph(curTimeSec) {
             ctx.strokeStyle = 'rgba(220, 38, 38, 0.75)';
             ctx.lineWidth = 1.2;
             ctx.setLineDash([4, 3]);
-            const yPos = midY - (replayAccThreshold / maxScale) * (midY - 8);
-            const yNeg = midY + (replayAccThreshold / maxScale) * (midY - 8);
+            const yPos = midY - (replayAccThreshold / maxScale) * halfH;
+            const yNeg = midY + (replayAccThreshold / maxScale) * halfH;
             ctx.beginPath();
             ctx.moveTo(leftMargin, yPos); ctx.lineTo(w, yPos);
             ctx.moveTo(leftMargin, yNeg); ctx.lineTo(w, yNeg);
@@ -1036,7 +1082,7 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         }
 
-        // Vertikales Zeitraster (Labels nur im untersten Graphen zur Vermeidung von Überlagerungen)
+        // Vertikale Zeitrasterlinien (Beschriftung nur im untersten Graphen)
         const minPixelPerTick = 75;
         const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
         const rawStep = tSpan / maxTicks;
@@ -1052,7 +1098,8 @@ function drawReplayGraph(curTimeSec) {
             const px = timeToX(t, w, leftMargin);
             if (px >= leftMargin && px <= w) {
                 ctx.beginPath();
-                ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+                ctx.moveTo(px, topMargin); ctx.lineTo(px, h - bottomMargin);
+                ctx.stroke();
 
                 if (isBottomTier) {
                     let labelText = timeStep < 0.1 ? t.toFixed(2) + 's' : (timeStep < 1.0 ? t.toFixed(1) + 's' : Math.round(t) + 's');
@@ -1065,11 +1112,11 @@ function drawReplayGraph(curTimeSec) {
             }
         }
 
-        // Kurven zeichnen
+        // Signalverläufe zeichnen (mit Clipping auf Plotbereich)
         curves.forEach(({ key, color }) => {
             ctx.save();
             ctx.beginPath();
-            ctx.rect(leftMargin, 0, plotW, h);
+            ctx.rect(leftMargin, topMargin, plotW, plotH);
             ctx.clip();
             ctx.strokeStyle = color;
             ctx.lineWidth = 1.8;
@@ -1078,7 +1125,7 @@ function drawReplayGraph(curTimeSec) {
             let first = true;
             for (let i = startIndex; i <= endIndex; i++) {
                 const px = timeToX(i * 0.1, w, leftMargin);
-                const py = midY - ((replayFilteredData[i][key] || 0) / maxScale) * (midY - 8);
+                const py = midY - ((replayFilteredData[i][key] || 0) / maxScale) * halfH;
                 if (first) { ctx.moveTo(px, py); first = false; }
                 else { ctx.lineTo(px, py); }
             }
@@ -1086,42 +1133,42 @@ function drawReplayGraph(curTimeSec) {
             ctx.restore();
         });
 
-        // Interaktiver Selektionsbereich während des Ziehens
+        // Interaktiver Zoom-Auswahlrahmen
         if (isSelectingZoom && Math.abs(selectCurrentX - selectStartX) > 2) {
             const xMin = Math.max(leftMargin, Math.min(selectStartX, selectCurrentX));
             const xMax = Math.min(w, Math.max(selectStartX, selectCurrentX));
             const selW = xMax - xMin;
 
             ctx.fillStyle = 'rgba(0, 155, 76, 0.16)';
-            ctx.fillRect(xMin, 0, selW, h);
+            ctx.fillRect(xMin, topMargin, selW, plotH);
             ctx.strokeStyle = '#009B4C';
             ctx.lineWidth = 1.5;
-            ctx.strokeRect(xMin, 0, selW, h);
+            ctx.strokeRect(xMin, topMargin, selW, plotH);
 
             if (isBottomTier) {
                 const tSelA = xToTime(xMin, w, leftMargin);
                 const tSelB = xToTime(xMax, w, leftMargin);
                 ctx.fillStyle = '#009B4C';
                 ctx.font = 'bold 9px monospace';
-                ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, 16);
+                ctx.fillText(`Δ ${(tSelB - tSelA).toFixed(2)}s`, xMin + 4, topMargin + 14);
             }
         }
 
-        // Zeiger-Cursor (orange)
+        // Synchroner Zeit-Cursor (orange)
         const curX = timeToX(curTime, w, leftMargin);
         if (curX >= leftMargin && curX <= w) {
             ctx.strokeStyle = '#d97706';
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(curX, 0); ctx.lineTo(curX, h); ctx.stroke();
+            ctx.moveTo(curX, topMargin); ctx.lineTo(curX, h - bottomMargin); ctx.stroke();
             ctx.fillStyle = '#d97706';
-            ctx.beginPath(); ctx.arc(curX, 5, 3.5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(curX, topMargin + 4, 3.5, 0, Math.PI * 2); ctx.fill();
         }
 
-        // Legende & Live-Werte des Cursors
+        // Kopf-Badge mit eindeutiger Einheit und Werten
         ctx.font = 'bold 9px monospace';
         let valInfo = curves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
-        let fullBadge = `${badgeTitle} | ${valInfo}`;
+        let fullBadge = `${badgeTitle} [${unitLabel}] | ${valInfo}`;
         let badgeW = ctx.measureText(fullBadge).width;
 
         ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
@@ -1131,8 +1178,8 @@ function drawReplayGraph(curTimeSec) {
 
         let drawX = w - badgeW - 9;
         ctx.fillStyle = '#0f172a';
-        ctx.fillText(`${badgeTitle} |`, drawX, 14);
-        drawX += ctx.measureText(`${badgeTitle} | `).width;
+        ctx.fillText(`${badgeTitle} [${unitLabel}] | `, drawX, 14);
+        drawX += ctx.measureText(`${badgeTitle} [${unitLabel}] | `).width;
 
         curves.forEach(c => {
             ctx.fillStyle = c.color;
@@ -1147,21 +1194,21 @@ function drawReplayGraph(curTimeSec) {
         { key: 'ax', color: '#dc2626', label: 'ACC X', dec: 2 },
         { key: 'ay', color: '#009B4C', label: 'ACC Y', dec: 2 },
         { key: 'az', color: '#2563eb', label: 'ACC Z', dec: 2 }
-    ], 'ACCEL', false, true);
+    ], 'BESCHLEUNIGUNG', false, true);
 
     // 2. Kanal: Neigungswinkel
-    renderTier(cvEuler, scaleEuler, 'Grad (°)', [
+    renderTier(cvEuler, scaleEuler, '°', [
         { key: 'roll', color: '#dc2626', label: 'Roll', dec: 1 },
         { key: 'pitch', color: '#009B4C', label: 'Pitch', dec: 1 },
         { key: 'yaw', color: '#7c3aed', label: 'Yaw', dec: 1 }
     ], 'WINKEL', false, false);
 
-    // 3. Kanal: Ausschlag (Weg in mm)
+    // 3. Kanal: Dynamischer Schwingweg
     renderTier(cvDisp, scaleDisp, 'mm', [
         { key: 'dx', color: '#dc2626', label: 'X', dec: 2 },
         { key: 'dy', color: '#009B4C', label: 'Y', dec: 2 },
         { key: 'dz', color: '#2563eb', label: 'Z', dec: 2 }
-    ], 'AUSSCHLAG', true, false);
+    ], 'SCHWINGWEG', true, false);
 }
 
 // ============================================================================
