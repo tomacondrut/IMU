@@ -269,16 +269,28 @@ function attachImuAxes(targetGroup) {
     const headLen = 0.22;
     const headWidth = 0.12;
 
-    // X-Achse: Roll (Rot #dc2626)
-    const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
-    // Y-Achse: Pitch (Grün #009B4C)
-    const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
-    // Z-Achse: Yaw (Blau #2563eb)
+    // X-Achse: Querachse = Pitch (Grün #009B4C)
+    const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
+    // Y-Achse: Längs-/Kippachse = Roll (Rot #dc2626)
+    const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
+    // Z-Achse: Hochachse = Yaw (Blau #2563eb)
     const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), len, 0x2563eb, headLen, headWidth);
 
     axesGroup.add(arrowX);
     axesGroup.add(arrowY);
     axesGroup.add(arrowZ);
+
+    const lblX = createAxisLabel('Pitch (X)', '#009B4C');
+    lblX.position.set(len + 0.25, 0, 0);
+    axesGroup.add(lblX);
+
+    const lblY = createAxisLabel('Roll (Y)', '#dc2626');
+    lblY.position.set(0, len + 0.25, 0);
+    axesGroup.add(lblY);
+
+    const lblZ = createAxisLabel('Yaw (Z)', '#2563eb');
+    lblZ.position.set(0, 0, len + 0.25);
+    axesGroup.add(lblZ);
 
     function createAxisLabel(text, colorHex) {
         const canvas = document.createElement('canvas');
@@ -558,52 +570,13 @@ function calculateAllDisplacements() {
 
 
 /*
- * Breadcrumb: 2026-10-06 21:05 - Physical Mounting Position (Roll/Pitch/Yaw) & Direct mm-Displacement 3D Translation
- * [CRITICAL FEATURE & BUGFIX PARITY]:
- * 1. Ersetzt starres Nullen durch konfigurierbare Einbaulage (Standard: Pitch -90° für STAG Kippstation).
- * 2. 3D-Vorschau im Konfigurations-Modal zur intuitiven Sichtprüfung der Einbaulage.
- * 3. quatToEulerDeg berechnet Winkel relativ zur definierten Einbaulage.
- * 4. 3D-Translation im Replay bildet exakt den berechneten Schwingweg (dx, dy, dz in mm) phasenstarr ab.
- */
-
-/*
- * Breadcrumb: 2026-10-06 21:30 - Physical Mounting Roll -90° & GLB 3D Modal Loader
- * [CRITICAL BUGFIX & FEATURE PARITY]:
- * 1. Default-Einbaulage auf Roll: -90° (Kippstation) gesetzt; Null-Werte vor Fallback-Überschreibung geschützt.
- * 2. loadMountingGLBModel() lädt das echte IMU.glb auch im Einbaulagen-Popup (mit Achsen-Visualisierung).
- * 3. 3D-Orientierung in renderInterpolatedFrame() und updateMountingPreview3D() exakt an die 
- *    ESP32-Transformation angepasst: qModel = (-qy, qx, qz, qw) premultiplied by 90° Z.
- * 4. 3D-Translation koppelt direkt an den berechneten Schwingweg (dx, dy, dz in mm).
- */
-
-// Globaler Status für Einbaulage (Standard: Roll -90° für Kippstation)
-/*
- * Breadcrumb: 2026-10-06 22:05 - Unified Mounting Logic, GLB Popup & ESP32 Axis Alignment
- * [CRITICAL BUGFIX FLAG - SENSOR TO MODEL COORDINATES & ZERO SYNTAX LEAK]:
- * 1. sensorToModelQuat & getRelativeModelQuat implementiert (-qy, qx, qz, qw).
- * 2. Kippbewegung liegt nun phasen- und farbgenau auf Roll (Rot / X).
- * 3. SyntaxError durch doppelten setMountingPreset-Kopf restlos beseitigt.
- * 4. loadMountingGLBModel nutzt cachedGltfScene für sofortige GLB-3D-Vorschau im Popup.
- * 5. Translation in renderInterpolatedFrame phasenstarr an Schwingweg (dx, dy, dz) gekoppelt.
- */
-
-/*
- * Breadcrumb: 2026-10-06 22:15 - Model Roll Parity & Ground-Aligned GLB Preview
- * [CRITICAL BUGFIX FLAG - SENSOR TO 3D MODEL AXES & ZERO SYNTAX LEAK]:
- * 1. SyntaxError durch doppelten setMountingPreset-Kopf restlos behoben.
- * 2. sensorToModelQuat bildet Sensor-Y auf Modell-X (Roll / Rot) ab (Parität zu ESP32).
- * 3. initMounting3D fokussiert die Kamera auf Nahbereich (1.6, 1.2, 1.9) -> kein Auszoomen mehr.
- * 4. updateMountingPreview3D rotiert direkt um Bodengitter-Ebene ohne verzerrende 90°-Z-Vordrehung.
- */
-
-/*
- * Breadcrumb: 2026-10-06 22:20 - Ground-Aligned GLB Preview & Synced Model Roll
+ * Breadcrumb: 2026-10-06 22:30 - Ground-Aligned GLB Preview & Axis Parity (Roll=Y, Pitch=X)
  * [CRITICAL BUGFIX & RUNTIME RESTORATION]:
- * 1. SyntaxError behoben (dangling setMountingPreset entfernt) -> Oszillographen zeichnen sofort.
- * 2. sensorToModelQuat transformiert Sensor-Y auf Modell-X (Roll / Rot, Parität zu ESP32).
- * 3. initMounting3D Kamera auf (1.9, 1.4, 2.2) justiert: Modell formatfüllend nah statt weit ausgezoomt.
- * 4. updateMountingPreview3D bindet baseQuat (90° Z) ein: Gehäuse liegt bei 0° plan auf dem Gitter (Deckel oben).
- * 5. Translation in renderInterpolatedFrame bildet reale Millimeter-Ausschläge phasenstarr ab.
+ * 1. SyntaxError (doppelter setMountingPreset-Kopf) restlos behoben -> Graphen rendern sofort.
+ * 2. Achsenzuordnung korrigiert: Roll steuert die Längs-/Kippachse, Pitch die Querachse.
+ * 3. 0° = Gehäuse liegt plan mit Bodenplatte auf dem Gitter; Roll -90° = Kippstellung.
+ * 4. Klonen von rawGltfScene garantiert formatfüllende GLB-Darstellung im Popup.
+ * 5. renderInterpolatedFrame übersetzt reale Millimeter-Ausschläge (dx, dy, dz) phasenstarr.
  */
 
 // Globaler Status für Einbaulage (Standard: Roll -90° für Kippstation)
@@ -612,19 +585,16 @@ let replayMountQuat = null;
 
 let mountScene, mountCamera, mountRenderer, mountMesh, mountControls;
 
+// Three.js-basierte Euler-zu-Quaternion Konvertierung (Pitch=X, Roll=Y, Yaw=Z)
 function eulerDegToQuat(rDeg, pDeg, yDeg) {
-    const r = (rDeg * Math.PI) / 360;
-    const p = (pDeg * Math.PI) / 360;
-    const y = (yDeg * Math.PI) / 360;
-    const cr = Math.cos(r), sr = Math.sin(r);
-    const cp = Math.cos(p), sp = Math.sin(p);
-    const cy = Math.cos(y), sy = Math.sin(y);
-    return {
-        w: cr * cp * cy + sr * sp * sy,
-        x: sr * cp * cy - cr * sp * sy,
-        y: cr * sp * cy + sr * cp * sy,
-        z: cr * cp * sy - sr * sp * cy
-    };
+    const euler = new THREE.Euler(
+        (pDeg * Math.PI) / 180,
+        (rDeg * Math.PI) / 180,
+        (yDeg * Math.PI) / 180,
+        'ZYX'
+    );
+    const q = new THREE.Quaternion().setFromEuler(euler);
+    return { w: q.w, x: q.x, y: q.y, z: q.z };
 }
 
 function updateMountingQuaternion() {
@@ -635,7 +605,7 @@ function updateMountingQuaternion() {
     );
 }
 
-// Sensor-Rohdaten gemäss ESP32 (-qy, qx, qz, qw) in das 3D-Modell-System überführen
+// Sensor-Rohdaten (-qy, qx, qz, qw) in das Modell-Koordinatensystem überführen
 function sensorToModelQuat(qw, qx, qy, qz) {
     const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
     return {
@@ -646,7 +616,7 @@ function sensorToModelQuat(qw, qx, qy, qz) {
     };
 }
 
-// Relative Drehung im Modell-Koordinatensystem berechnen: q_rel = q_mount^-1 * q_model
+// Relative Drehung im Modell-System berechnen: q_rel = q_mount^-1 * q_model
 function getRelativeModelQuat(qw, qx, qy, qz) {
     const qM = sensorToModelQuat(qw, qx, qy, qz);
     if (!replayMountQuat) return qM;
@@ -662,21 +632,13 @@ function getRelativeModelQuat(qw, qx, qy, qz) {
 
 function quatToEulerDeg(qw, qx, qy, qz) {
     const qRel = getRelativeModelQuat(qw, qx, qy, qz);
-    const nw = qRel.w, nx = qRel.x, ny = qRel.y, nz = qRel.z;
+    const q = new THREE.Quaternion(qRel.x, qRel.y, qRel.z, qRel.w);
+    const euler = new THREE.Euler().setFromQuaternion(q, 'ZYX');
 
-    // Roll: Drehung um die Modell-Längsachse (X - Kippachse der Station)
-    const sinr_cosp = 2 * (nw * nx + ny * nz);
-    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
-    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
-
-    // Pitch: Drehung um die Querachse (Y)
-    const sinp = 2 * (nw * ny - nz * nx);
-    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI);
-
-    // Yaw: Drehung um die Hochachse (Z)
-    const siny_cosp = 2 * (nw * nz + nx * ny);
-    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
-    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
+    // Modell-Achsenparität: X = Pitch, Y = Roll (Kippachse), Z = Yaw
+    const pitch = euler.x * (180 / Math.PI);
+    const roll = euler.y * (180 / Math.PI);
+    const yaw = euler.z * (180 / Math.PI);
 
     return { roll, pitch, yaw };
 }
@@ -787,18 +749,12 @@ function adoptCurrentFrameMounting() {
     const pt = replayFilteredData[exactIndex];
 
     const qM = sensorToModelQuat(pt.qw, pt.qx, pt.qy, pt.qz);
-    const nw = qM.w, nx = qM.x, ny = qM.y, nz = qM.z;
+    const q = new THREE.Quaternion(qM.x, qM.y, qM.z, qM.w);
+    const euler = new THREE.Euler().setFromQuaternion(q, 'ZYX');
 
-    const sinr_cosp = 2 * (nw * nx + ny * nz);
-    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
-    const rawRoll = Math.round(Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI));
-
-    const sinp = 2 * (nw * ny - nz * nx);
-    const rawPitch = Math.round(Math.abs(sinp) >= 1 ? Math.sign(sinp) * 90 : Math.asin(Math.max(-1.0, Math.min(1.0, sinp))) * (180 / Math.PI));
-
-    const siny_cosp = 2 * (nw * nz + nx * ny);
-    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
-    const rawYaw = Math.round(Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI));
+    const rawPitch = Math.round(euler.x * (180 / Math.PI));
+    const rawRoll = Math.round(euler.y * (180 / Math.PI));
+    const rawYaw = Math.round(euler.z * (180 / Math.PI));
 
     setMountingPreset(rawRoll, rawPitch, rawYaw);
 }
@@ -896,9 +852,8 @@ function initMounting3D() {
     mountScene = new THREE.Scene();
     mountScene.background = new THREE.Color(0xdbe2ea);
 
-    // Zoom optimiert: Kamera nahe am Modell positioniert für klare Proportionen
     mountCamera = new THREE.PerspectiveCamera(40, w / h, 0.1, 100);
-    mountCamera.position.set(1.9, 1.4, 2.2);
+    mountCamera.position.set(2.0, 1.5, 2.4);
     mountCamera.lookAt(0, 0, 0);
 
     mountRenderer = new THREE.WebGLRenderer({ antialias: true });
@@ -923,9 +878,9 @@ function initMounting3D() {
     mountScene.add(l2);
     mountScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
-    // Bodengitter direkt unter die Gehäusebasis gelegt
+    // Bodengitter direkt unter der Gehäusebasis positioniert
     const grid = new THREE.GridHelper(4, 10, 0x009B4C, 0xcbd5e1);
-    grid.position.y = -0.45;
+    grid.position.y = -0.22;
     mountScene.add(grid);
 
     createMountingFallbackCube();
@@ -953,12 +908,11 @@ function updateMountingPreview3D() {
     const p = (pEl && !isNaN(parseFloat(pEl.value))) ? parseFloat(pEl.value) : 0;
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
-    // Basisdrehung (90° Z aus ESP32) richtet CAD-Gehäuse bei 0° waagrecht zum Bodengitter aus
-    const baseQuat = new THREE.Quaternion(0, 0, 0.707107, 0.707107);
-    const rotQuat = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler((r * Math.PI) / 180, (p * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
+    // Plan auf Bodengitter: Bei r=0, p=0, y=0 liegt die Bodenplatte auf dem Gitter
+    // r rotiert die Längsachse (Roll), p die Querachse (Pitch)
+    mountMesh.quaternion.setFromEuler(
+        new THREE.Euler((p * Math.PI) / 180, (r * Math.PI) / 180, (y * Math.PI) / 180, 'ZYX')
     );
-    mountMesh.quaternion.copy(rotQuat).multiply(baseQuat);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -995,22 +949,12 @@ function renderInterpolatedFrame(tSec) {
     const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
 
     if (repMesh && repScene && repCamera) {
-        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
-        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
-        const qRawA = new THREE.Quaternion(ptA.qx / normA, ptA.qy / normA, ptA.qz / normA, ptA.qw / normA);
-        const qRawB = new THREE.Quaternion(ptB.qx / normB, ptB.qy / normB, ptB.qz / normB, ptB.qw / normB);
-        if (qRawA.dot(qRawB) < 0) qRawB.set(-qRawB.x, -qRawB.y, -qRawB.z, -qRawB.w);
-        qRawA.slerp(qRawB, alpha);
+        // Physische Rotation: Startet bei 0° waagrecht und kippt exakt mit dem Roll-Graphen
+        repMesh.quaternion.setFromEuler(
+            new THREE.Euler((pitch * Math.PI) / 180, (roll * Math.PI) / 180, (yaw * Math.PI) / 180, 'ZYX')
+        );
 
-        // Relative Orientierung im Modell-System berechnen
-        const qRel = getRelativeModelQuat(qRawA.w, qRawA.x, qRawA.y, qRawA.z);
-
-        // 3D-Ausrichtung (Modell-Koordinaten + 90° Z Basis-Ausrichtung)
-        const baseQuat = new THREE.Quaternion(0, 0, 0.707107, 0.707107);
-        const qModel = new THREE.Quaternion(qRel.x, qRel.y, qRel.z, qRel.w);
-        repMesh.quaternion.copy(qModel).multiply(baseQuat);
-
-        // Translation: Reale Millimeter-Ausschläge
+        // Translation: Reale Millimeter-Ausschläge (10 mm = 0.25 Einheiten)
         const mmToSceneScale = 0.025;
         const localDisp = new THREE.Vector3(
             dxD * mmToSceneScale,
