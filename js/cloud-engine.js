@@ -704,10 +704,42 @@ window.triggerLteDiagnosticTest = triggerLteDiagnosticTest;
 // ============================================================================
 // KALENDER & 24H-ZEITLEISTE FÜR CLOUD IMU LOGS
 // ============================================================================
+/*
+ * Breadcrumb: 2026-10-11 16:15 - Persistent Day Timeline State & Multi-Selection Engine
+ * [CRITICAL BUGFIX & FEATURE PARITY - PREVENT TIMELINE COLLAPSE & SCROLL JUMP]:
+ * 1. activeTimelineDate speichert das aktuell geöffnete Datum persistent über Renders hinweg.
+ * 2. selectedTimelineFiles verwaltet Checkbox-Mehrfachauswahlen für Batch-Löschungen.
+ * 3. autoLaunchReplay Parameter in openDailyTimeline entkoppelt das UI-Update vom Replay-Deck scrollIntoView.
+ * [DISMISSED]: Starres Aufrufen von openDayReplay() in openDailyTimeline() scrollte bei jedem Löschen nach oben.
+ */
 let currentDeviceFiles = [];
 let calendarDate = new Date();
 let calendarViewMode = 'month'; // 'month' oder 'week'
 let calendarInitialized = false;
+let activeTimelineDate = null;
+let selectedTimelineFiles = new Set();
+
+function updateStorageQuotaSummaryUI() {
+    const FREE_TIER_LIMIT_MB = 1024;
+    const totalBytesAll = (currentDeviceFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
+    const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
+    const pctAll = Math.min(Math.max(((totalMbAll / FREE_TIER_LIMIT_MB) * 100), 0), 100).toFixed(1);
+    const freeMb = Math.max(0, (FREE_TIER_LIMIT_MB - totalMbAll)).toFixed(1);
+
+    const sumEl = document.getElementById('storage-used-summary');
+    const barEl = document.getElementById('storage-progress-bar');
+    const shareEl = document.getElementById('storage-device-share');
+    const freeEl = document.getElementById('storage-free-capacity');
+
+    if (sumEl) sumEl.innerText = `${totalMbAll} MB von ${FREE_TIER_LIMIT_MB} MB (${pctAll}%)`;
+    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${totalMbAll} MB (${currentDeviceFiles.length} Chunks)`;
+    if (freeEl) freeEl.innerText = `Verbleibend: ${freeMb} MB frei`;
+
+    if (barEl) {
+        barEl.style.width = `${pctAll}%`;
+        barEl.className = pctAll >= 90 ? 'h-full bg-red-500 transition-all duration-300' : (pctAll >= 75 ? 'h-full bg-amber-500 transition-all duration-300' : 'h-full bg-green-600 transition-all duration-300');
+    }
+}
 
 // Vereinheitlichte Datumsextraktion (bevorzugt day_folder, sonst Zeitstempel)
 function getFileDayKey(f) {
@@ -721,6 +753,13 @@ function getFileDayKey(f) {
     return '';
 }
 
+/*
+ * Breadcrumb: 2026-09-28 19:45 - Global State Sync & Storage URL Normalization
+ * [CRITICAL BUGFIX FLAG - CROSS-MODULE REPLAY ACCESSIBILITY]:
+ * 1. Synchronized currentDeviceFiles and getFileDayKey directly to window scope.
+ * 2. Hardened deleteImuCloudFile and fetchImuCloudLogs against undefined array reads.
+ * 3. Dismissed code: script-scoped let currentDeviceFiles blocking replay-deck.js access.
+ */
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
@@ -737,13 +776,14 @@ async function fetchImuCloudLogs() {
         return;
     }
 
-    // Storage-Auslastung aktualisieren
     const FREE_TIER_LIMIT_MB = 1024;
     const totalBytesAll = (allFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
     const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
     const pctAll = Math.min(Math.max(((totalMbAll / FREE_TIER_LIMIT_MB) * 100), 0), 100).toFixed(1);
 
     currentDeviceFiles = (allFiles || []).filter(f => f.device_id === selectedDeviceId);
+    window.currentDeviceFiles = currentDeviceFiles; // Global für Replay-Deck synchronisieren
+
     const deviceBytes = currentDeviceFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
     const deviceMb = (deviceBytes / (1024 * 1024)).toFixed(1);
     const freeMb = Math.max(0, (FREE_TIER_LIMIT_MB - totalMbAll)).toFixed(1);
@@ -762,7 +802,6 @@ async function fetchImuCloudLogs() {
         barEl.className = pctAll >= 90 ? 'h-full bg-red-500 transition-all' : (pctAll >= 75 ? 'h-full bg-amber-500 transition-all' : 'h-full bg-green-600 transition-all');
     }
 
-    // Springt beim Erstaufruf automatisch in den Monat der neuesten Messung
     if (!calendarInitialized && currentDeviceFiles.length > 0) {
         const newestDate = new Date(currentDeviceFiles[0].uploaded_at);
         if (!isNaN(newestDate.getTime())) {
@@ -773,6 +812,8 @@ async function fetchImuCloudLogs() {
 
     renderCalendarUI();
 }
+
+
 
 function changeCalendarMonth(offset) {
     if (calendarViewMode === 'month') {
@@ -788,6 +829,13 @@ function setCalendarViewMode(mode) {
     renderCalendarUI();
 }
 
+/*
+ * Breadcrumb: 2026-10-11 16:20 - Non-Destructive Calendar Render Loop
+ * [CRITICAL BUGFIX FLAG - TIMELINE PRESERVATION ON RE-RENDER]:
+ * 1. Prüft nach dem DOM-Aufbau activeTimelineDate und stellt die geöffnete Zeitleiste ohne Auto-Replay wieder her.
+ * 2. Verhindert das automatische Einklappen des Tages beim Aktualisieren des Rasters.
+ * [DISMISSED]: RenderCalendarUI überschrieb den geöffneten Tag mit einem leeren .hidden Wrapper.
+ */
 function renderCalendarUI() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
@@ -866,11 +914,10 @@ function renderCalendarUI() {
         const todayStr = new Date().toISOString().split('T')[0];
         const isToday = (dayKey === todayStr);
 
-        let cellClass = "p-1.5 sm:p-2 rounded-lg border flex flex-col h-16 sm:h-20 transition ";
+        let cellClass = "p-1.5 sm:p-2 rounded-lg border flex flex-col h-16 sm:h-20 transition relative ";
         let contentHtml = `<span class="text-xs font-bold ${isToday ? 'text-blue-600' : 'text-slate-600'}">${currentRenderDate.getDate()}</span>`;
 
         if (dayFiles.length > 0) {
-            // Ungefähre Dauer: 100 KB Chunk = ca. 1 Minute Aufzeichnung
             const totalBytes = dayFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
             const estMinutes = Math.max(1, Math.round(totalBytes / 102400));
 
@@ -881,7 +928,7 @@ function renderCalendarUI() {
                     <div class="text-[9px] sm:text-[10px] font-mono text-emerald-700 w-fit">~ ${estMinutes} Min</div>
                 </div>
             `;
-            html += `<div class="${cellClass}" onclick="openDailyTimeline('${dayKey}')" title="Klicken für 24h-Zeitleiste">${contentHtml}</div>`;
+            html += `<div class="${cellClass}" onclick="openDailyTimeline('${dayKey}', true)" title="Klicken für 24h-Zeitleiste">${contentHtml}</div>`;
         } else {
             cellClass += "bg-slate-50 border-slate-200";
             html += `<div class="${cellClass}">${contentHtml}</div>`;
@@ -892,6 +939,16 @@ function renderCalendarUI() {
 
     html += `</div></div>`;
     container.innerHTML = html;
+
+    // Falls ein Tag zuvor geöffnet war und noch Daten besitzt, geöffnet halten
+    if (activeTimelineDate) {
+        const remaining = currentDeviceFiles.filter(f => getFileDayKey(f) === activeTimelineDate);
+        if (remaining.length > 0) {
+            openDailyTimeline(activeTimelineDate, false);
+        } else {
+            activeTimelineDate = null;
+        }
+    }
 }
 
 /*
@@ -933,9 +990,19 @@ function openDayReplay(dateStr) {
 }
 window.openDayReplay = openDayReplay;
 
-function openDailyTimeline(dateStr) {
+/*
+ * Breadcrumb: 2026-10-11 16:25 - Decoupled Daily Timeline & Batch Selection Interface
+ * [CRITICAL BUGFIX & WORKFLOW PARITY - SCROLL LOCK & MOBILE-TOUCH TARGETS]:
+ * 1. autoLaunchReplay Flag (Standard: true bei Klick, false bei Lösch-Updates) verhindert ungewolltes scrollIntoView.
+ * 2. Integrierte Checkboxen (Touch-Ziel min. 40px) für Einzel- und Gesamtauswahl des Tages.
+ * 3. Roter "Tag löschen"-Button im Header zum Bereinigen ganzer 24h-Blöcke.
+ * 4. Dynamischer Batch-Löschen Button ("Ausgewählte löschen [X]").
+ */
+function openDailyTimeline(dateStr, autoLaunchReplay = true) {
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
     if (!timelineWrapper) return;
+
+    activeTimelineDate = dateStr;
     timelineWrapper.classList.remove('hidden');
 
     const displayDate = new Date(dateStr + "T00:00:00").toLocaleDateString('de-CH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -943,20 +1010,57 @@ function openDailyTimeline(dateStr) {
     const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr)
         .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
 
+    if (dayFiles.length === 0) {
+        closeDailyTimeline();
+        return;
+    }
+
+    // Ungültig gewordene Pfade aus dem Selektions-Set filtern
+    const currentPaths = new Set(dayFiles.map(f => f.file_path));
+    selectedTimelineFiles.forEach(p => {
+        if (!currentPaths.has(p)) selectedTimelineFiles.delete(p);
+    });
+
+    const isAllSelected = dayFiles.length > 0 && dayFiles.every(f => selectedTimelineFiles.has(f.file_path));
+    const selectedCount = selectedTimelineFiles.size;
+
     let html = `
         <div class="bg-white border-2 border-stag-green rounded-lg p-3 sm:p-4 shadow-md relative">
-            <div class="flex flex-wrap justify-between items-center gap-2 mb-4 pb-2 border-b border-slate-200">
+            <div class="flex flex-wrap justify-between items-center gap-2 mb-3 pb-2 border-b border-slate-200">
                 <div>
                     <h4 class="text-sm font-bold text-stag-green">📅 24-Stunden Zeitleiste: ${displayDate}</h4>
                     <p class="text-[11px] text-slate-500 font-mono">${dayFiles.length} erfasste Mess-Chunks an diesem Tag</p>
                 </div>
-                <div class="flex items-center gap-2 flex-wrap">
+                <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                     <button onclick="openDayReplay('${dateStr}')"
-                            class="bg-stag-green hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded text-xs shadow-sm transition flex items-center gap-1.5">
-                        <span>🔄 Tag neu laden</span>
+                            class="bg-stag-green hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded text-xs shadow-sm transition flex items-center gap-1.5" title="Replay manuell neu starten">
+                        <span>▶ Tag abspielen</span>
+                    </button>
+                    <button onclick="deleteEntireDay('${dateStr}')"
+                            class="btn-delete-log bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold px-3 py-1.5 rounded text-xs transition flex items-center gap-1 shadow-xs"
+                            style="display: ${isSessionUnlocked() ? 'inline-flex' : 'none'};"
+                            title="Alle ${dayFiles.length} Messungen dieses Tages unwiderruflich löschen">
+                        <span>🗑️ Tag löschen</span>
                     </button>
                     <button onclick="closeDailyTimeline()" class="text-slate-500 hover:text-slate-800 font-bold bg-slate-100 hover:bg-slate-200 rounded px-2.5 py-1.5 text-xs transition border border-slate-300">
                         ✕ Schließen
+                    </button>
+                </div>
+            </div>
+
+            <!-- Batch-Aktionsleiste bei aktiver Mehrfachauswahl -->
+            <div class="flex items-center justify-between bg-slate-50 border border-slate-200 p-2 rounded-lg mb-3 text-xs">
+                <label class="flex items-center gap-2 cursor-pointer select-none font-semibold text-slate-700 min-h-[32px] px-1">
+                    <input type="checkbox" id="cb-select-all-day" ${isAllSelected ? 'checked' : ''}
+                           onchange="toggleSelectAllDayTimeline('${dateStr}', this.checked)"
+                           class="w-4 h-4 rounded text-stag-green focus:ring-green-500 cursor-pointer accent-green-600">
+                    <span>Alle auswählen (${dayFiles.length})</span>
+                </label>
+                <div class="flex items-center gap-2">
+                    <button id="btn-batch-delete-timeline" onclick="deleteSelectedTimelineFiles('${dateStr}')"
+                            class="btn-delete-log bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow-sm transition flex items-center gap-1"
+                            style="display: ${isSessionUnlocked() && selectedCount > 0 ? 'inline-flex' : 'none'};">
+                        <span>🗑️ ${selectedCount} Datei(en) löschen</span>
                     </button>
                 </div>
             </div>
@@ -983,7 +1087,6 @@ function openDailyTimeline(dateStr) {
         const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
         const kb = (f.file_size_bytes / 1024).toFixed(0);
 
-        // Mindestbreite 12px für verlässliche Touch-Bedienung mit Daumen/Finger
         html += `
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
                  class="absolute h-full bg-stag-green active:bg-emerald-600 hover:bg-emerald-500 cursor-pointer border-r border-white transition flex items-center justify-center rounded-[2px] shadow-sm touch-manipulation"
@@ -996,11 +1099,9 @@ function openDailyTimeline(dateStr) {
     html += `
                 </div>
             </div>
-            
-            <p class="text-[11px] text-slate-500 mb-4 text-center">Gesamter Tag wurde automatisch im Oszilloskop geöffnet. Klick auf einen grünen Balken isoliert die jeweilige Einzeldatei.</p>
 
             <p class="text-[11px] font-bold uppercase text-slate-500 mb-2 border-b border-slate-200 pb-1 tracking-wider">Erfasste Aufzeichnungen (${dayFiles.length})</p>
-            <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            <div class="space-y-1.5 max-h-56 overflow-y-auto pr-1">
     `;
 
     dayFiles.forEach(f => {
@@ -1008,20 +1109,26 @@ function openDailyTimeline(dateStr) {
         const uploadTime = new Date(f.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
         const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+        const isChecked = selectedTimelineFiles.has(f.file_path);
 
         html += `
             <div class="flex justify-between items-center p-2 rounded bg-slate-50 hover:bg-white border border-slate-200 hover:border-emerald-300 text-xs font-mono transition shadow-sm">
-                <div class="flex items-center gap-2 truncate mr-3">
+                <div class="flex items-center gap-2.5 truncate mr-2 min-w-0">
+                    <label class="p-1 flex items-center justify-center cursor-pointer">
+                        <input type="checkbox" ${isChecked ? 'checked' : ''}
+                               onchange="toggleTimelineFileSelect('${f.file_path}', this.checked, '${dateStr}')"
+                               class="w-4 h-4 rounded text-stag-green focus:ring-green-500 cursor-pointer accent-green-600">
+                    </label>
                     <span class="text-slate-800 font-semibold truncate">📄 ${f.file_name}</span>
                     <span class="text-[10px] text-slate-500 shrink-0">(${kb} KB)</span>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
-                    <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden md:inline mr-1">${uploadTime}</span>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden sm:inline mr-1">${uploadTime}</span>
                     <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition" title="Nur diesen Chunk öffnen">
                         📊
                     </button>
                     <button onclick="deleteImuCloudFile('${f.file_path}', '${f.file_name}')" 
-                            class="btn-delete-log text-red-600 hover:text-red-700 hover:bg-red-50 border border-slate-200 px-2 py-1 rounded transition text-xs" 
+                            class="btn-delete-log text-red-600 hover:text-red-700 hover:bg-red-50 border border-slate-200 p-1 sm:px-2 sm:py-1 rounded transition text-xs" 
                             style="display: ${isSessionUnlocked() ? 'inline-flex' : 'none'};"
                             title="Aus Cloud löschen">
                         🗑️
@@ -1034,14 +1141,60 @@ function openDailyTimeline(dateStr) {
     html += `</div></div>`;
     timelineWrapper.innerHTML = html;
 
-    // Lädt den gesamten Tag automatisch beim Klick auf die Tageskachel
-    openDayReplay(dateStr);
+    // Replay nur beim initialen Klick starten, NICHT bei nachfolgenden Lösch-Updates
+    if (autoLaunchReplay) {
+        openDayReplay(dateStr);
+    }
 }
 
 function closeDailyTimeline() {
+    activeTimelineDate = null;
+    selectedTimelineFiles.clear();
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
     if (timelineWrapper) timelineWrapper.classList.add('hidden');
 }
+
+
+/*
+ * Breadcrumb: 2026-10-11 16:30 - Batch Selection State Controller
+ * [FEATURE IMPLEMENTATION]: Synchronisiert Checkbox-Änderungen und aktualisiert den Lösch-Button.
+ */
+function toggleTimelineFileSelect(filePath, isChecked, dateStr) {
+    if (isChecked) {
+        selectedTimelineFiles.add(filePath);
+    } else {
+        selectedTimelineFiles.delete(filePath);
+    }
+    updateBatchDeleteUI(dateStr);
+}
+
+function toggleSelectAllDayTimeline(dateStr, isChecked) {
+    const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+    dayFiles.forEach(f => {
+        if (isChecked) {
+            selectedTimelineFiles.add(f.file_path);
+        } else {
+            selectedTimelineFiles.delete(f.file_path);
+        }
+    });
+    openDailyTimeline(dateStr, false);
+}
+
+function updateBatchDeleteUI(dateStr) {
+    const btn = document.getElementById('btn-batch-delete-timeline');
+    const cbAll = document.getElementById('cb-select-all-day');
+    const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+
+    const count = selectedTimelineFiles.size;
+    if (btn) {
+        btn.style.display = (isSessionUnlocked() && count > 0) ? 'inline-flex' : 'none';
+        btn.innerHTML = `<span>🗑️ ${count} Datei(en) löschen</span>`;
+    }
+    if (cbAll && dayFiles.length > 0) {
+        cbAll.checked = dayFiles.every(f => selectedTimelineFiles.has(f.file_path));
+    }
+}
+
 
 // ============================================================================
 // SESSION-WEITES SCHLOSS & LÖSCHBERECHTIGUNG
@@ -1177,6 +1330,25 @@ function handleSessionAuthSubmit(e) {
 }
 
 // Bereinigtes Löschen: Kein prompt() mehr, sondern einfaches confirm() bei entsperrtem Schloss
+/*
+ * Breadcrumb: 2026-09-28 20:25 - Normalized Storage Path on Deletion
+ * [CRITICAL BUGFIX FLAG - STORAGE PATH NORMALIZATION]:
+ * Strips leading slashes and redundant bucket prefixes before calling Supabase Storage remove.
+ */
+/*
+ * Breadcrumb: 2026-09-28 20:30 - Storage Path Normalization on File Removal
+ * [CRITICAL BUGFIX FLAG - STRIP LEADING SLASHES ON STORAGE REMOVE]:
+ * 1. Strips bucket prefix and leading slashes to prevent 400/404 errors during cloud deletion.
+ * 2. Synchronizes window.currentDeviceFiles so Replay Deck drops deleted chunks immediately.
+ */
+/*
+ * Breadcrumb: 2026-10-11 16:35 - Bulk & Entire-Day Deletion with Scroll-Position Lock
+ * [CRITICAL BUGFIX & WORKFLOW RESTORATION - ZERO JUMP ON DELETE]:
+ * 1. Speichert window.scrollY vor Löschvorgängen und stellt die Position via requestAnimationFrame exakt wieder her.
+ * 2. Bereinigt Supabase Storage Bucket und imu_log_files Tabelle atomar im Batch (.in()).
+ * 3. Hält activeTimelineDate offen; ruft openDailyTimeline(..., false) auf, womit scrollIntoView unterbunden wird.
+ * 4. Bereinigt imuMemoryCache im Replay-Deck gegen verwaiste Daten.
+ */
 async function deleteImuCloudFile(filePath, fileName) {
     if (!isSessionUnlocked()) {
         openSessionAuthModal();
@@ -1187,34 +1359,152 @@ async function deleteImuCloudFile(filePath, fileName) {
         return;
     }
 
+    const savedScrollY = window.scrollY;
+
     try {
-        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([filePath]);
+        let cleanStoragePath = (filePath || '').replace(/^\/+/, '');
+        if (cleanStoragePath.startsWith('imu-logs/')) {
+            cleanStoragePath = cleanStoragePath.substring(9);
+        }
+
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove([cleanStoragePath]);
         if (sErr) throw sErr;
 
         const { error: dbErr } = await sbClient.from('imu_log_files').delete().eq('file_path', filePath);
         if (dbErr) throw dbErr;
 
         const titleEl = document.getElementById('replay-file-title');
-        if (titleEl && titleEl.innerText === fileName) {
+        if (titleEl && titleEl.innerText.includes(fileName)) {
             closeImuReplayDeck();
         }
 
-        currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
-        const parts = filePath.split('/');
-        const activeDateStr = parts.find(p => /^\d{4}-\d{2}-\d{2}$/.test(p)) || parts[1] || '';
+        if (window.clearImuLogCache) window.clearImuLogCache();
 
+        currentDeviceFiles = currentDeviceFiles.filter(f => f.file_path !== filePath);
+        window.currentDeviceFiles = currentDeviceFiles;
+        selectedTimelineFiles.delete(filePath);
+
+        updateStorageQuotaSummaryUI();
+
+        const parts = filePath.split('/');
+        const activeDateStr = parts.find(p => /^\d{4}-\d{2}-\d{2}$/.test(p)) || parts[1] || activeTimelineDate;
         const dayFilesRemaining = currentDeviceFiles.filter(f => getFileDayKey(f) === activeDateStr);
 
         if (dayFilesRemaining.length > 0) {
-            openDailyTimeline(activeDateStr);
-            renderCalendarUI();
+            openDailyTimeline(activeDateStr, false);
         } else {
             closeDailyTimeline();
-            fetchImuCloudLogs();
+            renderCalendarUI();
         }
+
         appendTerminalLog(`[STORAGE] Datei gelöscht: ${fileName}`);
+
+        requestAnimationFrame(() => {
+            window.scrollTo({ top: savedScrollY, behavior: 'instant' });
+        });
     } catch (err) {
         alert('Fehler beim Löschen: ' + (err.message || JSON.stringify(err)));
+    }
+}
+
+async function deleteSelectedTimelineFiles(dateStr) {
+    if (!isSessionUnlocked()) {
+        openSessionAuthModal();
+        return;
+    }
+
+    const count = selectedTimelineFiles.size;
+    if (count === 0) return;
+
+    if (!confirm(`Möchten Sie alle ${count} ausgewählten Dateien unwiderruflich aus der Cloud löschen?`)) {
+        return;
+    }
+
+    const savedScrollY = window.scrollY;
+    const pathsToDelete = Array.from(selectedTimelineFiles);
+
+    const storageKeys = pathsToDelete.map(fp => {
+        let cp = (fp || '').replace(/^\/+/, '');
+        return cp.startsWith('imu-logs/') ? cp.substring(9) : cp;
+    });
+
+    try {
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove(storageKeys);
+        if (sErr) throw sErr;
+
+        const { error: dbErr } = await sbClient.from('imu_log_files').delete().in('file_path', pathsToDelete);
+        if (dbErr) throw dbErr;
+
+        if (window.clearImuLogCache) window.clearImuLogCache();
+
+        currentDeviceFiles = currentDeviceFiles.filter(f => !selectedTimelineFiles.has(f.file_path));
+        window.currentDeviceFiles = currentDeviceFiles;
+        selectedTimelineFiles.clear();
+
+        updateStorageQuotaSummaryUI();
+
+        const remaining = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+        if (remaining.length > 0) {
+            openDailyTimeline(dateStr, false);
+        } else {
+            closeDailyTimeline();
+            renderCalendarUI();
+        }
+
+        appendTerminalLog(`[STORAGE] Batch: ${count} Dateien für ${dateStr} gelöscht.`);
+
+        requestAnimationFrame(() => {
+            window.scrollTo({ top: savedScrollY, behavior: 'instant' });
+        });
+    } catch (err) {
+        alert('Fehler beim Mehrfachlöschen: ' + (err.message || JSON.stringify(err)));
+    }
+}
+
+async function deleteEntireDay(dateStr) {
+    if (!isSessionUnlocked()) {
+        openSessionAuthModal();
+        return;
+    }
+
+    const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+    if (dayFiles.length === 0) return;
+
+    if (!confirm(`⚠️ ACHTUNG: Gesamten Tag löschen?\n\nDatum: ${dateStr}\nAnzahl: ${dayFiles.length} Mess-Chunks\n\nAlle Messreihen dieses Tages werden unwiderruflich aus Supabase gelöscht!`)) {
+        return;
+    }
+
+    const savedScrollY = window.scrollY;
+    const pathsToDelete = dayFiles.map(f => f.file_path);
+    const storageKeys = pathsToDelete.map(fp => {
+        let cp = (fp || '').replace(/^\/+/, '');
+        return cp.startsWith('imu-logs/') ? cp.substring(9) : cp;
+    });
+
+    try {
+        const { error: sErr } = await sbClient.storage.from('imu-logs').remove(storageKeys);
+        if (sErr) throw sErr;
+
+        const { error: dbErr } = await sbClient.from('imu_log_files').delete().in('file_path', pathsToDelete);
+        if (dbErr) throw dbErr;
+
+        if (window.clearImuLogCache) window.clearImuLogCache();
+
+        currentDeviceFiles = currentDeviceFiles.filter(f => getFileDayKey(f) !== dateStr);
+        window.currentDeviceFiles = currentDeviceFiles;
+        selectedTimelineFiles.clear();
+
+        closeDailyTimeline();
+        updateStorageQuotaSummaryUI();
+        renderCalendarUI();
+
+        appendTerminalLog(`[STORAGE] Gesamter Tag ${dateStr} (${dayFiles.length} Dateien) gelöscht.`);
+
+        requestAnimationFrame(() => {
+            window.scrollTo({ top: savedScrollY, behavior: 'instant' });
+        });
+    } catch (err) {
+        alert('Fehler beim Löschen des Tages: ' + (err.message || JSON.stringify(err)));
     }
 }
 
@@ -1231,3 +1521,7 @@ window.closeSessionAuthModal = closeSessionAuthModal;
 window.handleSessionAuthSubmit = handleSessionAuthSubmit;
 window.updateLockUI = updateLockUI;
 window.isSessionUnlocked = isSessionUnlocked;
+
+// Ergänzungen am Dateiende von cloud-engine.js:
+window.getFileDayKey = getFileDayKey;
+window.currentDeviceFiles = currentDeviceFiles;
