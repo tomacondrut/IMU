@@ -208,3 +208,40 @@ button, select, input[type="range"] {
 	min-width: 250px;
 	font-variant-numeric: tabular-nums;
 }
+
+/*
+ * Breadcrumb: 2026-10-14 21:35 - Battery Chart Horizontal Touch & Scrollbar Override
+ * [CRITICAL MOBILE & DESKTOP SCROLL FIX]:
+ * 1. Re-enables visible horizontal scrollbar specifically for #bat-chart-scroll-wrapper
+ *    (overrides global .overflow-x-auto { scrollbar-width: none }).
+ * 2. Enables native horizontal touch-panning on Chart.js canvas for iOS & Android.
+ */
+#bat-chart-scroll-wrapper {
+	-webkit-overflow-scrolling: touch;
+	scrollbar-width: thin !important;
+	scrollbar-color: #94a3b8 #f1f5f9;
+	touch-action: pan-x pan-y;
+}
+
+	#bat-chart-scroll-wrapper::-webkit-scrollbar {
+		display: block !important;
+		height: 7px;
+	}
+
+	#bat-chart-scroll-wrapper::-webkit-scrollbar-track {
+		background: #f1f5f9;
+		border-radius: 4px;
+	}
+
+	#bat-chart-scroll-wrapper::-webkit-scrollbar-thumb {
+		background: #94a3b8;
+		border-radius: 4px;
+	}
+
+		#bat-chart-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+			background: #64748b;
+		}
+
+#batChart {
+	touch-action: pan-x pan-y !important;
+}

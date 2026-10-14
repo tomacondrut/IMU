@@ -650,71 +650,144 @@
     <!-- MODALE & OVERLAYS                          -->
     <!-- ========================================== -->
     <!-- Akku Modal -->
-    <div id="battery-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
-        <div class="card bg-white border border-slate-300 rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-            <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+    <!-- ========================================================================== -->
+    <!-- AKKU MODAL: TAGESWAHL, PROGNOSE, SCROLL-CHART & VOLLSTÄNDIGE HISTORIE      -->
+    <!-- Breadcrumb: 2026-10-14 21:35 - Day Filter, Linear Runtime Forecast & Scroll-->
+    <!-- ========================================================================== -->
+    <div id="battery-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
+        <div class="card bg-white border border-slate-300 rounded-xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            <!-- Header mit Tagesauswahl -->
+            <div class="p-3.5 sm:p-4 border-b border-slate-200 flex flex-wrap justify-between items-center gap-2 bg-slate-50">
                 <div class="flex items-center gap-2">
                     <span class="text-base">🔋</span>
-                    <h2 class="text-sm font-bold uppercase tracking-wider text-slate-800">Akkuzustand & Entladehistorie</h2>
+                    <div>
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-800 leading-none">Akkuzustand & Entladehistorie</h2>
+                        <span id="modal-bat-subtitle" class="text-[10px] font-mono text-slate-500">Lade Telemetrie...</span>
+                    </div>
                 </div>
-                <button onclick="closeBatteryModal()" class="text-slate-400 hover:text-slate-700 p-1 rounded-md hover:bg-slate-100 transition text-sm">
-                    ✕
-                </button>
+
+                <div class="flex items-center gap-2">
+                    <!-- Tages-Navigation -->
+                    <div class="flex items-center bg-white border border-slate-300 rounded-lg p-0.5 shadow-xs">
+                        <button type="button" onclick="stepBatteryDay(-1)" id="btn-bat-prev-day"
+                                class="px-2 py-1 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded transition disabled:opacity-30"
+                                title="Vorheriger Tag">
+                            ◀
+                        </button>
+                        <select id="battery-day-select" onchange="onBatteryDayChange(this.value)"
+                                class="bg-transparent px-2 py-1 text-xs font-mono font-bold text-slate-800 outline-none cursor-pointer">
+                            <option value="ALL">Gesamter Verlauf</option>
+                        </select>
+                        <button type="button" onclick="stepBatteryDay(1)" id="btn-bat-next-day"
+                                class="px-2 py-1 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded transition disabled:opacity-30"
+                                title="Nächster Tag">
+                            ▶
+                        </button>
+                    </div>
+
+                    <button type="button" onclick="fetchLatestBatteryData()"
+                            class="p-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-slate-600 text-xs transition"
+                            title="Daten neu laden">
+                        🔄
+                    </button>
+
+                    <button type="button" onclick="closeBatteryModal()"
+                            class="text-slate-400 hover:text-slate-700 p-1.5 rounded-md hover:bg-slate-100 transition text-sm font-bold">
+                        ✕
+                    </button>
+                </div>
             </div>
 
-            <div class="p-4 overflow-y-auto space-y-4">
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div class="p-3.5 sm:p-4 overflow-y-auto space-y-4">
+                <!-- 5 KPI-Kacheln inkl. Laufzeit-Prognose -->
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                     <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                        <p class="text-[10px] uppercase text-slate-500 font-semibold">Kapazität</p>
+                        <p class="text-[10px] uppercase text-slate-500 font-semibold">Kapazität (Aktuell)</p>
                         <div class="text-xl font-bold text-green-700" id="modal-metric-pct">--%</div>
                         <p class="text-[10px] text-slate-500 font-mono" id="modal-metric-volt">-- V</p>
                     </div>
-                    <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                        <p class="text-[10px] uppercase text-slate-500 font-semibold">Status</p>
-                        <div class="text-xs font-bold text-slate-800 truncate mt-1" id="modal-metric-status">--</div>
-                        <p class="text-[10px] text-slate-400">Versorgung</p>
+
+                    <!-- NEU: Prognose-Kachel -->
+                    <div class="bg-emerald-50/70 p-2.5 rounded-lg border border-emerald-200 col-span-1">
+                        <div class="flex justify-between items-center">
+                            <p class="text-[10px] uppercase text-emerald-800 font-bold">Restlaufzeit (Prognose)</p>
+                            <span class="text-[10px]" id="modal-forecast-icon">⏳</span>
+                        </div>
+                        <div class="text-base sm:text-lg font-bold text-emerald-900 font-mono mt-0.5 truncate" id="modal-metric-forecast">--</div>
+                        <p class="text-[10px] text-emerald-700 font-mono truncate" id="modal-metric-rate">Rate: --</p>
                     </div>
+
+                    <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                        <p class="text-[10px] uppercase text-slate-500 font-semibold">Status & Tages-Δ</p>
+                        <div class="text-xs font-bold text-slate-800 truncate mt-1" id="modal-metric-status">--</div>
+                        <p class="text-[10px] text-slate-500 font-mono truncate" id="modal-metric-day-delta">Δ Tag: --</p>
+                    </div>
+
                     <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                         <p class="text-[10px] uppercase text-slate-500 font-semibold">Boot-Zyklen</p>
                         <div class="text-xl font-bold text-slate-800" id="modal-metric-boot">#--</div>
-                        <p class="text-[10px] text-slate-400">Deep Sleep</p>
+                        <p class="text-[10px] text-slate-400 font-mono" id="modal-metric-day-boots">Tag: -- Aufweckungen</p>
                     </div>
-                    <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+
+                    <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200 col-span-2 sm:col-span-1">
                         <p class="text-[10px] uppercase text-slate-500 font-semibold">Letzter Log</p>
                         <div class="text-xs font-bold text-slate-800 mt-1" id="modal-metric-time">--</div>
                         <p class="text-[10px] text-slate-400 font-mono" id="modal-metric-ago">Vor --</p>
                     </div>
                 </div>
 
+                <!-- Horizontales Wisch-Diagramm -->
                 <div class="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
-                    <div class="flex justify-between items-center mb-2">
-                        <span class="text-xs font-bold text-slate-800">Spannungsverlauf & Kapazität</span>
-                        <span class="text-[10px] text-slate-400 font-mono">← Horizontal wischbar →</span>
+                    <div class="flex flex-wrap justify-between items-center gap-2 mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-slate-800" id="bat-chart-title">Spannungsverlauf & Kapazität</span>
+                            <span id="bat-chart-badge" class="text-[10px] bg-slate-100 text-slate-600 border border-slate-300 px-1.5 py-0.5 rounded font-mono">0 Punkte</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] text-slate-500 font-mono">↔ Wischen / Ziehen zum Scrollen</span>
+                            <button type="button" onclick=" toggleBatChartZoom()" id="btn-bat-zoom-mode"
+                                    class="px-2 py-0.5 text-[10px] font-mono font-bold rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 transition">
+                                🔍 Detail-Breite: AN
+                            </button>
+                        </div>
                     </div>
-                    <div class="overflow-x-auto w-full border border-slate-100 rounded pb-1">
-                        <div class="min-w-[650px] sm:min-w-[780px] h-56 relative p-1">
+
+                    <!-- Scroll-Wrapper mit sichtbarer Scrollbar & Grab-Support -->
+                    <div id="bat-chart-scroll-wrapper" class="bat-scroll-container overflow-x-auto w-full border border-slate-100 rounded pb-2 cursor-grab active:cursor-grabbing select-none">
+                        <div id="bat-chart-inner" class="h-60 relative p-1 transition-all duration-150" style="min-width: 100%;">
                             <canvas id="batChart"></canvas>
                         </div>
                     </div>
                 </div>
 
+                <!-- Messpunkte-Tabelle mit Filter & Limit-Auswahl -->
                 <div class="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm">
-                    <div class="px-3 py-2 border-b border-slate-200 bg-slate-50">
-                        <span class="text-xs font-semibold text-slate-700">Letzte 20 Messpunkte</span>
+                    <div class="px-3 py-2 border-b border-slate-200 bg-slate-50 flex flex-wrap justify-between items-center gap-2">
+                        <span class="text-xs font-semibold text-slate-700" id="modal-table-title">Messpunkte des gewählten Zeitraums</span>
+                        <div class="flex items-center gap-2 text-[11px] font-mono">
+                            <span class="text-slate-500">Anzeige:</span>
+                            <select id="bat-table-limit" onchange="onBatTableLimitChange(this.value)"
+                                    class="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-700 outline-none cursor-pointer">
+                                <option value="50">50 Punkte</option>
+                                <option value="200">200 Punkte</option>
+                                <option value="ALL" selected>Alle Punkte</option>
+                            </select>
+                        </div>
                     </div>
-                    <div class="overflow-x-auto max-h-40">
+                    <div class="overflow-x-auto max-h-56">
                         <table class="w-full text-left text-[11px] font-mono">
-                            <thead class="text-slate-500 border-b border-slate-200 bg-slate-50 sticky top-0">
+                            <thead class="text-slate-500 border-b border-slate-200 bg-slate-50 sticky top-0 z-10">
                                 <tr>
                                     <th class="py-1.5 px-3">Zeitstempel</th>
                                     <th class="py-1.5 px-3">Spannung</th>
                                     <th class="py-1.5 px-3">Ladung</th>
+                                    <th class="py-1.5 px-3">Δ V</th>
                                     <th class="py-1.5 px-3">Modus</th>
                                     <th class="py-1.5 px-3">Boot</th>
                                 </tr>
                             </thead>
                             <tbody id="modal-log-table-body" class="divide-y divide-slate-100">
-                                <tr><td colspan="5" class="py-3 text-center text-slate-400">Lade Daten aus Supabase...</td></tr>
+                                <tr><td colspan="6" class="py-3 text-center text-slate-400">Lade Daten aus Supabase...</td></tr>
                             </tbody>
                         </table>
                     </div>
