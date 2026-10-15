@@ -225,24 +225,158 @@ window.clearImuLogCache = clearImuLogCache;
 // 1. THREE.JS 3D VIEWPORT & MODELL-LADEN (HAUPTFENSTER)
 // ============================================================================
 
+
+/*
+ * Breadcrumb: 2026-10-15 22:50 - WebGL Render-Loop Restart, Resize Guard & Diagnostic Logger
+ * [CRITICAL BUGFIX FLAG - WEBGL LOOP RESTART & RESIZE OBSERVER GUARD]:
+ * 1. Added replayDiagLog() to output granular execution steps & errors to console and terminal drawer.
+ * 2. Cached lastRepW / lastRepH to prevent ResizeObserver infinite layout loops on mobile viewports.
+ * 3. Extracted startReplay3DLoop() so reopening #imu-replay-deck after closeImuReplayDeck() restarts rendering.
+ * [DISMISSED]: Early return in initReplay3D() when repRenderer existed left repAnimId3D permanently null after first close.
+ */
+let lastRepW = 0;
+let lastRepH = 0;
+
+function replayDiagLog(stage, msg, isError = false) {
+    const formatted = `[REPLAY ${stage}] ${msg}`;
+    if (isError) {
+        console.error(formatted);
+    } else {
+        console.log(formatted);
+    }
+    if (typeof window.appendTerminalLog === 'function') {
+        window.appendTerminalLog(formatted);
+    }
+}
+window.replayDiagLog = replayDiagLog;
+
 function resizeReplay3D() {
     const container = document.getElementById('replay-canvas-container');
     if (!container || !repRenderer || !repCamera) return;
     const w = container.clientWidth;
     const h = container.clientHeight;
-    if (w > 0 && h > 0) {
+    if (w > 0 && h > 0 && (w !== lastRepW || h !== lastRepH)) {
+        lastRepW = w;
+        lastRepH = h;
         repCamera.aspect = w / h;
         repCamera.updateProjectionMatrix();
-        repRenderer.setSize(w, h);
+        repRenderer.setSize(w, h, false);
         if (repScene) repRenderer.render(repScene, repCamera);
     }
 }
 
 function resizeReplayDeck() {
+    lastRepW = 0;
+    lastRepH = 0;
     resizeReplay3D();
     drawReplayGraph(replayCurrentTimeSec);
 }
 window.resizeReplayDeck = resizeReplayDeck;
+
+function startReplay3DLoop() {
+    if (repAnimId3D !== null) return;
+    function animateReplay3D() {
+        const deck = document.getElementById('imu-replay-deck');
+        if (!deck || deck.classList.contains('hidden')) {
+            repAnimId3D = null;
+            return;
+        }
+        repAnimId3D = requestAnimationFrame(animateReplay3D);
+        const cont = document.getElementById('replay-canvas-container');
+        if (!cont || cont.clientWidth === 0) return;
+        if (repControls) repControls.update();
+        if (repRenderer && repScene && repCamera) {
+            repRenderer.render(repScene, repCamera);
+        }
+    }
+    animateReplay3D();
+}
+
+function initReplay3D() {
+    ensureFrequencyBadgeDOM();
+    const container = document.getElementById('replay-canvas-container');
+    if (!container || typeof THREE === 'undefined') {
+        replayDiagLog('3D-INIT', 'Container oder THREE.js nicht verfügbar!', true);
+        return;
+    }
+
+    if (repRenderer) {
+        lastRepW = 0;
+        lastRepH = 0;
+        resizeReplay3D();
+        startReplay3DLoop();
+        return;
+    }
+
+    try {
+        const w = container.clientWidth || 300;
+        const h = container.clientHeight || 240;
+        lastRepW = w;
+        lastRepH = h;
+
+        repScene = new THREE.Scene();
+        repScene.background = new THREE.Color(0xdbe2ea);
+        repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
+        repCamera.position.set(2.4, 2.0, 2.8);
+        repCamera.lookAt(0, 0, 0);
+
+        repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+        repRenderer.setSize(w, h, false);
+        repRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        repRenderer.setClearColor(0xdbe2ea, 1.0);
+        container.appendChild(repRenderer.domElement);
+
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            repControls = new THREE.OrbitControls(repCamera, repRenderer.domElement);
+            repControls.enableDamping = true;
+            repControls.dampingFactor = 0.08;
+            repControls.target.set(0, 0, 0);
+            repControls.maxDistance = 8.0;
+            repControls.minDistance = 1.2;
+        }
+
+        const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
+        l1.position.set(5, 10, 7);
+        repScene.add(l1);
+
+        const l2 = new THREE.DirectionalLight(0xffffff, 0.7);
+        l2.position.set(-5, -5, -3);
+        repScene.add(l2);
+
+        repScene.add(new THREE.AmbientLight(0xffffff, 0.85));
+
+        const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
+        grid.position.y = -0.5;
+        repScene.add(grid);
+
+        createReplayFallbackCube();
+        loadReplayGLBModel();
+
+        if (!repContainerObserver && window.ResizeObserver) {
+            repContainerObserver = new ResizeObserver(() => {
+                requestAnimationFrame(() => resizeReplay3D());
+            });
+            repContainerObserver.observe(container);
+        }
+
+        window.addEventListener('resize', resizeReplay3D);
+        startReplay3DLoop();
+    } catch (err) {
+        replayDiagLog('3D-INIT-ERR', `WebGL Initialisierung fehlgeschlagen: ${err.message}`, true);
+    }
+}
+
+function closeImuReplayDeck() {
+    if (replayIsPlaying) toggleReplayPlay();
+    if (repAnimId3D) {
+        cancelAnimationFrame(repAnimId3D);
+        repAnimId3D = null;
+    }
+    isDayMergedMode = false;
+    replayCurrentTimeSec = 0.0;
+    const deck = document.getElementById('imu-replay-deck');
+    if (deck) deck.classList.add('hidden');
+}
 
 /*
  * Breadcrumb: 2026-10-06 23:15 - Camera View Parity with live-3d.js
@@ -274,75 +408,6 @@ function setReplayCameraView(viewName) {
 }
 window.setReplayCameraView = setReplayCameraView;
 
-function initReplay3D() {
-    ensureFrequencyBadgeDOM();
-    const container = document.getElementById('replay-canvas-container');
-    if (!container || typeof THREE === 'undefined') return;
-
-    if (repRenderer) {
-        resizeReplay3D();
-        return;
-    }
-
-    const w = container.clientWidth || 300;
-    const h = container.clientHeight || 240;
-
-    repScene = new THREE.Scene();
-    repScene.background = new THREE.Color(0xdbe2ea);
-    repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
-    repCamera.position.set(2.4, 2.0, 2.8);
-    repCamera.lookAt(0, 0, 0);
-
-    repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    repRenderer.setSize(w, h);
-    repRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    repRenderer.setClearColor(0xdbe2ea, 1.0);
-    container.appendChild(repRenderer.domElement);
-
-    if (typeof THREE.OrbitControls !== 'undefined') {
-        repControls = new THREE.OrbitControls(repCamera, repRenderer.domElement);
-        repControls.enableDamping = true;
-        repControls.dampingFactor = 0.08;
-        repControls.target.set(0, 0, 0);
-        repControls.maxDistance = 8.0;
-        repControls.minDistance = 1.2;
-    }
-
-    const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
-    l1.position.set(5, 10, 7);
-    repScene.add(l1);
-
-    const l2 = new THREE.DirectionalLight(0xffffff, 0.7);
-    l2.position.set(-5, -5, -3);
-    repScene.add(l2);
-
-    repScene.add(new THREE.AmbientLight(0xffffff, 0.85));
-
-    const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
-    grid.position.y = -0.5;
-    repScene.add(grid);
-
-    createReplayFallbackCube();
-    loadReplayGLBModel();
-
-    if (!repContainerObserver && window.ResizeObserver) {
-        repContainerObserver = new ResizeObserver(() => resizeReplay3D());
-        repContainerObserver.observe(container);
-    }
-
-    window.addEventListener('resize', resizeReplay3D);
-
-    function animateReplay3D() {
-        repAnimId3D = requestAnimationFrame(animateReplay3D);
-        const cont = document.getElementById('replay-canvas-container');
-        if (!cont || cont.clientWidth === 0) return;
-        if (repControls) repControls.update();
-        if (repRenderer && repScene && repCamera) {
-            repRenderer.render(repScene, repCamera);
-        }
-    }
-    animateReplay3D();
-}
 
 /*
  * Breadcrumb: 2026-10-07 00:40 - Canonical 3D Axis Alignment (X = Roll Red / Y = Pitch Green / Z = Yaw Blue)
@@ -479,17 +544,6 @@ function loadReplayGLBModel() {
     tryLoad(0);
 }
 
-function closeImuReplayDeck() {
-    if (replayIsPlaying) toggleReplayPlay();
-    if (repAnimId3D) {
-        cancelAnimationFrame(repAnimId3D);
-        repAnimId3D = null;
-    }
-    isDayMergedMode = false;
-    replayCurrentTimeSec = 0.0;
-    const deck = document.getElementById('imu-replay-deck');
-    if (deck) deck.classList.add('hidden');
-}
 
 // ============================================================================
 // 2. MATHEMATIK: FFT-SPEKTRALINTEGRATION, FREQUENZ & EULER-TARE
@@ -602,16 +656,30 @@ function detrendAndWindowSignal(rawSignal, n, N) {
  * Speichert das Amplitudenspektrum der Beschleunigung vor der -1/omega^2 Integration zwischen,
  * damit die parabolische Interpolation nicht durch die Tieffrequenz-Anhebung verzerrt wird.
  */
-function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
-    const n = rawSignal.length;
+/*
+ * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
+ * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
+ * [CRITICAL BUGFIX FLAG - PREVENT FFT OOM CRASH & UNWRAP INFINITE LOOP]:
+ * 1. Block-segments continuous cycles > 8192 samples in spectralDoubleIntegration() so N never exceeds 16384
+ *    (prevents 32-bit shift overflow on N <<= 1 and massive Float64Array allocations).
+ * 2. Scales STFT stride dynamically in computeLocalWindowFrequencies() (max ~200 windows per cycle) to prevent
+ *    tens of thousands of synchronous FFTs from freezing the browser on full-day logs.
+ * 3. Replaced while-loops in unwrapAngle() with finite-guarded modulo math to prevent hangs on NaN/Infinity.
+ * [DISMISSED]: Unbounded while (N < n * 2) N <<= 1 and fixed step=8 STFT caused main-thread freeze on large logs;
+ *              while (diff > 180) locked up if a single angle became non-finite.
+ */
+const MAX_SINGLE_FFT_SAMPLES = 8192;
+
+function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18) {
+    const n = rawBlock.length;
     if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
 
     let N = 32;
-    while (N < n * 2) N <<= 1;
+    while (N < n * 2 && N < 32768) N <<= 1;
 
-    const { re, im, rms } = detrendAndWindowSignal(rawSignal, n, N);
+    const { re, im, rms } = detrendAndWindowSignal(rawBlock, n, N);
 
-    if (rms < 0.04) {
+    if (!Number.isFinite(rms) || rms < 0.04) {
         return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
     }
 
@@ -662,7 +730,6 @@ function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
         }
     }
 
-    // Parabolische Interpolation auf dem unverzerrten Beschleunigungsspektrum (accMag)
     let domFreqHz = peakBin * deltaF;
     if (peakBin > 1 && peakBin < halfN) {
         const y0 = accMag[peakBin - 1];
@@ -682,8 +749,9 @@ function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
     const dispMm = new Float64Array(n);
     let meanDisp = 0.0;
     for (let i = 0; i < n; i++) {
-        dispMm[i] = re[i] * 1000.0;
-        meanDisp += dispMm[i];
+        const val = Number.isFinite(re[i]) ? re[i] * 1000.0 : 0.0;
+        dispMm[i] = val;
+        meanDisp += val;
     }
     meanDisp /= n;
     for (let i = 0; i < n; i++) {
@@ -693,10 +761,27 @@ function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
     return { dispMm, domFreqHz };
 }
 
-/*
- * Berechnet für längere Zyklen (> 64 Samples) zusätzlich die lokale Kurzzeit-Frequenz (STFT),
- * damit beim Durchfahren mit dem Cursor lokale Frequenzänderungen sofort sichtbar werden.
- */
+function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
+    const n = rawSignal.length;
+    if (n <= MAX_SINGLE_FFT_SAMPLES) {
+        return spectralDoubleIntegrationBlock(rawSignal, sampleRateHz, cutoffHz);
+    }
+
+    // Bei überlangen Zyklen (> 8192 Samples) in Blöcke aufteilen, um RAM-Überlauf zu verhindern
+    const outDisp = new Float64Array(n);
+    let maxDomFreq = 0.0;
+
+    for (let offset = 0; offset < n; offset += MAX_SINGLE_FFT_SAMPLES) {
+        const end = Math.min(n, offset + MAX_SINGLE_FFT_SAMPLES);
+        const sub = rawSignal.subarray(offset, end);
+        const res = spectralDoubleIntegrationBlock(sub, sampleRateHz, cutoffHz);
+        outDisp.set(res.dispMm, offset);
+        if (res.domFreqHz > maxDomFreq) maxDomFreq = res.domFreqHz;
+    }
+
+    return { dispMm: outDisp, domFreqHz: maxDomFreq };
+}
+
 function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) {
     const n = rawSignal.length;
     const outFreq = new Float64Array(n);
@@ -707,7 +792,8 @@ function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) 
         return outFreq;
     }
 
-    const step = 8;
+    // Adaptiver Schritt: Maximal ~200 STFT-Fenster pro Zyklus berechnen (verhindert Main-Thread-Blockade)
+    const step = Math.max(8, Math.floor(n / 200));
     const halfWin = winSize >> 1;
     let lastFreq = fallbackFreqHz;
 
@@ -716,7 +802,7 @@ function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) 
         const sub = rawSignal.subarray(start, start + winSize);
         const { re, im, rms } = detrendAndWindowSignal(sub, winSize, 128);
 
-        if (rms < 0.04) {
+        if (!Number.isFinite(rms) || rms < 0.04) {
             lastFreq = 0.0;
         } else {
             fftRadix2(re, im, false);
@@ -747,6 +833,7 @@ function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) 
 function calculateAllDisplacements() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
+    const t0 = performance.now();
     detectReplaySampleInterval();
 
     let currentCycle = null;
@@ -762,9 +849,9 @@ function calculateAllDisplacements() {
 
         for (let k = 0; k < n; k++) {
             const item = replayDataRaw[indices[k]];
-            rawAx[k] = item.ax || 0.0;
-            rawAy[k] = item.ay || 0.0;
-            rawAz[k] = item.az || 0.0;
+            rawAx[k] = Number.isFinite(item.ax) ? item.ax : 0.0;
+            rawAy[k] = Number.isFinite(item.ay) ? item.ay : 0.0;
+            rawAz[k] = Number.isFinite(item.az) ? item.az : 0.0;
         }
 
         const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, 0.18);
@@ -781,7 +868,6 @@ function calculateAllDisplacements() {
             item.dy = resY.dispMm[k];
             item.dz = resZ.dispMm[k];
 
-            // Zuordnung zu Modellachsen: X-Kippachse = Sensor-Y, Y-Wankachse = Sensor-X
             item.freqX = locFy[k] || resY.domFreqHz;
             item.freqY = locFx[k] || resX.domFreqHz;
             item.freqZ = locFz[k] || resZ.domFreqHz;
@@ -789,19 +875,33 @@ function calculateAllDisplacements() {
         }
     }
 
-    for (let i = 0; i < replayDataRaw.length; i++) {
-        const c = replayDataRaw[i].cycle || 1;
-        if (currentCycle === null || c !== currentCycle) {
-            if (cycleIndices.length > 0) processCycle(cycleIndices);
-            currentCycle = c;
-            cycleIndices = [i];
-        } else {
-            cycleIndices.push(i);
+    try {
+        for (let i = 0; i < replayDataRaw.length; i++) {
+            const c = replayDataRaw[i].cycle || 1;
+            if (currentCycle === null || c !== currentCycle) {
+                if (cycleIndices.length > 0) processCycle(cycleIndices);
+                currentCycle = c;
+                cycleIndices = [i];
+            } else {
+                cycleIndices.push(i);
+            }
         }
+        if (cycleIndices.length > 0) processCycle(cycleIndices);
+        replayDiagLog('FFT', `Schwingwege & Spektren für ${replayDataRaw.length} Samples in ${(performance.now() - t0).toFixed(1)} ms berechnet.`);
+    } catch (err) {
+        replayDiagLog('FFT-ERR', `Fehler in Spektralintegration: ${err.message}`, true);
     }
-    if (cycleIndices.length > 0) processCycle(cycleIndices);
 }
 window.calculateAllDisplacements = calculateAllDisplacements;
+
+function unwrapAngle(current, previous) {
+    if (!Number.isFinite(current)) return Number.isFinite(previous) ? previous : 0.0;
+    if (!Number.isFinite(previous)) return current;
+    const diff = current - previous;
+    const wrappedDiff = ((((diff + 180.0) % 360.0) + 360.0) % 360.0) - 180.0;
+    return previous + wrappedDiff;
+}
+
 
 /*
  * Breadcrumb: 2026-10-06 23:55 - Continuous Euler Unwrapping & Direct Quat Tare
@@ -863,12 +963,6 @@ function quatToEulerRawDeg(nw, nx, ny, nz) {
     return { roll, pitch, yaw };
 }
 
-function unwrapAngle(current, previous) {
-    let diff = current - previous;
-    while (diff > 180.0) { current -= 360.0; diff -= 360.0; }
-    while (diff < -180.0) { current += 360.0; diff += 360.0; }
-    return current;
-}
 
 function recalculateAllEuler() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
@@ -980,30 +1074,64 @@ function loadMountingGLBModel() {
     tryLoad(0);
 }
 
+/*
+ * Breadcrumb: 2026-10-15 22:50 - Mounting Modal Animation Loop Restart & Resize Guard
+ * [CRITICAL BUGFIX FLAG - MOUNTING MODAL RENDER RESTART]:
+ * Restart animation loop when modal is reopened after closeMountingConfigModal() cancelled mountAnimId.
+ */
+let lastMountW = 0;
+let lastMountH = 0;
+
 function resizeMounting3D() {
     const container = document.getElementById('mounting-canvas-container');
     if (!container || !mountRenderer || !mountCamera) return;
     const w = container.clientWidth;
     const h = container.clientHeight;
-    if (w > 0 && h > 0) {
+    if (w > 0 && h > 0 && (w !== lastMountW || h !== lastMountH)) {
+        lastMountW = w;
+        lastMountH = h;
         mountCamera.aspect = w / h;
         mountCamera.updateProjectionMatrix();
-        mountRenderer.setSize(w, h);
+        mountRenderer.setSize(w, h, false);
         if (mountScene) mountRenderer.render(mountScene, mountCamera);
     }
 }
 
+function startMounting3DLoop() {
+    if (mountAnimId !== null) return;
+    function anim() {
+        const modal = document.getElementById('mounting-config-modal');
+        if (!modal || modal.classList.contains('hidden')) {
+            mountAnimId = null;
+            return;
+        }
+        mountAnimId = requestAnimationFrame(anim);
+        const c = document.getElementById('mounting-canvas-container');
+        if (!c || c.clientWidth === 0) return;
+        if (mountControls) mountControls.update();
+        if (mountRenderer && mountScene && mountCamera) {
+            mountRenderer.render(mountScene, mountCamera);
+        }
+    }
+    anim();
+}
+
 function initMounting3D() {
     const container = document.getElementById('mounting-canvas-container');
-    if (!container) return;
+    if (!container || typeof THREE === 'undefined') return;
 
     if (mountRenderer) {
+        lastMountW = 0;
+        lastMountH = 0;
         resizeMounting3D();
+        startMounting3DLoop();
         return;
     }
 
     const w = container.clientWidth || 280;
     const h = container.clientHeight || 224;
+    lastMountW = w;
+    lastMountH = h;
 
     mountScene = new THREE.Scene();
     mountScene.background = new THREE.Color(0xdbe2ea);
@@ -1013,8 +1141,8 @@ function initMounting3D() {
     mountCamera.lookAt(0, 0, 0);
 
     mountRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    mountRenderer.setSize(w, h);
-    mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    mountRenderer.setSize(w, h, false);
+    mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     container.appendChild(mountRenderer.domElement);
 
     if (typeof THREE.OrbitControls !== 'undefined') {
@@ -1041,20 +1169,13 @@ function initMounting3D() {
     loadMountingGLBModel();
 
     if (!mountContainerObserver && window.ResizeObserver) {
-        mountContainerObserver = new ResizeObserver(() => resizeMounting3D());
+        mountContainerObserver = new ResizeObserver(() => {
+            requestAnimationFrame(() => resizeMounting3D());
+        });
         mountContainerObserver.observe(container);
     }
 
-    function anim() {
-        mountAnimId = requestAnimationFrame(anim);
-        const c = document.getElementById('mounting-canvas-container');
-        if (!c || c.clientWidth === 0) return;
-        if (mountControls) mountControls.update();
-        if (mountRenderer && mountScene && mountCamera) {
-            mountRenderer.render(mountScene, mountCamera);
-        }
-    }
-    anim();
+    startMounting3DLoop();
 }
 
 /*
@@ -1605,39 +1726,48 @@ function getNiceScale(maxVal, minScale, steps) {
  * 2. Unterbricht den Canvas-Linienpfad (first = true) an Messpausen sowohl im Detailmodus als auch in der Min-Max-Dezimierung.
  * 3. Erweitert die Skalen-Stufen für den FFT-Schwingweg auf bis zu 500 mm.
  */
+/*
+ * Breadcrumb: 2026-10-11 15:10 - 60 FPS Offscreen Graph Caching & Peak-Preserving Min-Max Decimation
+ * Breadcrumb: 2026-10-15 20:15 - Measurement Gap Visualizer & Discontinuous Decimation Engine
+ * Breadcrumb: 2026-10-15 22:50 - Zero-Allocation Timestamp Gap Check (.tsMs) & Plot Bounds Guard
+ * [CRITICAL BUGFIX FLAG - ELIMINATE MILLION DATE ALLOCATIONS IN RENDER LOOP]:
+ * 1. Replaced all `new Date(replayFilteredData[k].ts).getTime()` inside drawReplayGraph() with precomputed `.tsMs`.
+ * 2. Added strict guards for `plotW <= 10`, `plotH <= 10`, and finite `timeStep > 0` to prevent infinite tick loops.
+ * 3. Eliminated redundant triple render calls in onReplayCycleSelect().
+ * [DISMISSED]: Calling `new Date().getTime()` inside the 9x curve decimation loop caused severe GC pauses & tab crashes.
+ */
 function drawReplayGraph(curTimeSec) {
     const cvAcc = document.getElementById('replayGraphCanvasAcc');
     const cvEuler = document.getElementById('replayGraphCanvasEuler');
     const cvDisp = document.getElementById('replayGraphCanvasDisp');
-    if (!cvAcc || !cvEuler || !cvDisp || replayFilteredData.length === 0) return;
+    if (!cvAcc || !cvEuler || !cvDisp || !replayFilteredData || replayFilteredData.length < 2) return;
 
     attachCanvasInteraction();
 
     const count = replayFilteredData.length;
-    if (count < 2) return;
-
     const { tStart, tEnd, tSpan } = getTimeBounds();
-    const dt = replaySampleIntervalSec;
+    const dt = replaySampleIntervalSec > 0 ? replaySampleIntervalSec : 0.1;
     const startIndex = Math.max(0, Math.floor(tStart / dt) - 1);
     const endIndex = Math.min(count - 1, Math.ceil(tEnd / dt) + 1);
 
     const w = cvAcc.clientWidth;
     const h = cvAcc.clientHeight;
-    if (w === 0 || h === 0) return;
+    if (w <= 54 || h <= 36) return;
 
-    const currentCacheKey = `${tStart.toFixed(3)}_${tEnd.toFixed(3)}_${w}x${h}_${replayAccThreshold}_${JSON.stringify(replayVisibleCurves)}_${count}_${dt}_${replayFilteredData[0]?.ts || ''}_${replayMountConfig.roll}_${replayMountConfig.pitch}_${replayMountConfig.yaw}`;
+    const currentCacheKey = `${tStart.toFixed(3)}_${tEnd.toFixed(3)}_${w}x${h}_${replayAccThreshold}_${JSON.stringify(replayVisibleCurves)}_${count}_${dt}_${replayFilteredData[0]?.tsMs || 0}_${replayMountConfig.roll}_${replayMountConfig.pitch}_${replayMountConfig.yaw}`;
 
     if (currentCacheKey !== replayGraphCacheKey || !replayOffscreenAcc) {
         let maxAcc = 0.1, maxAngle = 0.1, maxDisp = 0.05;
         for (let i = startIndex; i <= endIndex; i++) {
             const d = replayFilteredData[i];
-            if (replayVisibleCurves.ax) maxAcc = Math.max(maxAcc, Math.abs(d.ax));
-            if (replayVisibleCurves.ay) maxAcc = Math.max(maxAcc, Math.abs(d.ay));
-            if (replayVisibleCurves.az) maxAcc = Math.max(maxAcc, Math.abs(d.az));
+            if (!d) continue;
+            if (replayVisibleCurves.ax) maxAcc = Math.max(maxAcc, Math.abs(d.ax || 0));
+            if (replayVisibleCurves.ay) maxAcc = Math.max(maxAcc, Math.abs(d.ay || 0));
+            if (replayVisibleCurves.az) maxAcc = Math.max(maxAcc, Math.abs(d.az || 0));
 
-            if (replayVisibleCurves.pitch) maxAngle = Math.max(maxAngle, Math.abs(d.pitch));
-            if (replayVisibleCurves.roll) maxAngle = Math.max(maxAngle, Math.abs(d.roll));
-            if (replayVisibleCurves.yaw) maxAngle = Math.max(maxAngle, Math.abs(d.yaw));
+            if (replayVisibleCurves.pitch) maxAngle = Math.max(maxAngle, Math.abs(d.pitch || 0));
+            if (replayVisibleCurves.roll) maxAngle = Math.max(maxAngle, Math.abs(d.roll || 0));
+            if (replayVisibleCurves.yaw) maxAngle = Math.max(maxAngle, Math.abs(d.yaw || 0));
 
             if (replayVisibleCurves.dx) maxDisp = Math.max(maxDisp, Math.abs(d.dx || 0));
             if (replayVisibleCurves.dy) maxDisp = Math.max(maxDisp, Math.abs(d.dy || 0));
@@ -1659,6 +1789,8 @@ function drawReplayGraph(curTimeSec) {
         function renderStaticTier(offCv, targetCv, maxScale, unitLabel, allCurves, isBottomTier, isAccTier) {
             const tw = targetCv.clientWidth;
             const th = targetCv.clientHeight;
+            if (tw <= 54 || th <= 36) return;
+
             offCv.width = tw;
             offCv.height = th;
 
@@ -1668,8 +1800,8 @@ function drawReplayGraph(curTimeSec) {
             const leftMargin = 44;
             const topMargin = 18;
             const bottomMargin = isBottomTier ? 16 : 8;
-            const plotW = tw - leftMargin;
-            const plotH = th - topMargin - bottomMargin;
+            const plotW = Math.max(10, tw - leftMargin);
+            const plotH = Math.max(10, th - topMargin - bottomMargin);
             const midY = topMargin + plotH / 2;
             const halfH = plotH / 2;
 
@@ -1696,12 +1828,10 @@ function drawReplayGraph(curTimeSec) {
                             inPeak = true;
                             peakStartPx = px;
                         }
-                    } else {
-                        if (inPeak) {
-                            inPeak = false;
-                            const bandW = Math.max(2, px - peakStartPx);
-                            ctx.fillRect(peakStartPx, topMargin, bandW, plotH);
-                        }
+                    } else if (inPeak) {
+                        inPeak = false;
+                        const bandW = Math.max(2, px - peakStartPx);
+                        ctx.fillRect(peakStartPx, topMargin, bandW, plotH);
                     }
                 }
                 if (inPeak) {
@@ -1712,7 +1842,7 @@ function drawReplayGraph(curTimeSec) {
                 ctx.restore();
             }
 
-            // 2. Messpausen visualisieren (Zeitlücken > 2.5 Sekunden)
+            // 2. Messpausen visualisieren über vorberechnetes .tsMs (Zero-Allocation)
             ctx.save();
             ctx.beginPath();
             ctx.rect(leftMargin, topMargin, plotW, plotH);
@@ -1720,11 +1850,9 @@ function drawReplayGraph(curTimeSec) {
 
             let lastGapBadgeX = -999;
             for (let i = startIndex; i < endIndex; i++) {
-                const t1 = new Date(replayFilteredData[i].ts).getTime();
-                const t2 = new Date(replayFilteredData[i + 1].ts).getTime();
-                const gapSec = (t2 - t1) / 1000.0;
+                const gapSec = (replayFilteredData[i + 1].tsMs - replayFilteredData[i].tsMs) / 1000.0;
 
-                if (!isNaN(gapSec) && gapSec > 2.5) {
+                if (gapSec > REPLAY_GAP_THRESHOLD_SEC) {
                     const px = timeToX((i + 0.5) * dt, tw, leftMargin);
                     if (px >= leftMargin && px <= tw) {
                         ctx.strokeStyle = 'rgba(217, 119, 6, 0.70)';
@@ -1745,7 +1873,6 @@ function drawReplayGraph(curTimeSec) {
                         const txtW = ctx.measureText(gapText).width;
                         const badgeX = Math.max(leftMargin + 2, Math.min(tw - txtW - 6, px - txtW / 2 - 3));
 
-                        // Überlappung von Pausen-Badges bei starkem Herauszoomen verhindern
                         if (badgeX - lastGapBadgeX >= txtW + 8) {
                             ctx.fillStyle = 'rgba(254, 243, 199, 0.95)';
                             ctx.fillRect(badgeX, topMargin + 2, txtW + 6, 12);
@@ -1825,12 +1952,12 @@ function drawReplayGraph(curTimeSec) {
                 ctx.restore();
             }
 
-            // 5. Zeitraster-Ticks
+            // 5. Zeitraster-Ticks (abgesichert gegen timeStep <= 0)
             const minPixelPerTick = 75;
             const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
-            const rawStep = tSpan / maxTicks;
+            const rawStep = Math.max(0.005, tSpan / maxTicks);
             const niceIntervals = [0.01, 0.02, 0.04, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
-            const timeStep = niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60;
+            const timeStep = Math.max(0.01, niceIntervals.find(s => s >= rawStep) || Math.ceil(rawStep / 60) * 60 || 1.0);
             const firstTick = Math.ceil(tStart / timeStep) * timeStep;
 
             ctx.strokeStyle = 'rgba(15, 23, 42, 0.08)';
@@ -1844,7 +1971,7 @@ function drawReplayGraph(curTimeSec) {
                     ctx.stroke();
 
                     if (isBottomTier) {
-                        let labelText = timeStep < 0.1 ? t.toFixed(2) + 's' : (timeStep < 1.0 ? t.toFixed(1) + 's' : Math.round(t) + 's');
+                        const labelText = timeStep < 0.1 ? t.toFixed(2) + 's' : (timeStep < 1.0 ? t.toFixed(1) + 's' : Math.round(t) + 's');
                         const textWidth = ctx.measureText(labelText).width;
                         if (px - lastLabelX >= textWidth + 10 && (px + textWidth) <= (tw - 35)) {
                             ctx.fillText(labelText, px + 2, th - 4);
@@ -1854,7 +1981,7 @@ function drawReplayGraph(curTimeSec) {
                 }
             }
 
-            // 6. Kurvenzüge mit Hüllkurven-Dezimierung & Pausen-Unterbrechung
+            // 6. Kurvenzüge mit Hüllkurven-Dezimierung & .tsMs Pausen-Unterbrechung
             const visibleCount = endIndex - startIndex + 1;
             const needsDecimation = visibleCount > (plotW * 2);
 
@@ -1882,9 +2009,7 @@ function drawReplayGraph(curTimeSec) {
 
                         const checkFrom = Math.max(startIndex + 1, prevBucketEndIdx + 1);
                         for (let k = checkFrom; k <= iEnd; k++) {
-                            const tPrev = new Date(replayFilteredData[k - 1].ts).getTime();
-                            const tCurr = new Date(replayFilteredData[k].ts).getTime();
-                            if ((tCurr - tPrev) / 1000.0 > 2.5) {
+                            if ((replayFilteredData[k].tsMs - replayFilteredData[k - 1].tsMs) > 2500) {
                                 hasGapInBucket = true;
                                 break;
                             }
@@ -1922,12 +2047,8 @@ function drawReplayGraph(curTimeSec) {
                 } else {
                     let first = true;
                     for (let i = startIndex; i <= endIndex; i++) {
-                        if (i > startIndex) {
-                            const tPrev = new Date(replayFilteredData[i - 1].ts).getTime();
-                            const tCurr = new Date(replayFilteredData[i].ts).getTime();
-                            if ((tCurr - tPrev) / 1000.0 > 2.5) {
-                                first = true;
-                            }
+                        if (i > startIndex && (replayFilteredData[i].tsMs - replayFilteredData[i - 1].tsMs) > 2500) {
+                            first = true;
                         }
 
                         const px = timeToX(i * dt, tw, leftMargin);
@@ -1941,11 +2062,6 @@ function drawReplayGraph(curTimeSec) {
             });
         }
 
-        /*
-  * Breadcrumb: 2026-10-15 20:45 - Euler Tier Curve Mapping (Roll X = Red, Pitch Y = Green)
-  * [CRITICAL BUGFIX FLAG - GRAPH EULER CHANNEL PARITY]:
-  * Zeichnet item.roll in Rot (#dc2626) als 'Roll (X)' und item.pitch in Grün (#009B4C) als 'Pitch (Y)'.
-  */
         renderStaticTier(replayOffscreenAcc, cvAcc, replayCachedScales.scaleAcc, 'm/s²', [
             { key: 'ay', color: '#dc2626', label: 'ACC(X)', dec: 2 },
             { key: 'ax', color: '#009B4C', label: 'ACC(Y)', dec: 2 },
@@ -1974,14 +2090,17 @@ function drawReplayGraph(curTimeSec) {
     const curPt = replayFilteredData[Math.max(0, curExactIdx)] || replayFilteredData[0];
 
     function drawDynamicOverlay(cv, offCv, unitLabel, allCurves, badgeTitle, isBottomTier) {
-        const cw = cv.width = cv.clientWidth;
-        const ch = cv.height = cv.clientHeight;
-        if (cw === 0 || ch === 0) return;
+        const cw = cv.clientWidth;
+        const ch = cv.clientHeight;
+        if (cw <= 0 || ch <= 0) return;
+        if (cv.width !== cw) cv.width = cw;
+        if (cv.height !== ch) cv.height = ch;
 
         const ctx = cv.getContext('2d');
         ctx.clearRect(0, 0, cw, ch);
-
-        ctx.drawImage(offCv, 0, 0);
+        if (offCv && offCv.width > 0 && offCv.height > 0) {
+            ctx.drawImage(offCv, 0, 0);
+        }
 
         const topMargin = 18;
         const bottomMargin = isBottomTier ? 16 : 8;
@@ -2020,9 +2139,9 @@ function drawReplayGraph(curTimeSec) {
         const activeCurves = allCurves.filter(c => replayVisibleCurves[c.key]);
         if (activeCurves.length > 0) {
             ctx.font = 'bold 9px monospace';
-            let valInfo = activeCurves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
-            let fullBadge = `${badgeTitle} [${unitLabel}] | ${valInfo}`;
-            let badgeW = ctx.measureText(fullBadge).width;
+            const valInfo = activeCurves.map(c => `${c.label}: ${(curPt[c.key] || 0).toFixed(c.dec || 2)}`).join('  ');
+            const fullBadge = `${badgeTitle} [${unitLabel}] | ${valInfo}`;
+            const badgeW = ctx.measureText(fullBadge).width;
 
             ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
             ctx.fillRect(cw - badgeW - 14, 3, badgeW + 10, 15);
@@ -2160,18 +2279,18 @@ function onReplayCycleSelect(cycleVal) {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
     if (cycleVal === 'ALL' || !cycleVal) {
-        replayFilteredData = [...replayDataRaw];
+        replayFilteredData = replayDataRaw.slice();
     } else {
         const cId = parseInt(cycleVal, 10);
         replayFilteredData = replayDataRaw.filter(d => d.cycle === cId);
     }
 
     if (replayFilteredData.length === 0) {
-        replayFilteredData = [...replayDataRaw];
+        replayFilteredData = replayDataRaw.slice();
     }
 
-    resetReplayZoom();
     replayCurrentTimeSec = 0.0;
+    replayGraphCacheKey = '';
 
     const totTimeLbl = document.getElementById('replay-total-time-label');
     const durLbl = document.getElementById('replay-duration-label');
@@ -2179,15 +2298,8 @@ function onReplayCycleSelect(cycleVal) {
     if (totTimeLbl) totTimeLbl.innerText = totalSec.toFixed(1) + 's';
     if (durLbl) durLbl.innerText = totalSec.toFixed(1) + ' s';
 
-    const scrubber = document.getElementById('replay-scrubber');
-    if (scrubber) {
-        scrubber.min = 0;
-        scrubber.max = Math.max(0, replayFilteredData.length - 1);
-        scrubber.value = 0;
-    }
-
-    renderInterpolatedFrame(0.0);
-    drawReplayGraph(0.0);
+    // resetReplayZoom setzt Scrubber-Grenzen und ruft genau einmal renderInterpolatedFrame() + drawReplayGraph() auf
+    resetReplayZoom();
 }
 window.onReplayCycleSelect = onReplayCycleSelect;
 
@@ -2219,23 +2331,48 @@ window.setReplayGraphMode = setReplayGraphMode;
  * 3. sortAndSegmentChronologicalData() trennt Zyklen an echten Zeitlücken (> 3.0s) und erzeugt Event-Statistiken.
  * 4. inspectImuFile() unterstützt polymorph Datei-Objekte sowie direkte URL-Strings (aus cloud-engine.js).
  */
+
+/*
+ * Breadcrumb: 2026-10-15 20:30 - Precomputed tsMs & Post-Sort Quaternion Continuity Engine
+ * Breadcrumb: 2026-10-15 22:50 - Strict Timestamp Validation, Mid-File Header Filter & Async UI Yielding
+ * [CRITICAL BUGFIX FLAG - REJECT CORRUPT CSV LINES & PREVENT UI THREAD FREEZE]:
+ * 1. Rejects CSV rows where Date.parse(tsStr) is NaN or <= 0 (prevents mid-file headers or truncated SD lines
+ *    from injecting bogus tsMs=0 epoch records at index 0).
+ * 2. Yields to browser event loop (await yieldToMainThread()) between Fetch, Sort, FFT, and Euler stages
+ *    so loading 20+ chunks in inspectImuDayMerged() never triggers the browser crash dialog.
+ * [DISMISSED]: Fallback `const tsMs = isNaN(parsedMs) ? 0 : parsedMs` accepted repeated CSV headers as 1970-01-01 points.
+ */
 let lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
 
+function yieldToMainThread() {
+    return new Promise(resolve => setTimeout(resolve, 0));
+}
+
 function parseImuCsvRecord(line, fileIndex, forcedCycle) {
+    if (!line || line.startsWith('timestamp') || line.startsWith('#')) return null;
+
     const sep = line.includes(';') ? ';' : ',';
     const parts = line.split(sep);
     if (parts.length < 8) return null;
 
     const tsStr = parts[0].trim();
     const parsedMs = Date.parse(tsStr);
-    const tsMs = isNaN(parsedMs) ? 0 : parsedMs;
+    // Ungültige Zeitstempel oder korrupte Zeilen strikt verwerfen
+    if (isNaN(parsedMs) || parsedMs <= 946684800000) return null;
 
-    let qw = parseFloat(parts[1]) || 1.0;
-    let qx = parseFloat(parts[2]) || 0.0;
-    let qy = parseFloat(parts[3]) || 0.0;
-    let qz = parseFloat(parts[4]) || 0.0;
+    let qw = parseFloat(parts[1]);
+    let qx = parseFloat(parts[2]);
+    let qy = parseFloat(parts[3]);
+    let qz = parseFloat(parts[4]);
 
-    // Plausibilitätsprüfung: Einheitsquaternion muss Norm nahe 1.0 besitzen
+    const ax = parseFloat(parts[5]);
+    const ay = parseFloat(parts[6]);
+    const az = parseFloat(parts[7]);
+
+    if (isNaN(qw) || isNaN(qx) || isNaN(qy) || isNaN(qz) || isNaN(ax) || isNaN(ay) || isNaN(az)) {
+        return null;
+    }
+
     const rawNorm = Math.hypot(qw, qx, qy, qz);
     if (rawNorm < 0.85 || rawNorm > 1.15) {
         qw = lastIngestQuat.w;
@@ -2259,11 +2396,9 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
 
     return {
         ts: tsStr,
-        tsMs: tsMs,
+        tsMs: parsedMs,
         qw, qx, qy, qz,
-        ax: parseFloat(parts[5]) || 0.0,
-        ay: parseFloat(parts[6]) || 0.0,
-        az: parseFloat(parts[7]) || 0.0,
+        ax, ay, az,
         roll: 0.0,
         pitch: 0.0,
         yaw: 0.0,
@@ -2272,6 +2407,204 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     };
 }
 
+async function inspectImuFile(fileOrUrl, optionalFileName) {
+    const deck = document.getElementById('imu-replay-deck');
+    if (!deck) return;
+
+    isDayMergedMode = false;
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
+
+    deck.classList.remove('hidden');
+    deck.scrollIntoView({ behavior: 'smooth' });
+
+    const isStringUrl = typeof fileOrUrl === 'string';
+    const displayFileName = isStringUrl ? (optionalFileName || 'IMU Log') : (fileOrUrl.file_name || 'IMU Log');
+
+    const titleEl = document.getElementById('replay-file-title');
+    if (titleEl) titleEl.innerText = `📄 ${displayFileName}`;
+    const metaEl = document.getElementById('replay-meta-info');
+    if (metaEl) metaEl.innerText = 'Lade Messdaten...';
+
+    initReplay3D();
+
+    try {
+        let url = '';
+        if (isStringUrl) {
+            url = fileOrUrl;
+        } else {
+            const cleanPath = fileOrUrl.file_path.startsWith('/') ? fileOrUrl.file_path.substring(1) : fileOrUrl.file_path;
+            url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+        }
+
+        replayDiagLog('LOAD', `Lade Einzeldatei: ${displayFileName}`);
+        const text = await fetchCachedCsv(url);
+        const lines = text.split('\n');
+        replayDataRaw = [];
+        lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+
+        let skippedLines = 0;
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const item = parseImuCsvRecord(line, 0, null);
+            if (item) {
+                replayDataRaw.push(item);
+            } else {
+                skippedLines++;
+            }
+        }
+
+        if (skippedLines > 0) {
+            replayDiagLog('PARSE', `${skippedLines} ungültige/Header-Zeilen in ${displayFileName} übersprungen.`);
+        }
+
+        if (replayDataRaw.length === 0) {
+            if (metaEl) metaEl.innerText = 'Keine gültigen Messzeilen gefunden.';
+            replayDiagLog('PARSE-WARN', `Keine validen Messpunkte in ${displayFileName}.`, true);
+            return;
+        }
+
+        await yieldToMainThread();
+        const chunkStats = sortAndSegmentChronologicalData();
+
+        await yieldToMainThread();
+        calculateAllDisplacements();
+        checkAndApplySavedMounting();
+
+        const select = document.getElementById('replay-cycle-select');
+        if (select) {
+            if (chunkStats.length > 1) {
+                select.innerHTML = `<option value="ALL">Ganze Datei (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+                chunkStats.forEach(cs => {
+                    select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+                });
+            } else {
+                select.innerHTML = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
+            }
+        }
+
+        if (metaEl) {
+            const dur = ((replayDataRaw.length - 1) * replaySampleIntervalSec).toFixed(1);
+            metaEl.innerText = `${replayDataRaw.length} Samples | Dauer: ${dur}s @ ${replaySampleRateHz} Hz`;
+        }
+
+        onReplayCycleSelect('ALL');
+    } catch (err) {
+        replayDiagLog('INSPECT-ERR', `Fehler bei ${displayFileName}: ${err.message}`, true);
+        if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
+    }
+}
+window.inspectImuFile = inspectImuFile;
+
+async function inspectImuDayMerged(dateStr, dayFiles) {
+    const deck = document.getElementById('imu-replay-deck');
+    if (!deck) return;
+
+    isDayMergedMode = true;
+    if (replayIsPlaying) toggleReplayPlay();
+    replayCurrentTimeSec = 0.0;
+
+    deck.classList.remove('hidden');
+    deck.scrollIntoView({ behavior: 'smooth' });
+
+    if (!dayFiles || dayFiles.length === 0) {
+        if (typeof currentDeviceFiles !== 'undefined') {
+            dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
+        }
+    }
+
+    const metaEl = document.getElementById('replay-meta-info');
+    if (!dayFiles || dayFiles.length === 0) {
+        if (metaEl) metaEl.innerText = `Keine Chunks für ${dateStr} vorhanden.`;
+        return;
+    }
+
+    const titleEl = document.getElementById('replay-file-title');
+    if (titleEl) titleEl.innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
+    if (metaEl) metaEl.innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
+
+    initReplay3D();
+
+    try {
+        replayDiagLog('DAY-MERGE', `Starte Tages-Merge für ${dateStr} (${dayFiles.length} Dateien)...`);
+
+        const fetchPromises = dayFiles.map(async (f, idx) => {
+            try {
+                const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
+                const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+                const text = await fetchCachedCsv(url);
+                return { file: f, fileIdx: idx, text };
+            } catch (err) {
+                replayDiagLog('FETCH-WARN', `Chunk ${f.file_name} fehlgeschlagen: ${err.message}`, true);
+                return { file: f, fileIdx: idx, text: null };
+            }
+        });
+
+        const results = await Promise.all(fetchPromises);
+        replayDataRaw = [];
+        lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+        let skippedTotal = 0;
+
+        for (let rIdx = 0; rIdx < results.length; rIdx++) {
+            const { fileIdx, text } = results[rIdx];
+            if (!text) continue;
+            const lines = text.split('\n');
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                const item = parseImuCsvRecord(line, fileIdx, null);
+                if (item) {
+                    replayDataRaw.push(item);
+                } else {
+                    skippedTotal++;
+                }
+            }
+            // Nach jedem 4. Chunk kurz an den Browser-Thread übergeben
+            if (rIdx % 4 === 3) await yieldToMainThread();
+        }
+
+        if (skippedTotal > 0) {
+            replayDiagLog('DAY-PARSE', `${skippedTotal} ungültige/Header-Zeilen im Tages-Merge gefiltert.`);
+        }
+
+        if (replayDataRaw.length === 0) {
+            if (metaEl) metaEl.innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
+            return;
+        }
+
+        if (metaEl) metaEl.innerText = `Sortiere ${replayDataRaw.length} Messpunkte...`;
+        await yieldToMainThread();
+        const chunkStats = sortAndSegmentChronologicalData();
+
+        if (metaEl) metaEl.innerText = `Berechne FFT-Spektren & Schwingwege (${replayDataRaw.length} Samples)...`;
+        await yieldToMainThread();
+        calculateAllDisplacements();
+
+        await yieldToMainThread();
+        checkAndApplySavedMounting();
+
+        if (metaEl) {
+            const dur = ((replayDataRaw.length - 1) * replaySampleIntervalSec).toFixed(1);
+            metaEl.innerText = `${replayDataRaw.length} Samples (${chunkStats.length} Events) | Aktive Messzeit: ${dur}s @ ${replaySampleRateHz} Hz`;
+        }
+
+        const select = document.getElementById('replay-cycle-select');
+        if (select) {
+            select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+            chunkStats.forEach(cs => {
+                select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+            });
+        }
+
+        onReplayCycleSelect('ALL');
+        replayDiagLog('DAY-MERGE', `Tages-Merge ${dateStr} erfolgreich geladen (${replayDataRaw.length} Punkte, ${chunkStats.length} Events).`);
+    } catch (err) {
+        replayDiagLog('DAY-MERGE-ERR', `Absturz beim Tages-Merge ${dateStr}: ${err.message}`, true);
+        if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
+    }
+}
+window.inspectImuDayMerged = inspectImuDayMerged;
 /*
  * Sortiert alle geladenen Messwerte chronologisch nach tsMs, glättet die Quaternionen
  * in korrekter Reihenfolge und vergibt dynamische Zyklus-IDs bei Messpausen > 3.0s.
@@ -2329,173 +2662,8 @@ function sortAndSegmentChronologicalData() {
     return chunkStats;
 }
 
-async function inspectImuFile(fileOrUrl, optionalFileName) {
-    const deck = document.getElementById('imu-replay-deck');
-    if (!deck) return;
 
-    isDayMergedMode = false;
-    if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
 
-    deck.classList.remove('hidden');
-    deck.scrollIntoView({ behavior: 'smooth' });
-
-    const isStringUrl = typeof fileOrUrl === 'string';
-    const displayFileName = isStringUrl ? (optionalFileName || 'IMU Log') : (fileOrUrl.file_name || 'IMU Log');
-
-    const titleEl = document.getElementById('replay-file-title');
-    if (titleEl) titleEl.innerText = `📄 ${displayFileName}`;
-    const metaEl = document.getElementById('replay-meta-info');
-    if (metaEl) metaEl.innerText = 'Lade Messdaten...';
-
-    initReplay3D();
-
-    try {
-        let url = '';
-        if (isStringUrl) {
-            url = fileOrUrl;
-        } else {
-            const cleanPath = fileOrUrl.file_path.startsWith('/') ? fileOrUrl.file_path.substring(1) : fileOrUrl.file_path;
-            url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
-        }
-
-        const text = await fetchCachedCsv(url);
-        const lines = text.split('\n');
-        replayDataRaw = [];
-        lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
-
-        for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            const item = parseImuCsvRecord(line, 0, null);
-            if (item) replayDataRaw.push(item);
-        }
-
-        if (replayDataRaw.length === 0) {
-            if (metaEl) metaEl.innerText = 'Keine gültigen Messzeilen gefunden.';
-            return;
-        }
-
-        // Chronologisch ordnen und Zyklen trennen
-        const chunkStats = sortAndSegmentChronologicalData();
-
-        calculateAllDisplacements();
-        checkAndApplySavedMounting();
-
-        const select = document.getElementById('replay-cycle-select');
-        if (select) {
-            if (chunkStats.length > 1) {
-                select.innerHTML = `<option value="ALL">Ganze Datei (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
-                chunkStats.forEach(cs => {
-                    select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
-                });
-            } else {
-                select.innerHTML = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
-            }
-        }
-
-        if (metaEl) {
-            const dur = ((replayDataRaw.length - 1) * replaySampleIntervalSec).toFixed(1);
-            metaEl.innerText = `${replayDataRaw.length} Samples | Dauer: ${dur}s @ ${replaySampleRateHz} Hz`;
-        }
-
-        onReplayCycleSelect('ALL');
-    } catch (err) {
-        console.error('[INSPECT ERROR]', err);
-        if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
-    }
-}
-window.inspectImuFile = inspectImuFile;
-
-async function inspectImuDayMerged(dateStr, dayFiles) {
-    const deck = document.getElementById('imu-replay-deck');
-    if (!deck) return;
-
-    isDayMergedMode = true;
-    if (replayIsPlaying) toggleReplayPlay();
-    replayCurrentTimeSec = 0.0;
-
-    deck.classList.remove('hidden');
-    deck.scrollIntoView({ behavior: 'smooth' });
-
-    if (!dayFiles || dayFiles.length === 0) {
-        if (typeof currentDeviceFiles !== 'undefined') {
-            dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr);
-        }
-    }
-
-    if (!dayFiles || dayFiles.length === 0) {
-        document.getElementById('replay-meta-info').innerText = `Keine Chunks für ${dateStr} vorhanden.`;
-        return;
-    }
-
-    document.getElementById('replay-file-title').innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
-    document.getElementById('replay-meta-info').innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
-
-    initReplay3D();
-
-    try {
-        const fetchPromises = dayFiles.map(async (f, idx) => {
-            try {
-                const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
-                const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
-                const text = await fetchCachedCsv(url);
-                return { file: f, fileIdx: idx, text };
-            } catch (err) {
-                console.warn(`[CACHE MERGE] Fehler bei ${f.file_name}:`, err);
-                return { file: f, fileIdx: idx, text: null };
-            }
-        });
-
-        const results = await Promise.all(fetchPromises);
-        replayDataRaw = [];
-        lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
-
-        results.forEach(({ fileIdx, text }) => {
-            if (!text) return;
-            const lines = text.split('\n');
-            for (let i = 1; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
-                const item = parseImuCsvRecord(line, fileIdx, null);
-                if (item) {
-                    replayDataRaw.push(item);
-                }
-            }
-        });
-
-        if (replayDataRaw.length === 0) {
-            document.getElementById('replay-meta-info').innerText = 'Keine gültigen Messzeilen in den Tagesdateien gefunden.';
-            return;
-        }
-
-        // Chronologisch ordnen und Schlaflücken in Events segmentieren
-        const chunkStats = sortAndSegmentChronologicalData();
-
-        calculateAllDisplacements();
-        checkAndApplySavedMounting();
-
-        const metaEl = document.getElementById('replay-meta-info');
-        if (metaEl) {
-            const dur = ((replayDataRaw.length - 1) * replaySampleIntervalSec).toFixed(1);
-            metaEl.innerText = `${replayDataRaw.length} Samples (${chunkStats.length} Events) | Aktive Messzeit: ${dur}s @ ${replaySampleRateHz} Hz`;
-        }
-
-        const select = document.getElementById('replay-cycle-select');
-        if (select) {
-            select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
-            chunkStats.forEach(cs => {
-                select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
-            });
-        }
-
-        onReplayCycleSelect('ALL');
-    } catch (err) {
-        console.error('[CACHE MERGE FEHLER]', err);
-        document.getElementById('replay-meta-info').innerText = 'Fehler beim Laden: ' + err.message;
-    }
-}
-window.inspectImuDayMerged = inspectImuDayMerged;
 
 function exportReplayVisibleCsv() {
     if (!replayFilteredData || replayFilteredData.length === 0) {
