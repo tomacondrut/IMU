@@ -1,23 +1,35 @@
 /*
- * Breadcrumbs & Versionshistorie:
+ * ============================================================================
+ * STAG TELEMETRIE HUB - REPLAY DECK & SPECTRAL VIBRATION ENGINE (replay-deck.js)
+ * ============================================================================
+ * Zusammengefasste Breadcrumbs & Versionshistorie:
+ * - 2026-09-14 20:00: Oscilloscope Region Zoom & 0.1x Slow-Mo.
  * - 2026-10-05 20:30: Live Tare Re-Calculation & Side-View OrbitControls (Tait-Bryan Analytik).
  * - 2026-10-06 19:50: Multi-Canvas Synchronized Pointer & Zoom Engine (Acc, Euler, Schwingweg mm).
  * - 2026-10-06 20:45: Selective Y-Scaling & Rendering für aktive Kurven (ax..az, roll..yaw, dx..dz).
  * - 2026-10-06 22:30: Shared GLB Cache für verzögerungsfreie 3D-Modellübernahme ins Einbaulagen-Modal.
- * - 2026-10-06 23:35: Konsolidierter Gesamtwurf:
- *   [CRITICAL BUGFIX & FEATURE PARITY - MOUNTING CONFIG & ZERO BASELINE]:
- *   1. Fehlende globale Instanzvariablen (mountRenderer, mountScene etc.) deklariert -> Behebt ReferenceError.
- *   2. Reines Quaternionen-Tare q_rel = q_mount^-1 * q_raw eliminiert Gimbal Lock und 180°-Sprünge.
- *   3. Volle Einbaulagen-Konfiguration aktiv: Modal mit Schiebereglern, 3D-Vorschau und "Aktuellen Frame übernehmen".
- *   4. Graphen starten am Kipprahmen exakt bei 0.0° und steigen beim Hub stufenlos auf +42.5° an.
- *   [DISMISSED]: sensorToModelQuat mit Euler('ZYX') erzeugte bei 90°-Annäherung Singularitätssprünge auf +137.9°.
+ * - 2026-10-06 23:35: Konsolidierter Gesamtwurf (Mounting Config, Reines Quaternionen-Tare q_rel = q_mount^-1 * q_raw).
+ *   [DISMISSED]: sensorToModelQuat mit Euler('ZYX') erzeugte bei 90°-Annäherung Singularitätssprünge auf +137.9°.
+ * - 2026-10-07 00:55: Kanonische Farb- & Achsensynchronisation:
+ *   3D-Modell & Graphen: X-Kanal (Kippachse: Pitch, ay, dy) = Rot (#dc2626),
+ *   Y-Kanal (Wankachse: Roll, ax, dx) = Grün (#009B4C), Z-Kanal (Hochachse: Yaw, az, dz) = Blau/Violett.
+ * - 2026-10-11 15:10: 60-FPS Offscreen Graph Caching & Peak-Preserving Min-Max Decimation.
+ * - 2026-10-11 15:25: Dynamic Sampling Rate Auto-Detection (10 Hz - 100 Hz) & Smooth tanh 3D-Scaling.
+ *   [DISMISSED]: Hartes Box-Clamping Math.max(-0.85, Math.min(0.85)) führte zu bistabilen 3D-Teleportsprüngen.
+ * - 2026-10-15 20:05: Vollständiges Refactoring & Spektral-Upgrade:
+ *   [CRITICAL FEATURE & BUGFIX PARITY - TIMESTAMP SORT, FFT INTEGRATION & GAP VISUALIZER]:
+ *   1. Chronologische Sortierung nach ISO-Zeitstempel (item.ts) vor Quaternionen-Kontinuität und Zyklus-Split.
+ *   2. Radix-2 Cooley-Tukey FFT & IFFT mit phasenfreier Butterworth-Doppelintegration (-1 / omega^2).
+ *   3. Sub-Bin Parabol-Interpolation für dominante Frequenz + lokales Sliding-Window mit Rausch-Gate.
+ *   4. Visuelle Messpausen-Indikatoren (Amber-Bänder + Pausen-Dauer) und Linienunterbrechung über Schlafphasen.
+ *   5. Polymorphes inspectImuFile() für direkte URL-Strings (aus cloud-engine.js) und Datei-Objekte.
+ *   [DISMISSED]: 3-stufige IIR-Zeitbereichs-Kaskade dämpfte langsame Kipp-Schwingungen (0.5-1.5 Hz) um bis zu 35%.
  */
 
 // ============================================================================
-// GLOBALE STATUS- & INSTANZVARIABLEN
+// 0. GLOBALE STATUS- & INSTANZVARIABLEN
 // ============================================================================
 
-// Replay-Deck Daten- und Abspielstatus
 let replayDataRaw = [];
 let replayFilteredData = [];
 let replayCurrentTimeSec = 0.0;
@@ -28,46 +40,10 @@ let replayLastFrameTime = 0;
 let replayGraphMode = 'accel';
 let replayAccThreshold = 0.0;
 
-/*
- * Breadcrumb: 2026-10-11 15:20 - Dynamic Sampling Rate Auto-Detection
- * [FEATURE PARITY - ADAPTIVE SAMPLE RATE & TIMESTAMP ENGINE]:
- * 1. Ermittelt medianes dt aus den echten ISO-Zeitstempeln der ersten 500 Samples.
- * 2. Berechnet replaySampleRateHz und replaySampleIntervalSec dynamisch.
- * 3. Fallback auf 10 Hz (0.1s), falls keine validen Zeitstempel vorliegen.
- */
+// Dynamisch erkannte Abtastrate
 let replaySampleIntervalSec = 0.1;
 let replaySampleRateHz = 10;
-
-function detectReplaySampleInterval() {
-    if (!replayDataRaw || replayDataRaw.length < 2) {
-        replaySampleIntervalSec = 0.1;
-        replaySampleRateHz = 10;
-        return;
-    }
-
-    const deltas = [];
-    const checkCount = Math.min(replayDataRaw.length - 1, 500);
-    for (let i = 0; i < checkCount; i++) {
-        const t1 = new Date(replayDataRaw[i].ts).getTime();
-        const t2 = new Date(replayDataRaw[i + 1].ts).getTime();
-        const diffSec = (t2 - t1) / 1000.0;
-        if (!isNaN(diffSec) && diffSec > 0.005 && diffSec < 1.0) {
-            deltas.push(diffSec);
-        }
-    }
-
-    if (deltas.length >= 3) {
-        deltas.sort((a, b) => a - b);
-        const medianDt = deltas[Math.floor(deltas.length / 2)];
-        const calcHz = Math.round(1.0 / medianDt);
-        replaySampleRateHz = Math.max(1, Math.min(100, calcHz));
-        replaySampleIntervalSec = 1.0 / replaySampleRateHz;
-    } else {
-        replaySampleIntervalSec = 0.1;
-        replaySampleRateHz = 10;
-    }
-}
-window.detectReplaySampleInterval = detectReplaySampleInterval;
+const REPLAY_GAP_THRESHOLD_SEC = 2.5; // Schwellenwert für Schlaf-/Messpausen
 
 // Zoom- und Interaktionsstatus
 let replayZoomStartSec = 0.0;
@@ -80,12 +56,12 @@ let canvasListenersAttached = false;
 let isDayMergedMode = false;
 
 // Three.js Replay Haupt-Viewport
-let repScene, repCamera, repRenderer, repMesh;
+let repScene = null, repCamera = null, repRenderer = null, repMesh = null;
 let repControls = null;
 let repAnimId3D = null;
 let repContainerObserver = null;
 
-// Three.js Einbaulagen-Modal Viewport (global deklariert gegen ReferenceErrors)
+// Three.js Einbaulagen-Modal Viewport
 let mountScene = null, mountCamera = null, mountRenderer = null, mountMesh = null;
 let mountControls = null;
 let mountAnimId = null;
@@ -95,11 +71,18 @@ let mountContainerObserver = null;
 let rawGltfScene = null;
 
 // Einbaulagen-Konfiguration & relatives Tare-Quaternion
-let replayMountConfig = { roll: 0, pitch: 0, yaw: 0 };
+let replayMountConfig = { roll: 90.0, pitch: 0.0, yaw: 0.0 };
 let replayMountQuat = null;
 
 // Lokaler Speicher-Cache für CSV-Logs
 const imuMemoryCache = new Map();
+
+// Offscreen-Puffer für 60-FPS Rendering
+let replayOffscreenAcc = null;
+let replayOffscreenEuler = null;
+let replayOffscreenDisp = null;
+let replayGraphCacheKey = '';
+let replayCachedScales = { scaleAcc: 1.0, scaleEuler: 2.0, scaleDisp: 0.5 };
 
 // Sichtbarkeitsstatus der einzelnen Kurven
 let replayVisibleCurves = {
@@ -108,8 +91,42 @@ let replayVisibleCurves = {
     dx: true, dy: true, dz: true
 };
 
+/*
+ * Breadcrumb: 2026-10-11 15:20 - Dynamic Sampling Rate Auto-Detection
+ * [FEATURE PARITY - ADAPTIVE SAMPLE RATE & TIMESTAMP ENGINE]:
+ * Ermittelt medianes dt aus den echten ISO-Zeitstempeln (ignoriert Schlafpausen > 1.0s).
+ */
+function detectReplaySampleInterval() {
+    if (!replayDataRaw || replayDataRaw.length < 2) {
+        replaySampleIntervalSec = 0.1;
+        replaySampleRateHz = 10;
+        return;
+    }
+
+    const deltas = [];
+    const checkCount = Math.min(replayDataRaw.length - 1, 600);
+    for (let i = 0; i < checkCount; i++) {
+        const diffSec = (replayDataRaw[i + 1].tsMs - replayDataRaw[i].tsMs) / 1000.0;
+        if (!isNaN(diffSec) && diffSec > 0.004 && diffSec < 1.0) {
+            deltas.push(diffSec);
+        }
+    }
+
+    if (deltas.length >= 3) {
+        deltas.sort((a, b) => a - b);
+        const medianDt = deltas[Math.floor(deltas.length / 2)];
+        const calcHz = Math.round(1.0 / medianDt);
+        replaySampleRateHz = Math.max(1, Math.min(200, calcHz));
+        replaySampleIntervalSec = 1.0 / replaySampleRateHz;
+    } else {
+        replaySampleIntervalSec = 0.1;
+        replaySampleRateHz = 10;
+    }
+}
+window.detectReplaySampleInterval = detectReplaySampleInterval;
+
 function toggleReplayCurve(key) {
-    if (replayVisibleCurves.hasOwnProperty(key)) {
+    if (Object.prototype.hasOwnProperty.call(replayVisibleCurves, key)) {
         replayVisibleCurves[key] = !replayVisibleCurves[key];
         updateCurveToggleUI();
         drawReplayGraph(replayCurrentTimeSec);
@@ -118,46 +135,20 @@ function toggleReplayCurve(key) {
 window.toggleReplayCurve = toggleReplayCurve;
 
 /*
- * Breadcrumb: 2026-10-07 00:10 - Color & Channel Mapping Synchronization
- * [CRITICAL BUGFIX FLAG - THEME SYNCHRONIZATION (PITCH = RED / ROLL = GREEN)]:
- * 1. Pitch erhält Farbthema 'red' (#dc2626) analog zu ACC X und Hub X (dx).
- * 2. Roll erhält Farbthema 'emerald' (#009B4C) analog zu ACC Y und Hub Y (dy).
- */
-/*
- * Breadcrumb: 2026-10-07 00:25 - Original Color Schemes & Graph Tiers Restored
- * [CRITICAL BUGFIX FLAG - COLOR PARITY RESTORATION]:
- * 1. Roll: Rot (#dc2626 / bg-red-50).
- * 2. Beschleunigung Y (ay) & Pitch: Grün (#009B4C / emerald).
- * 3. Beschleunigung Z (az) & Schwingweg Z (dz): Blau (#2563eb / blue).
- */
-/*
- * Breadcrumb: 2026-10-07 00:35 - Physical Model Color Parity (ACC X = Emerald / ACC Y = Red)
- * [CRITICAL BUGFIX FLAG - THEME SYNCHRONIZATION WITH 3D PITCH AXIS]:
- * 1. ax & dx: Auf 'emerald' (#009B4C) gesetzt, da Sensor-X physikalisch die Kippachse (Pitch / Model-Y) auslenkt.
- * 2. ay & dy: Auf 'red' (#dc2626) gesetzt, da Sensor-Y physikalisch die Gehäuselängsachse (Roll / Model-X) auslenkt.
- * 3. pitch: Bleibt 'emerald' (Grün), roll: Bleibt 'red' (Rot).
- * [DISMISSED]: ax=red / ay=emerald widersprach der optischen Auslenkung im 3D-Modell.
- */
-/*
- * Breadcrumb: 2026-10-07 00:45 - Filter Button Color Parity (Pitch/X = Red / Roll/Y = Emerald)
- * [CRITICAL BUGFIX FLAG - THEME SYNCHRONIZATION WITH ROTATION AXIS]:
- * 1. Pitch, ax & dx: Auf 'red' (#dc2626) gelegt (Dreh- und Impulsachse des Kipprahmens).
- * 2. Roll, ay & dy: Auf 'emerald' (#009B4C) gelegt (Quer-/Wankachse).
- * 3. Yaw, az & dz: Blau/Violett (#2563eb / purple).
- * [DISMISSED]: pitch='emerald' führte zu Farbkonflikten mit der roten 3D-Kippachse.
- */
-/*
- * Breadcrumb: 2026-10-07 00:55 - ACC Channel Color Realignment (ax = Emerald / ay = Red)
+ * Breadcrumb: 2026-10-07 00:55 - ACC Channel & Rotation Color Synchronization
  * [CRITICAL BUGFIX FLAG - ACC CHANNEL & COLOR SYNCHRONIZATION]:
- * 1. ax erhält das Theme 'emerald' (#009B4C) für die physikalische Beschleunigung entlang der Pitch-Achse.
- * 2. ay erhält das Theme 'red' (#dc2626) für die Wankachse.
- * 3. Drehung bleibt unverändert: Pitch auf Rot ('red'), Roll auf Grün ('emerald').
- * [DISMISSED]: ax starr auf Rot zu binden ignorierte die tatsächliche Auslenkung im Modell.
+ * ax/dx = 'emerald' (#009B4C), ay/dy = 'red' (#dc2626), pitch = 'red', roll = 'emerald'.
+ */
+/*
+ * Breadcrumb: 2026-10-15 20:45 - Canonical Filter Button Theme Parity (Roll X = Red, Pitch Y = Emerald)
+ * [CRITICAL BUGFIX FLAG - UI FILTER BUTTON PARITY]:
+ * Synchronisiert die Filter-Buttons mit den 3D-Modellachsen:
+ * roll (X) = 'red' (#dc2626), pitch (Y) = 'emerald' (#009B4C), yaw (Z) = 'purple' (#7c3aed).
  */
 function updateCurveToggleUI() {
     const colorThemes = {
         ax: 'emerald', ay: 'red', az: 'blue',
-        pitch: 'red', roll: 'emerald', yaw: 'purple',
+        roll: 'red', pitch: 'emerald', yaw: 'purple',
         dx: 'emerald', dy: 'red', dz: 'blue'
     };
 
@@ -173,6 +164,26 @@ function updateCurveToggleUI() {
             btn.className = 'px-2 py-0.5 rounded text-[10px] font-normal border transition bg-slate-100 text-slate-400 border-slate-200 line-through opacity-60';
         }
     });
+}
+
+/*
+ * Breadcrumb: 2026-10-15 20:05 - Auto-Injection of Frequency Display Badge
+ * Stellt sicher, dass #replay-freq-badge in der Toolbar existiert, selbst wenn index.html nicht editiert wurde.
+ */
+function ensureFrequencyBadgeDOM() {
+    if (document.getElementById('replay-freq-val')) return;
+    const resetBtn = document.getElementById('btn-replay-reset-zoom');
+    if (!resetBtn || !resetBtn.parentElement) return;
+
+    const badge = document.createElement('div');
+    badge.id = 'replay-freq-badge';
+    badge.className = 'flex items-center gap-1.5 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-lg shrink-0 shadow-xs';
+    badge.title = 'Dominante Schwingungsfrequenz (FFT-Spektralanalyse)';
+    badge.innerHTML = `
+        <span class="text-[10px] font-bold text-blue-600 font-mono uppercase">⚡ FREQ:</span>
+        <span id="replay-freq-val" class="text-[11px] font-mono font-bold text-blue-700 tabular-nums">-- Hz</span>
+    `;
+    resetBtn.parentElement.insertBefore(badge, resetBtn);
 }
 
 async function fetchCachedCsv(url) {
@@ -236,37 +247,35 @@ window.resizeReplayDeck = resizeReplayDeck;
 /*
  * Breadcrumb: 2026-10-06 23:15 - Camera View Parity with live-3d.js
  * [CRITICAL BUGFIX FLAG - FRONT/SIDE PERSPECTIVE RESTORATION]:
- * 1. Synchronisiert Kamerapositionen exakt mit live-3d.js:
- *    - 'front': (0, 0.3, 3.8) blickt frontal auf die Gehäusefront (+Z / 0.48).
- *    - 'side':  (3.8, 0.3, 0) blickt seitlich auf die Gehäuselänge (+X / 1.8).
- * [DISMISSED]: Invertierte Front/Side-Werte führten zu verfälschter optischer Achsenwahrnehmung.
+ * Synchronisiert Kamerapositionen exakt mit live-3d.js ('front': Z=3.8, 'side': X=3.8).
  */
-window.setReplayCameraView = function (viewName) {
+function setReplayCameraView(viewName) {
     if (!repCamera) return;
 
-    if (viewName === 'iso' || viewName === 'reset') {
-        repCamera.position.set(2.4, 2.0, 2.8);
-        repCamera.lookAt(0, 0, 0);
-        if (repControls) repControls.target.set(0, 0, 0);
-    } else if (viewName === 'top') {
-        repCamera.position.set(0, 4.0, 0.001);
-        repCamera.lookAt(0, 0, 0);
-        if (repControls) repControls.target.set(0, 0, 0);
-    } else if (viewName === 'front') {
-        repCamera.position.set(0, 0.3, 3.8);
-        repCamera.lookAt(0, 0, 0);
-        if (repControls) repControls.target.set(0, 0, 0);
-    } else if (viewName === 'side') {
-        repCamera.position.set(3.8, 0.3, 0);
-        repCamera.lookAt(0, 0, 0);
-        if (repControls) repControls.target.set(0, 0, 0);
-    }
+    const presets = {
+        iso: [2.4, 2.0, 2.8],
+        reset: [2.4, 2.0, 2.8],
+        top: [0, 4.0, 0.001],
+        front: [0, 0.3, 3.8],
+        side: [3.8, 0.3, 0]
+    };
 
-    if (repControls) repControls.update();
-    if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
-};
+    const pos = presets[viewName] || presets.iso;
+    repCamera.position.set(pos[0], pos[1], pos[2]);
+    repCamera.lookAt(0, 0, 0);
+
+    if (repControls) {
+        repControls.target.set(0, 0, 0);
+        repControls.update();
+    }
+    if (repRenderer && repScene && repCamera) {
+        repRenderer.render(repScene, repCamera);
+    }
+}
+window.setReplayCameraView = setReplayCameraView;
 
 function initReplay3D() {
+    ensureFrequencyBadgeDOM();
     const container = document.getElementById('replay-canvas-container');
     if (!container || typeof THREE === 'undefined') return;
 
@@ -284,7 +293,7 @@ function initReplay3D() {
     repCamera.position.set(2.4, 2.0, 2.8);
     repCamera.lookAt(0, 0, 0);
 
-    repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+    repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     repRenderer.setSize(w, h);
     repRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     repRenderer.setClearColor(0xdbe2ea, 1.0);
@@ -317,7 +326,7 @@ function initReplay3D() {
     loadReplayGLBModel();
 
     if (!repContainerObserver && window.ResizeObserver) {
-        repContainerObserver = new ResizeObserver(() => { resizeReplay3D(); });
+        repContainerObserver = new ResizeObserver(() => resizeReplay3D());
         repContainerObserver.observe(container);
     }
 
@@ -336,57 +345,9 @@ function initReplay3D() {
 }
 
 /*
- * Breadcrumb: 2026-10-06 23:25 - Hardware-Aligned Axis Vectors & Color Mapping
- * [CRITICAL BUGFIX FLAG - CAD MODEL AXIS LABELING & MESH PARITY]:
- * 1. Behebt Achsenvertauschung am 3D-Körper:
- *    - Lokale X-Achse (1, 0, 0) ist die Kippachse (Pitch / Grün #009B4C).
- *    - Lokale Y-Achse (0, 1, 0) ist die Wankachse (Roll / Rot #dc2626).
- *    - Lokale Z-Achse (0, 0, 1) ist die Hochachse (Yaw / Blau #2563eb).
- * 2. Bringt 3D-Visualisierung in Einklang mit den Kurvenfarben und Schiebereglern.
- * [DISMISSED]: Statische X=Roll / Y=Pitch Zuweisung ignorierte den Leiterplatten-Offset.
- */
-/*
- * Breadcrumb: 2026-10-06 23:30 - Standard Model Axes Restored
- * [CRITICAL BUGFIX FLAG - CAD MODEL LOCAL COORDINATES]:
- * 1. Pfeile fest an lokale Modellgeometrie gekoppelt:
- *    - X (1, 0, 0): Gehäuselängsachse / Roll (Rot #dc2626)
- *    - Y (0, 1, 0): Gehäusekippachse / Pitch (Grün #009B4C)
- *    - Z (0, 0, 1): Gehäusehochachse / Yaw (Blau #2563eb)
- * [DISMISSED]: Vertauschen der Beschriftungen an den Pfeilen umging die mathematische Ursache nur optisch.
- */
-/*
- * Breadcrumb: 2026-10-07 00:05 - Hardware Pitch-Axis Alignment & Arrow Parity
- * [CRITICAL BUGFIX FLAG - CAD MODEL AXIS ALIGNMENT (X = PITCH)]:
- * 1. Lokale X-Achse (1, 0, 0) ist die Kippachse: Beschriftet als 'Pitch (X)' in Rot (#dc2626).
- * 2. Lokale Y-Achse (0, 1, 0) ist die Wankachse: Beschriftet als 'Roll (Y)' in Grün (#009B4C).
- * 3. Lokale Z-Achse (0, 0, 1) ist die Hochachse: Beschriftet als 'Yaw (Z)' in Blau (#2563eb).
- * 4. Stellt optische Konsistenz zwischen Kippbewegung, ACC X und Hub-Vektor her.
- * [DISMISSED]: Beschriftung von X als 'Roll' ignorierte die Einbaulage an der Kippstation.
- */
-/*
- * Breadcrumb: 2026-10-07 00:20 - Canonical Model Axes Restored (Roll = X Red, Pitch = Y Green)
- * [CRITICAL BUGFIX & CANONICAL RESTORATION - ROLL X (RED) & PITCH Y (GREEN)]:
- * 1. Pfeil X (1, 0, 0): Gehäuselängsachse / Roll in Rot (#dc2626).
- * 2. Pfeil Y (0, 1, 0): Kippachse / Pitch in Grün (#009B4C).
- * 3. Pfeil Z (0, 0, 1): Hochachse / Yaw in Blau (#2563eb).
- * [DISMISSED]: Umbenennung von X in Pitch vertauschte die Signalzuordnung im Oszilloskop.
- */
-/*
- * Breadcrumb: 2026-10-07 00:45 - Tilt Frame Axis Alignment (X = Pitch Red / Y = Roll Green)
+ * Breadcrumb: 2026-10-07 00:40 - Canonical 3D Axis Alignment (X = Roll Red / Y = Pitch Green / Z = Yaw Blue)
  * [CRITICAL BUGFIX FLAG - 3D ARROW LABELING PARITY]:
- * 1. Pfeil X (1, 0, 0): Physikalische Kippachse des Rahmens -> 'Pitch (X)' in Rot (#dc2626).
- * 2. Pfeil Y (0, 1, 0): Wankachse / Gehäuselängsachse -> 'Roll (Y)' in Grün (#009B4C).
- * 3. Pfeil Z (0, 0, 1): Hochachse -> 'Yaw (Z)' in Blau (#2563eb).
- * [DISMISSED]: X als 'Roll' zu belabeln widersprach der beobachteten Kippachsendrehung in 3D.
- */
-/*
- * Breadcrumb: 2026-10-07 00:40 - Canonical 3D Axis Alignment (X = Roll Red / Y = Pitch Green)
- * [CRITICAL BUGFIX FLAG - 3D ARROW LABELING PARITY]:
- * 1. Pfeil X (1, 0, 0): Gehäuselängsachse -> 'Roll (X)' in Rot (#dc2626).
- * 2. Pfeil Y (0, 1, 0): Kippachse -> 'Pitch (Y)' in Grün (#009B4C).
- * 3. Pfeil Z (0, 0, 1): Hochachse -> 'Yaw (Z)' in Blau (#2563eb).
- * 4. Stellt exakte Parität zwischen Oszilloskop-Beschriftung 'Roll (X)' und 3D-Viewport her.
- * [DISMISSED]: X als 'Pitch' zu belabeln widersprach der Beschriftung im Graphen.
+ * Pfeil X (1,0,0) = 'Roll (X)' (#dc2626), Pfeil Y (0,1,0) = 'Pitch (Y)' (#009B4C), Pfeil Z (0,0,1) = 'Yaw (Z)' (#2563eb).
  */
 function attachImuAxes(targetGroup) {
     const old = targetGroup.getObjectByName('imuAxesGroup');
@@ -399,15 +360,11 @@ function attachImuAxes(targetGroup) {
     const headLen = 0.22;
     const headWidth = 0.12;
 
-    const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth);
-    const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth);
-    const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), len, 0x2563eb, headLen, headWidth);
+    axesGroup.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), len, 0xdc2626, headLen, headWidth));
+    axesGroup.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), len, 0x009B4C, headLen, headWidth));
+    axesGroup.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), len, 0x2563eb, headLen, headWidth));
 
-    axesGroup.add(arrowX);
-    axesGroup.add(arrowY);
-    axesGroup.add(arrowZ);
-
-    function createAxisLabel(text, colorHex) {
+    function createAxisLabel(text, colorHex, posVec) {
         const canvas = document.createElement('canvas');
         canvas.width = 256;
         canvas.height = 64;
@@ -419,25 +376,18 @@ function attachImuAxes(targetGroup) {
         const mat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
         const sprite = new THREE.Sprite(mat);
         sprite.scale.set(0.85, 0.22, 1.0);
+        sprite.position.copy(posVec);
         return sprite;
     }
 
-    const lblX = createAxisLabel('Roll (X)', '#dc2626');
-    lblX.position.set(len + 0.25, 0, 0);
-    axesGroup.add(lblX);
-
-    const lblY = createAxisLabel('Pitch (Y)', '#009B4C');
-    lblY.position.set(0, len + 0.25, 0);
-    axesGroup.add(lblY);
-
-    const lblZ = createAxisLabel('Yaw (Z)', '#2563eb');
-    lblZ.position.set(0, 0, len + 0.25);
-    axesGroup.add(lblZ);
+    axesGroup.add(createAxisLabel('Roll (X)', '#dc2626', new THREE.Vector3(len + 0.25, 0, 0)));
+    axesGroup.add(createAxisLabel('Pitch (Y)', '#009B4C', new THREE.Vector3(0, len + 0.25, 0)));
+    axesGroup.add(createAxisLabel('Yaw (Z)', '#2563eb', new THREE.Vector3(0, 0, len + 0.25)));
 
     targetGroup.add(axesGroup);
 }
-function createReplayFallbackCube() {
-    if (repMesh && repScene) repScene.remove(repMesh);
+
+function buildFallbackHousingGroup() {
     const group = new THREE.Group();
 
     const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
@@ -456,22 +406,22 @@ function createReplayFallbackCube() {
     frontMesh.position.set(0, 0.1, 0.48);
     group.add(frontMesh);
 
-    repMesh = group;
-    attachImuAxes(repMesh);
-    repScene.add(repMesh);
+    attachImuAxes(group);
+    return group;
+}
+
+function createReplayFallbackCube() {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    repMesh = buildFallbackHousingGroup();
+    if (repScene) repScene.add(repMesh);
 }
 
 /*
  * Breadcrumb: 2026-10-06 23:50 - ESP Captive Portal Parity: Native CAD Mesh Orientation
  * [CRITICAL BUGFIX & FEATURE PARITY - GLTF BASIS ALIGNMENT]:
- * 1. Entfernt 'gltfScene.rotation.x = -Math.PI / 2', das eine 90°-Vordrehung erzwang.
- * 2. Übernimmt die native Orientierung aus setupModelMesh() des ESP32-Dashboards.
- * [DISMISSED]: rotation.x = -Math.PI / 2 erforderte kompensierende Euler-Kippungen.
+ * Übernimmt die native Orientierung aus setupModelMesh() ohne künstliche -90° X-Vordrehung.
  */
-function setupReplayModelMesh(gltfScene) {
-    if (repMesh && repScene) repScene.remove(repMesh);
-    if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
-
+function normalizeAndCenterGltf(gltfScene) {
     gltfScene.traverse((child) => {
         if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
     });
@@ -482,15 +432,22 @@ function setupReplayModelMesh(gltfScene) {
     const maxDim = Math.max(size.x, size.y, size.z);
 
     const group = new THREE.Group();
+    group.name = 'imuCadGroup';
     if (maxDim > 0) {
         const s = 1.8 / maxDim;
         gltfScene.scale.set(s, s, s);
         gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
     }
     group.add(gltfScene);
+    attachImuAxes(group);
+    return group;
+}
 
-    repMesh = group;
-    attachImuAxes(repMesh);
+function setupReplayModelMesh(gltfScene) {
+    if (repMesh && repScene) repScene.remove(repMesh);
+    if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
+
+    repMesh = normalizeAndCenterGltf(gltfScene);
     repScene.add(repMesh);
     if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
 
@@ -514,9 +471,9 @@ function loadReplayGLBModel() {
         }
         loader.load(
             candidatePaths[index],
-            (gltf) => { setupReplayModelMesh(gltf.scene); },
+            (gltf) => setupReplayModelMesh(gltf.scene),
             undefined,
-            () => { tryLoad(index + 1); }
+            () => tryLoad(index + 1)
         );
     }
     tryLoad(0);
@@ -535,69 +492,262 @@ function closeImuReplayDeck() {
 }
 
 // ============================================================================
-// 2. MATHEMATIK, SCHWINGWEG & EINBAULAGEN-TARE
+// 2. MATHEMATIK: FFT-SPEKTRALINTEGRATION, FREQUENZ & EULER-TARE
 // ============================================================================
 
 /*
- * Breadcrumb: 2026-10-11 15:55 - True-Scale Dynamic Displacement Engine (0.5m Parity)
- * [CRITICAL BUGFIX FLAG - FULL-SCALE AMPLITUDE RESTORATION]:
- * 1. Behebt 90%-Amplitudenverlust (500mm -> 50mm):
- *    - hpAlpha von 0.68 auf 0.95 angehoben (senkt fc von 0.75 Hz auf ~0.08 Hz bei 10 Hz Abtastung).
- *    - Reale Hand- und Stationshübe (0.3 bis 3.0 Hz) passieren die Kaskade nun mit >92% bis 98% Amplitude.
- * 2. Bilinear-Kompensation beta = (1 + alpha) / 2 = 0.975:
- *    - Stellt Einheitsverstärkung (Gain = 1.0) im Durchlassbereich sicher.
- * 3. Robuste Null-Mittelwert-Integration (Detrending):
- *    - Zieht vor und nach jedem Integrationsschritt (a -> v -> s) den Gleichanteil ab.
- * 4. Exponiert window.recalculateAllDisplacements für sofortige Neuberechnung geladener Daten.
+ * Breadcrumb: 2026-10-15 20:05 - Radix-2 Cooley-Tukey FFT & Ring-Free Spectral Double Integration
+ * [CRITICAL FEATURE & MATH REFACTORING - ZERO ATTENUATION SPECTRAL INTEGRATION]:
+ * 1. In-Place Radix-2 FFT & IFFT mit Zero-Padding auf 2x nächste Zweierpotenz (verhindert Wrap-Around).
+ * 2. Lineares Detrending (Offset + Steigung) & 5% Cosine-Taper (Tukey-Fenster) gegen Spectral Leakage.
+ * 3. Phasenfreier Butterworth-Hochpass 4. Ordnung (fc = 0.18 Hz) im Frequenzbereich verhindert Gibbs-Ringing.
+ * 4. Exakte analytische Doppelintegration durch Multiplikation mit -1 / (2*pi*f)^2.
+ * 5. Sub-Bin Parabol-Interpolation zur exakten Bestimmung der dominanten Schwingungsfrequenz.
  * [DISMISSED]:
- * - hpAlpha = 0.68 ohne beta-Kompensation dämpfte Frequenzen um 1 Hz bei 3 Kaskadenstufen auf 7.5% ab.
+ * - Zeitbereichs-IIR-Kaskade (3 Stufen) dämpfte 0.5-1.5 Hz Schwingungen um 35%.
+ * - Harter Brickwall-Cut bei 0.15 Hz ohne Roll-Off erzeugte Ein-/Ausschwing-Artefakte an Impulskanten.
  */
+function fftRadix2(re, im, inverse = false) {
+    const n = re.length;
+    let j = 0;
+    for (let i = 0; i < n - 1; i++) {
+        if (i < j) {
+            const tr = re[i]; re[i] = re[j]; re[j] = tr;
+            const ti = im[i]; im[i] = im[j]; im[j] = ti;
+        }
+        let k = n >> 1;
+        while (k <= j) {
+            j -= k;
+            k >>= 1;
+        }
+        j += k;
+    }
+
+    for (let len = 2; len <= n; len <<= 1) {
+        const half = len >> 1;
+        const angle = (inverse ? 2.0 : -2.0) * Math.PI / len;
+        const wStepR = Math.cos(angle);
+        const wStepI = Math.sin(angle);
+
+        for (let i = 0; i < n; i += len) {
+            let wR = 1.0, wI = 0.0;
+            for (let k = 0; k < half; k++) {
+                const posA = i + k;
+                const posB = i + k + half;
+                const uR = re[posA], uI = im[posA];
+                const vR = re[posB] * wR - im[posB] * wI;
+                const vI = re[posB] * wI + im[posB] * wR;
+
+                re[posA] = uR + vR;
+                im[posA] = uI + vI;
+                re[posB] = uR - vR;
+                im[posB] = uI - vI;
+
+                const nextWR = wR * wStepR - wI * wStepI;
+                wI = wR * wStepI + wI * wStepR;
+                wR = nextWR;
+            }
+        }
+    }
+
+    if (inverse) {
+        for (let i = 0; i < n; i++) {
+            re[i] /= n;
+            im[i] /= n;
+        }
+    }
+}
+
+function detrendAndWindowSignal(rawSignal, n, N) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += rawSignal[i];
+    const mean = sum / n;
+
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    let sqSum = 0;
+    for (let i = 0; i < n; i++) {
+        const val = rawSignal[i] - mean;
+        sumX += i;
+        sumY += val;
+        sumXY += i * val;
+        sumXX += i * i;
+        sqSum += val * val;
+    }
+
+    const rms = Math.sqrt(sqSum / n);
+    const denom = (n * sumXX - sumX * sumX) || 1;
+    const slope = (n * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / n;
+
+    const re = new Float64Array(N);
+    const im = new Float64Array(N);
+    const taperLen = Math.max(2, Math.floor(n * 0.05));
+
+    for (let i = 0; i < n; i++) {
+        let val = (rawSignal[i] - mean) - (intercept + slope * i);
+        if (i < taperLen) {
+            val *= 0.5 * (1.0 - Math.cos((Math.PI * i) / taperLen));
+        } else if (i >= n - taperLen) {
+            val *= 0.5 * (1.0 - Math.cos((Math.PI * (n - 1 - i)) / taperLen));
+        }
+        re[i] = val;
+    }
+
+    return { re, im, rms };
+}
+
 /*
- * Breadcrumb: 2026-10-11 16:45 - Timestamp-Driven Dynamic Integration & 25 Hz Parity
- * [CRITICAL BUGFIX FLAG - REAL-DT & ZERO-PHASE ATTENUATION FIX]:
- * 1. Dynamisches dt aus Timestamps: Behebt 6.25x Zeitverzerrung (Log lief auf 25 Hz / 40 ms,
- *    Code integrierte starr mit dt = 0.1 s).
- * 2. Lückenerkennung (dt > 0.25 s): Setzt v und s an Paketabrissen und Sleep-Pausen sauber auf 0 zurück.
- * 3. 25-Hz-angepasster Filter (alpha = 0.94): Grenzfrequenz fc ~ 0.25 Hz.
- *    Lässt Hand- und Stationshübe (0.8 bis 3 Hz) zu 96% bis 99% ungedämpft passieren.
- * 4. Spitze-Spitze-Hub bildet reale ~360 mm Auslenkung maßstabsgetreu in Tier 3 ab.
+ * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
+ * [CRITICAL BUGFIX FLAG - SPECTRAL PEAK ACCURACY]:
+ * Speichert das Amplitudenspektrum der Beschleunigung vor der -1/omega^2 Integration zwischen,
+ * damit die parabolische Interpolation nicht durch die Tieffrequenz-Anhebung verzerrt wird.
  */
+function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
+    const n = rawSignal.length;
+    if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
+
+    let N = 32;
+    while (N < n * 2) N <<= 1;
+
+    const { re, im, rms } = detrendAndWindowSignal(rawSignal, n, N);
+
+    if (rms < 0.04) {
+        return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
+    }
+
+    fftRadix2(re, im, false);
+
+    const deltaF = sampleRateHz / N;
+    const nyquist = sampleRateHz / 2.0;
+    const halfN = N >> 1;
+    const accMag = new Float64Array(halfN + 1);
+
+    let maxMag = 0.0;
+    let peakBin = 0;
+
+    re[0] = 0.0;
+    im[0] = 0.0;
+
+    for (let k = 1; k <= halfN; k++) {
+        const f = k * deltaF;
+        const mag = Math.hypot(re[k], im[k]);
+        accMag[k] = mag;
+
+        if (f >= cutoffHz && f <= nyquist * 0.95) {
+            if (mag > maxMag) {
+                maxMag = mag;
+                peakBin = k;
+            }
+        }
+
+        if (f < 0.05 || f > nyquist * 0.95) {
+            re[k] = 0.0;
+            im[k] = 0.0;
+            if (k < halfN) {
+                re[N - k] = 0.0;
+                im[N - k] = 0.0;
+            }
+        } else {
+            const ratio4 = Math.pow(f / cutoffHz, 4);
+            const hpGain = ratio4 / (1.0 + ratio4);
+            const omega = 2.0 * Math.PI * f;
+            const factor = -hpGain / (omega * omega);
+
+            re[k] *= factor;
+            im[k] *= factor;
+            if (k < halfN) {
+                re[N - k] *= factor;
+                im[N - k] *= factor;
+            }
+        }
+    }
+
+    // Parabolische Interpolation auf dem unverzerrten Beschleunigungsspektrum (accMag)
+    let domFreqHz = peakBin * deltaF;
+    if (peakBin > 1 && peakBin < halfN) {
+        const y0 = accMag[peakBin - 1];
+        const y1 = accMag[peakBin];
+        const y2 = accMag[peakBin + 1];
+        const denom = y0 - 2.0 * y1 + y2;
+        if (Math.abs(denom) > 1e-12) {
+            const deltaK = 0.5 * (y0 - y2) / denom;
+            if (Math.abs(deltaK) < 1.0) {
+                domFreqHz = Math.max(cutoffHz, (peakBin + deltaK) * deltaF);
+            }
+        }
+    }
+
+    fftRadix2(re, im, true);
+
+    const dispMm = new Float64Array(n);
+    let meanDisp = 0.0;
+    for (let i = 0; i < n; i++) {
+        dispMm[i] = re[i] * 1000.0;
+        meanDisp += dispMm[i];
+    }
+    meanDisp /= n;
+    for (let i = 0; i < n; i++) {
+        dispMm[i] -= meanDisp;
+    }
+
+    return { dispMm, domFreqHz };
+}
+
 /*
- * Breadcrumb: 2026-10-11 15:25 - Rate-Independent Physical Displacement Engine
- * [CRITICAL BUGFIX & FEATURE FLAG - DYNAMIC FILTER COEFFICIENTS & DT INTEGRATION]:
- * 1. Ruft detectReplaySampleInterval() vor der Berechnung auf.
- * 2. Berechnet Filterkoeffizient alpha dynamisch aus Zeitkonstante tau ~ 0.80s (fc ~ 0.20 Hz):
- *    alpha = tau / (tau + replaySampleIntervalSec).
- *    Garantiert konstante Filtercharakteristik unabhängig davon, ob mit 10, 20 oder 25 Hz geloggt wurde.
- * 3. Nutzt echte dt-Schritte aus den Zeitstempeln; begrenzt Zeitlücken (> 4 * dt) auf nominales dt.
+ * Berechnet für längere Zyklen (> 64 Samples) zusätzlich die lokale Kurzzeit-Frequenz (STFT),
+ * damit beim Durchfahren mit dem Cursor lokale Frequenzänderungen sofort sichtbar werden.
  */
+function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) {
+    const n = rawSignal.length;
+    const outFreq = new Float64Array(n);
+    const winSize = 64;
+
+    if (n < winSize) {
+        outFreq.fill(fallbackFreqHz);
+        return outFreq;
+    }
+
+    const step = 8;
+    const halfWin = winSize >> 1;
+    let lastFreq = fallbackFreqHz;
+
+    for (let center = 0; center < n; center += step) {
+        const start = Math.max(0, Math.min(n - winSize, center - halfWin));
+        const sub = rawSignal.subarray(start, start + winSize);
+        const { re, im, rms } = detrendAndWindowSignal(sub, winSize, 128);
+
+        if (rms < 0.04) {
+            lastFreq = 0.0;
+        } else {
+            fftRadix2(re, im, false);
+            const deltaF = sampleRateHz / 128;
+            let maxMag = 0.0;
+            let peakBin = 0;
+            for (let k = 1; k <= 60; k++) {
+                const f = k * deltaF;
+                if (f < 0.20) continue;
+                const mag = Math.hypot(re[k], im[k]);
+                if (mag > maxMag) {
+                    maxMag = mag;
+                    peakBin = k;
+                }
+            }
+            lastFreq = peakBin * deltaF;
+        }
+
+        const fillEnd = Math.min(n, center + step);
+        for (let k = center; k < fillEnd; k++) {
+            outFreq[k] = lastFreq;
+        }
+    }
+
+    return outFreq;
+}
+
 function calculateAllDisplacements() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
     detectReplaySampleInterval();
-
-    // Grenzfrequenz fc ~ 0.20 Hz physikalisch fixieren: tau = 1 / (2 * pi * fc) ~ 0.80s
-    const tau = 0.80;
-    const hpAlpha = tau / (tau + replaySampleIntervalSec);
-    const hpBeta = (1.0 + hpAlpha) / 2.0;
-
-    function zeroPhaseHighPass(arr) {
-        const n = arr.length;
-        if (n < 4) return new Float64Array(arr);
-
-        const fwd = new Float64Array(n);
-        fwd[0] = 0;
-        for (let i = 1; i < n; i++) {
-            fwd[i] = hpAlpha * fwd[i - 1] + hpBeta * (arr[i] - arr[i - 1]);
-        }
-
-        const out = new Float64Array(n);
-        out[n - 1] = fwd[n - 1];
-        for (let i = n - 2; i >= 0; i--) {
-            out[i] = hpAlpha * out[i + 1] + hpBeta * (fwd[i] - fwd[i + 1]);
-        }
-        return out;
-    }
 
     let currentCycle = null;
     let cycleIndices = [];
@@ -606,65 +756,41 @@ function calculateAllDisplacements() {
         const n = indices.length;
         if (n === 0) return;
 
-        const dtArr = new Float64Array(n);
-        dtArr[0] = replaySampleIntervalSec;
-        for (let k = 1; k < n; k++) {
-            const tPrev = new Date(replayDataRaw[indices[k - 1]].ts).getTime();
-            const tCurr = new Date(replayDataRaw[indices[k]].ts).getTime();
-            let delta = (tCurr - tPrev) / 1000.0;
-            if (isNaN(delta) || delta <= 0 || delta > (replaySampleIntervalSec * 4)) {
-                delta = replaySampleIntervalSec;
-            }
-            dtArr[k] = delta;
+        const rawAx = new Float64Array(n);
+        const rawAy = new Float64Array(n);
+        const rawAz = new Float64Array(n);
+
+        for (let k = 0; k < n; k++) {
+            const item = replayDataRaw[indices[k]];
+            rawAx[k] = item.ax || 0.0;
+            rawAy[k] = item.ay || 0.0;
+            rawAz[k] = item.az || 0.0;
         }
 
-        ['ax', 'ay', 'az'].forEach(axisKey => {
-            const dispKey = axisKey === 'ax' ? 'dx' : (axisKey === 'ay' ? 'dy' : 'dz');
+        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, 0.18);
+        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, 0.18);
+        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, 0.18);
 
-            const rawA = new Float64Array(n);
-            let sumA = 0;
-            for (let k = 0; k < n; k++) {
-                const val = replayDataRaw[indices[k]][axisKey] || 0;
-                rawA[k] = val;
-                sumA += val;
-            }
-            const meanA = sumA / n;
-            for (let k = 0; k < n; k++) rawA[k] -= meanA;
+        const locFx = computeLocalWindowFrequencies(rawAx, replaySampleRateHz, resX.domFreqHz);
+        const locFy = computeLocalWindowFrequencies(rawAy, replaySampleRateHz, resY.domFreqHz);
+        const locFz = computeLocalWindowFrequencies(rawAz, replaySampleRateHz, resZ.domFreqHz);
 
-            const aFilt = zeroPhaseHighPass(rawA);
+        for (let k = 0; k < n; k++) {
+            const item = replayDataRaw[indices[k]];
+            item.dx = resX.dispMm[k];
+            item.dy = resY.dispMm[k];
+            item.dz = resZ.dispMm[k];
 
-            const v = new Float64Array(n);
-            v[0] = 0;
-            let sumV = 0;
-            for (let k = 1; k < n; k++) {
-                v[k] = v[k - 1] + 0.5 * (aFilt[k] + aFilt[k - 1]) * dtArr[k];
-                sumV += v[k];
-            }
-            const meanV = sumV / n;
-            for (let k = 0; k < n; k++) v[k] -= meanV;
-
-            const vFilt = zeroPhaseHighPass(v);
-
-            const s = new Float64Array(n);
-            s[0] = 0;
-            let sumS = 0;
-            for (let k = 1; k < n; k++) {
-                s[k] = s[k - 1] + 0.5 * (vFilt[k] + vFilt[k - 1]) * dtArr[k];
-                sumS += s[k];
-            }
-            const meanS = sumS / n;
-            for (let k = 0; k < n; k++) s[k] -= meanS;
-
-            const sFilt = zeroPhaseHighPass(s);
-
-            for (let k = 0; k < n; k++) {
-                replayDataRaw[indices[k]][dispKey] = sFilt[k] * 1000.0;
-            }
-        });
+            // Zuordnung zu Modellachsen: X-Kippachse = Sensor-Y, Y-Wankachse = Sensor-X
+            item.freqX = locFy[k] || resY.domFreqHz;
+            item.freqY = locFx[k] || resX.domFreqHz;
+            item.freqZ = locFz[k] || resZ.domFreqHz;
+            item.freqDom = Math.max(item.freqX, item.freqY, item.freqZ);
+        }
     }
 
     for (let i = 0; i < replayDataRaw.length; i++) {
-        const c = replayDataRaw[i].cycle || 0;
+        const c = replayDataRaw[i].cycle || 1;
         if (currentCycle === null || c !== currentCycle) {
             if (cycleIndices.length > 0) processCycle(cycleIndices);
             currentCycle = c;
@@ -678,77 +804,72 @@ function calculateAllDisplacements() {
 window.calculateAllDisplacements = calculateAllDisplacements;
 
 /*
- * Breadcrumb: 2026-10-06 23:50 - Continuous Euler Unwrapping & Direct Quat Tare
+ * Breadcrumb: 2026-10-06 23:55 - Continuous Euler Unwrapping & Direct Quat Tare
  * [CRITICAL BUGFIX & FEATURE PARITY - ZERO JUMPS & DISCONTINUITY ELIMINATION]:
- * 1. Implementiert antipodale Vorzeichen-Kontinuität (q · q_prev >= 0) identisch zum ESP-Websocket.
- * 2. Relatives Tare q_rel = q_mount^-1 * q_raw eliminiert Singularitäten vollständig.
- * 3. Phasen-Unwrapping verhindert 360°-Sägezahnsprünge an den Schnittstellen (+180° / -180°).
- * 4. clamp(sinp, -1, 1) verhindert NaN-Ausrutscher bei exakten 90°-Zuständen.
- * [DISMISSED]: setFromEuler('ZYX') im Renderloop erzeugte Sprünge bei Annäherung an 90°.
+ * Relatives Tare q_rel = q_mount^-1 * q_raw eliminiert Gimbal-Lock-Singularitäten.
  */
+/*
+ * Breadcrumb: 2026-10-15 20:45 - Model-Space Quaternion Tare & Roll/Pitch Axis Parity Fix
+ * [CRITICAL BUGFIX FLAG - ELIMINATE ROLL-TO-YAW CROSS-PROJECTION & MODAL AXIS SWAP]:
+ * 1. Transformiert Sensor-Quaternionen (qw, qx, qy, qz) vor dem Tare in das kanonische 3D-Modell-Koordinatensystem:
+ *    Model_W = qw, Model_X (Roll) = -qy, Model_Y (Pitch) = +qx, Model_Z (Yaw) = +qz.
+ * 2. getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) erzeugt qMount direkt im 3D-Modell-Koordinatensystem:
+ *    - Roll (-90°) dreht exakt um die rote Modell-X-Achse (Roll).
+ *    - Pitch dreht exakt um die grüne Modell-Y-Achse (Pitch).
+ *    - Yaw dreht exakt um die blaue Modell-Z-Achse (Yaw).
+ * 3. Verhindert das Kreuzprodukt (Pitch_Mount x Roll_Sensor -> Yaw_Graph), sodass Kippbewegungen um die
+ *    Roll-Achse zu 100% auf der roten Roll (X)-Kurve geplottet werden.
+ * [DISMISSED]: Tare im ungedrehten Sensorframe vertauschte Roll/Pitch im Modal und projizierte Roll bei -90° auf Yaw.
+ */
+function sensorToModelQuat(qw, qx, qy, qz) {
+    const norm = Math.hypot(qw, qx, qy, qz) || 1.0;
+    return {
+        w: qw / norm,
+        x: -qy / norm, // Modell X-Achse = Roll (Rot)
+        y: qx / norm,  // Modell Y-Achse = Pitch (Grün)
+        z: qz / norm   // Modell Z-Achse = Yaw (Blau)
+    };
+}
 
+function computeRelativeQuat(mw, mx, my, mz) {
+    let w = mw, x = mx, y = my, z = mz;
 
-function computeRelativeQuat(qw, qx, qy, qz) {
-    let w = qw, x = qx, y = qy, z = qz;
-
-    // Relatives Quaternion: q_rel = q_mount^-1 * q_raw
+    // Relatives Quaternion im 3D-Modellraum: q_rel = q_mount^-1 * q_model
     if (replayMountQuat) {
-        const mw = replayMountQuat.w, mx = replayMountQuat.x, my = replayMountQuat.y, mz = replayMountQuat.z;
-        w = mw * qw + mx * qx + my * qy + mz * qz;
-        x = mw * qx - mx * qw - my * qz + mz * qy;
-        y = mw * qy + mx * qz - my * qw - mz * qx;
-        z = mw * qz - mx * qy + my * qx - mz * qw;
+        const qw = replayMountQuat.w, qx = replayMountQuat.x, qy = replayMountQuat.y, qz = replayMountQuat.z;
+        w = qw * mw + qx * mx + qy * my + qz * mz;
+        x = qw * mx - qx * mw - qy * mz + qz * my;
+        y = qw * my + qx * mz - qy * mw - qz * mx;
+        z = qw * mz - qx * my + qy * mx - qz * mw;
     }
 
     const norm = Math.hypot(w, x, y, z) || 1.0;
     return { w: w / norm, x: x / norm, y: y / norm, z: z / norm };
 }
 
-/*
- * Breadcrumb: 2026-10-06 23:30 - Sensor-to-Model Euler Angle Extraction
- * [CRITICAL BUGFIX FLAG - SENSOR AXIS ROTATION PARITY]:
- * 1. Berücksichtigt den BNO085-Hardware-Offset (-qy, qx, qz, qw):
- *    - x_model = -ny  -> Steuert die Roll-Analytik (Wanken um Gehäuselängsachse)
- *    - y_model = +nx  -> Steuert die Pitch-Analytik (Kippen am Rahmen)
- *    - z_model = +nz  -> Steuert die Yaw-Analytik (Gieren)
- * [DISMISSED]: Unverändertes Einsetzen von nx als Roll führte zur Vertauschung von Roll und Pitch im Graph und Tare.
- */
-/*
- * Breadcrumb: 2026-10-06 23:45 - Standard Tait-Bryan Z-Y-X Euler Extraction
- * [CRITICAL BUGFIX FLAG - GIMBAL LOCK ELIMINATION]:
- * 1. Berechnet Roll (X), Pitch (Y) und Yaw (Z) direkt aus dem relativen Quaternion.
- * 2. q_rel = (1, 0, 0, 0) ergibt exakt 0.0° auf allen Achsen (Singularitaetsfreier Arbeitsbereich).
- * 3. Beseitigt das Einfrieren von Pitch bei 87.6° und die Roll/Yaw-Sprünge.
- */
 function quatToEulerRawDeg(nw, nx, ny, nz) {
-    const sinr_cosp = 2 * (nw * nx + ny * nz);
-    const cosr_cosp = 1 - 2 * (nx * nx + ny * ny);
-    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180 / Math.PI);
+    const sinr_cosp = 2.0 * (nw * nx + ny * nz);
+    const cosr_cosp = 1.0 - 2.0 * (nx * nx + ny * ny);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180.0 / Math.PI);
 
-    const sinp = 2 * (nw * ny - nz * nx);
+    const sinp = 2.0 * (nw * ny - nz * nx);
     const clampedSinp = Math.max(-1.0, Math.min(1.0, sinp));
-    const pitch = Math.asin(clampedSinp) * (180 / Math.PI);
+    const pitch = Math.asin(clampedSinp) * (180.0 / Math.PI);
 
-    const siny_cosp = 2 * (nw * nz + nx * ny);
-    const cosy_cosp = 1 - 2 * (ny * ny + nz * nz);
-    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
+    const siny_cosp = 2.0 * (nw * nz + nx * ny);
+    const cosy_cosp = 1.0 - 2.0 * (ny * ny + nz * nz);
+    const yaw = Math.atan2(siny_cosp, cosy_cosp) * (180.0 / Math.PI);
 
     return { roll, pitch, yaw };
 }
 
 function unwrapAngle(current, previous) {
     let diff = current - previous;
-    while (diff > 180) { current -= 360; diff -= 360; }
-    while (diff < -180) { current += 360; diff += 360; }
+    while (diff > 180.0) { current -= 360.0; diff -= 360.0; }
+    while (diff < -180.0) { current += 360.0; diff += 360.0; }
     return current;
 }
 
-/*
- * Breadcrumb: 2026-10-06 23:55 - Cycle-Bounded Euler Unwrapping
- * [CRITICAL BUGFIX FLAG - MULTI-CYCLE BASELINE INTEGRITY]:
- * 1. Setzt prevRoll/Pitch/Yaw bei jedem Zykluswechsel (item.cycle) gezielt zurück.
- * 2. Verhindert das Verschleppen von 360°-Wicklungsphasen zwischen getrennten Hub-Events.
- */
 function recalculateAllEuler() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
@@ -759,17 +880,17 @@ function recalculateAllEuler() {
     for (let i = 0; i < replayDataRaw.length; i++) {
         const item = replayDataRaw[i];
 
-        // An Zyklus- bzw. Eventgrenzen Unwrapping-Gedächtnis zurücksetzen
         if (activeCycle === null || item.cycle !== activeCycle) {
             activeCycle = item.cycle;
             prevRoll = null; prevPitch = null; prevYaw = null;
             prevRawRoll = null; prevRawPitch = null; prevRawYaw = null;
         }
 
-        // 1. Physische Rohwinkel berechnen
-        const rNorm = Math.hypot(item.qw, item.qx, item.qy, item.qz) || 1.0;
-        const rawE = quatToEulerRawDeg(item.qw / rNorm, item.qx / rNorm, item.qy / rNorm, item.qz / rNorm);
+        // 1. Sensor-Quaternion in das 3D-Modell-Koordinatensystem überführen
+        const qMod = sensorToModelQuat(item.qw, item.qx, item.qy, item.qz);
 
+        // 2. Ungetarte Modell-Rohwinkel (für "Aus aktueller Lage" im Einbaulagen-Modal)
+        const rawE = quatToEulerRawDeg(qMod.w, qMod.x, qMod.y, qMod.z);
         if (prevRawRoll === null) {
             item.rawRoll = rawE.roll;
             item.rawPitch = rawE.pitch;
@@ -783,14 +904,14 @@ function recalculateAllEuler() {
         prevRawPitch = item.rawPitch;
         prevRawYaw = item.rawYaw;
 
-        // 2. Relatives genulltes Quaternion berechnen & ablegen (für 3D-Viewer)
-        const qRel = computeRelativeQuat(item.qw, item.qx, item.qy, item.qz);
+        // 3. Relatives Quaternion zur gewählten Einbaulage berechnen
+        const qRel = computeRelativeQuat(qMod.w, qMod.x, qMod.y, qMod.z);
         item.relQw = qRel.w;
         item.relQx = qRel.x;
         item.relQy = qRel.y;
         item.relQz = qRel.z;
 
-        // 3. Genullte Winkel für Oszilloskop berechnen & phasenglätten
+        // 4. Relative Euler-Winkel (Roll = X, Pitch = Y, Yaw = Z) extrahieren
         const eRel = quatToEulerRawDeg(qRel.w, qRel.x, qRel.y, qRel.z);
         if (prevRoll === null) {
             item.roll = eRel.roll;
@@ -807,34 +928,14 @@ function recalculateAllEuler() {
     }
 }
 
-
 // ============================================================================
 // 3. EINBAULAGEN-MODAL & 3D-VORSCHAUFENSTER
 // ============================================================================
 
 function createMountingFallbackCube() {
     if (mountMesh && mountScene) mountScene.remove(mountMesh);
-    const group = new THREE.Group();
-
-    const bodyGeo = new THREE.BoxGeometry(1.8, 0.42, 0.95);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.2, roughness: 0.5 });
-    group.add(new THREE.Mesh(bodyGeo, bodyMat));
-
-    const topGeo = new THREE.BoxGeometry(1.68, 0.04, 0.82);
-    const topMat = new THREE.MeshStandardMaterial({ color: 0x009B4C, metalness: 0.3, roughness: 0.3 });
-    const topMesh = new THREE.Mesh(topGeo, topMat);
-    topMesh.position.y = 0.21;
-    group.add(topMesh);
-
-    const frontGeo = new THREE.BoxGeometry(0.5, 0.08, 0.04);
-    const frontMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0 });
-    const frontMesh = new THREE.Mesh(frontGeo, frontMat);
-    frontMesh.position.set(0, 0.1, 0.48);
-    group.add(frontMesh);
-
-    mountMesh = group;
-    attachImuAxes(mountMesh);
-    mountScene.add(mountMesh);
+    mountMesh = buildFallbackHousingGroup();
+    if (mountScene) mountScene.add(mountMesh);
     updateMountingPreview3D();
 }
 
@@ -842,26 +943,7 @@ function setupMountingModelMesh(gltfScene) {
     if (!mountScene) return;
     if (mountMesh) mountScene.remove(mountMesh);
 
-    gltfScene.traverse((child) => {
-        if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
-    });
-
-    const box = new THREE.Box3().setFromObject(gltfScene);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-
-    const group = new THREE.Group();
-    group.name = 'imuCadGroup';
-    if (maxDim > 0) {
-        const s = 1.8 / maxDim;
-        gltfScene.scale.set(s, s, s);
-        gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
-    }
-    group.add(gltfScene);
-
-    mountMesh = group;
-    attachImuAxes(mountMesh);
+    mountMesh = normalizeAndCenterGltf(gltfScene);
     mountScene.add(mountMesh);
     updateMountingPreview3D();
 }
@@ -892,7 +974,7 @@ function loadMountingGLBModel() {
                 setupMountingModelMesh(gltf.scene);
             },
             undefined,
-            () => { tryLoad(index + 1); }
+            () => tryLoad(index + 1)
         );
     }
     tryLoad(0);
@@ -930,7 +1012,7 @@ function initMounting3D() {
     mountCamera.position.set(2.0, 1.5, 2.4);
     mountCamera.lookAt(0, 0, 0);
 
-    mountRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    mountRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     mountRenderer.setSize(w, h);
     mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(mountRenderer.domElement);
@@ -959,7 +1041,7 @@ function initMounting3D() {
     loadMountingGLBModel();
 
     if (!mountContainerObserver && window.ResizeObserver) {
-        mountContainerObserver = new ResizeObserver(() => { resizeMounting3D(); });
+        mountContainerObserver = new ResizeObserver(() => resizeMounting3D());
         mountContainerObserver.observe(container);
     }
 
@@ -976,36 +1058,13 @@ function initMounting3D() {
 }
 
 /*
- * Breadcrumb: 2026-10-06 23:55 - ESP Parity Mounting Preview & Quaternion Alignment
- * [CRITICAL BUGFIX & FEATURE PARITY - MODAL 3D COORDINATE SYSTEM]:
- * 1. Ersetzt mountMesh.quaternion.setFromEuler('ZYX') durch applyEspModelQuaternion().
- * 2. Bringt 3D-Vorschau im Einbaulagen-Modal auf exakt dasselbe Koordinatensystem wie repMesh.
- * [DISMISSED]: setFromEuler('ZYX') stand 90° verdreht zur Hauptansicht und litt unter Gimbal Lock.
- */
-/*
- * Breadcrumb: 2026-10-06 23:30 - Mounting Quaternion Synthesis Parity
- * [CRITICAL BUGFIX FLAG - MOUNTING ROLL/PITCH SYNTHESIS]:
- * 1. Bildet Tait-Bryan Z-Y-X (Roll um X, Pitch um Y, Yaw um Z) exakt im Modellraum ab.
- * 2. Transformiert das Ergebnis in den Sensor-Frame des ESP32:
- *    - qw = w_model
- *    - qx = y_model (Pitch)
- *    - qy = -x_model (-Roll)
- *    - qz = z_model (Yaw)
- * 3. Garantiert, dass der Roll-Regler exakt die Roll-Achse dreht und Pitch die Kippachse.
- */
-/*
- * Breadcrumb: 2026-10-06 23:45 - Direct Sensor-Frame Mounting Synthesis
- * [CRITICAL BUGFIX FLAG - DIRECT QUATERNION TARE SYNTHESIS]:
- * 1. Erzeugt qMount direkt im Sensorframe:
- *    - Pitch-Regler (pDeg = -90) erzeugt qy = -0.7071 (exakte Kompensation der Ruhelage).
- *    - Roll-Regler (rDeg) dreht um qx.
- *    - Yaw-Regler (yDeg) dreht um qz.
- * 2. Garantiert q_rel = q_mount^-1 * q_raw == (1,0,0,0) am Kipprahmen in Ruhelage.
+ * Erzeugt das Einbaulagen-Quaternion direkt im 3D-Modell-Koordinatensystem:
+ * x = Roll (X-Achse, Rot), y = Pitch (Y-Achse, Grün), z = Yaw (Z-Achse, Blau).
  */
 function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
-    const r = ((rDeg || 0) * (Math.PI / 180)) / 2;
-    const p = ((pDeg || 0) * (Math.PI / 180)) / 2;
-    const y = ((yDeg || 0) * (Math.PI / 180)) / 2;
+    const r = ((rDeg || 0) * (Math.PI / 180.0)) / 2.0;
+    const p = ((pDeg || 0) * (Math.PI / 180.0)) / 2.0;
+    const y = ((yDeg || 0) * (Math.PI / 180.0)) / 2.0;
 
     const cr = Math.cos(r), sr = Math.sin(r);
     const cp = Math.cos(p), sp = Math.sin(p);
@@ -1013,9 +1072,9 @@ function getMountingQuaternionFromDeg(rDeg, pDeg, yDeg) {
 
     return {
         w: cr * cp * cy + sr * sp * sy,
-        x: sr * cp * cy - cr * sp * sy, // Roll um Sensor-X
-        y: cr * sp * cy + sr * cp * sy, // Pitch um Sensor-Y (Kippachse)
-        z: cr * cp * sy - sr * sp * cy  // Yaw um Sensor-Z
+        x: sr * cp * cy - cr * sp * sy, // Modell X (Roll)
+        y: cr * sp * cy + sr * cp * sy, // Modell Y (Pitch)
+        z: cr * cp * sy - sr * sp * cy  // Modell Z (Yaw)
     };
 }
 
@@ -1030,7 +1089,7 @@ function updateMountingPreview3D() {
     const y = (yEl && !isNaN(parseFloat(yEl.value))) ? parseFloat(yEl.value) : 0;
 
     const qMount = getMountingQuaternionFromDeg(r, p, y);
-    applyEspModelQuaternion(mountMesh, qMount.w, qMount.x, qMount.y, qMount.z);
+    applyModelQuaternionToMesh(mountMesh, qMount.w, qMount.x, qMount.y, qMount.z);
 
     if (mountRenderer && mountScene && mountCamera) {
         mountRenderer.render(mountScene, mountCamera);
@@ -1041,8 +1100,8 @@ function syncMountingInput(axis, val) {
     const num = Math.max(-180, Math.min(180, parseFloat(val) || 0));
     const numEl = document.getElementById(`mount-${axis}-num`);
     const rngEl = document.getElementById(`mount-${axis}-range`);
-    if (numEl && numEl.value != num) numEl.value = num;
-    if (rngEl && rngEl.value != num) rngEl.value = num;
+    if (numEl && Number(numEl.value) !== num) numEl.value = num;
+    if (rngEl && Number(rngEl.value) !== num) rngEl.value = num;
     updateMountingPreview3D();
 }
 window.syncMountingInput = syncMountingInput;
@@ -1092,7 +1151,7 @@ window.closeMountingConfigModal = closeMountingConfigModal;
 function adoptCurrentFrameMounting() {
     if (!replayFilteredData || replayFilteredData.length === 0) return;
     const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / replaySampleIntervalSec), replayFilteredData.length - 1);
-    const pt = replayFilteredData[exactIndex];
+    const pt = replayFilteredData[Math.max(0, exactIndex)];
 
     const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll * 10) / 10 : 0;
     const p = (pt.rawPitch !== undefined) ? Math.round(pt.rawPitch * 10) / 10 : 0;
@@ -1114,11 +1173,12 @@ function saveMountingConfig() {
     replayMountConfig = { roll: r, pitch: p, yaw: y };
 
     const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    localStorage.setItem(`stag_mount_${devId}`, JSON.stringify(replayMountConfig));
+    localStorage.setItem(`stag_mount_v2_${devId}`, JSON.stringify(replayMountConfig));
 
     updateMountingQuaternion();
     updateMountingButtonUI();
     recalculateAllEuler();
+    replayGraphCacheKey = ''; // Cache invalidieren
     drawReplayGraph(replayCurrentTimeSec);
     renderInterpolatedFrame(replayCurrentTimeSec);
 
@@ -1136,29 +1196,31 @@ function updateMountingButtonUI() {
     lbl.innerText = parts.length > 0 ? parts.join(' ') : '0°';
 }
 
+function updateMountingQuaternion() {
+    replayMountQuat = getMountingQuaternionFromDeg(
+        replayMountConfig.roll,
+        replayMountConfig.pitch,
+        replayMountConfig.yaw
+    );
+}
+
 /*
- * Breadcrumb: 2026-10-06 23:40 - Inverted Default Pitch Baseline (-90° / -47.9°)
- * [CRITICAL BUGFIX FLAG - KIPPSTATION BASELINE POLARITY]:
- * 1. Ändert Default-Pitch von +47.9° / +90° auf -90° (bzw. -47.9° Ruhelage).
- * 2. Startet den Kipprahmen-Graph am Nullpunkt und hebt in positiver Richtung ab.
- */
-/*
- * Breadcrumb: 2026-10-06 23:45 - Default Mounting Preset (-90° Pitch)
- * [CRITICAL BUGFIX FLAG - KIPPSTATION DEFAULT ZERO BASELINE]:
- * 1. Default-Einbaulage für Kipprahmen auf Roll 0°, Pitch -90°, Yaw 0° gesetzt.
- * 2. Bringt den Oszilloskop-Startwert exakt auf 0.0° und Hubkurve stufenlos auf +42.5°.
+ * Breadcrumb: 2026-10-15 20:55 - Default Mounting Alignment (Roll +90°)
+ * [CRITICAL CONFIG FLAG - KIPPSTATION DEFAULT ZERO BASELINE]:
+ * Default-Einbaulage für Kipprahmen auf Roll +90°, Pitch 0°, Yaw 0° gesetzt.
  */
 function checkAndApplySavedMounting() {
     const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
-    const saved = localStorage.getItem(`stag_mount_${devId}`);
+    const saved = localStorage.getItem(`stag_mount_v2_${devId}`);
     if (saved) {
         try {
             replayMountConfig = JSON.parse(saved);
         } catch (e) {
-            replayMountConfig = { roll: 0, pitch: -90, yaw: 0 };
+            replayMountConfig = { roll: 90.0, pitch: 0.0, yaw: 0.0 };
         }
     } else {
-        replayMountConfig = { roll: 0.0, pitch: -90.0, yaw: 0.0 };
+        // Kippstation-Standard: Roll = +90°, Pitch = 0°, Yaw = 0°
+        replayMountConfig = { roll: 90.0, pitch: 0.0, yaw: 0.0 };
     }
     updateMountingQuaternion();
     updateMountingButtonUI();
@@ -1166,256 +1228,72 @@ function checkAndApplySavedMounting() {
 }
 
 // ============================================================================
-// 4. FRAME-INTERPOLATION & 3D RENDERING
+// 4. FRAME-INTERPOLATION, 3D RENDERING & 5-ZEILEN HUD
 // ============================================================================
 
 /*
- * Breadcrumb: 2026-10-06 23:50 - ESP Direct Quaternion Orientation & SLERP Blending
- * [CRITICAL BUGFIX & FEATURE PARITY - HARDWARE 3D MODEL SYNCHRONIZATION]:
- * 1. Rotiert repMesh direkt über die Portal-Quaternions-Gleichung:
- *    q_three = (-qy, qx, qz, qw) gefolgt von premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107)).
- * 2. Eliminiert repMesh.quaternion.setFromEuler(), wodurch 3D-Kippsprünge unmöglich werden.
- * 3. Nutzt direkte sphärische/normalisierte Interpolation zwischen Frame A und B.
+ * Wendet ein bereits im 3D-Modell-Koordinatensystem vorliegendes Quaternion (mw, mx, my, mz)
+ * auf das Three.js-Mesh an (inkl. Y-Up Welt-Transformation).
  */
-// ============================================================================
-// 4. FRAME-INTERPOLATION & 3D RENDERING
-// ============================================================================
+function applyModelQuaternionToMesh(targetMesh, mw, mx, my, mz) {
+    const norm = Math.hypot(mx, my, mz, mw) || 1.0;
+    const qThree = new THREE.Quaternion(mx / norm, my / norm, mz / norm, mw / norm);
 
-/*
- * Breadcrumb: 2026-10-06 23:59 - 3D CAD Mesh Sensor-Offset Parity & Absolute Frame Alignment
- * [CRITICAL BUGFIX FLAG - CAD MODEL Y-UP ORIENTATION RESTORED]:
- * 1. Stellt Sensor-Offset in die Y-Up-Welt wieder vollständig her:
- *    premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107))  // +90° Z
- *    premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)) // -90° X
- * 2. repMesh nutzt im Viewport die echten, absoluten Sensordaten (qw..qz) via SLERP
- *    für die korrekte physische 90°-Montagelage am Kipprahmen.
- * 3. applyEspModelQuaternion() synchronisiert Modal-Vorschau und Hauptansicht auf identische Basis.
- * [DISMISSED]: Weglassen des -90° X-Versatzes und Nutzen von relQw verdrehte das Gehäuse im Raum.
- */
-/*
- * Breadcrumb: 2026-10-06 23:59 - Sensor-Offset & Y-Up Basis Alignment
- * [CRITICAL BUGFIX & FEATURE PARITY - 3D CAD MODEL ORIENTATION]:
- * 1. Überträgt das Hardware-Mapping (-qy, qx, qz, qw) und die Y-Up-Weltrotation.
- * 2. targetMesh übernimmt das transformierte Quaternion ohne Gimbal Lock.
- */
-/*
- * Breadcrumb: 2026-10-06 23:25 - Canonical Sensor-to-Three Transformation (live-3d.js Parity)
- * [CRITICAL BUGFIX FLAG - SENSOR QUATERNION ROTATION PARITY]:
- * 1. Stellt (-qy, qx, qz, qw) mit +90° Z und -90° X Y-up Premultiplies wieder her.
- * 2. Hält mathematische Parität zwischen Haupt-Viewport, Modal-Vorschau und ESP-Firmware.
- */
-function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
-    const norm = Math.hypot(qx, qy, qz, qw) || 1.0;
-    const qThree = new THREE.Quaternion(-qy / norm, qx / norm, qz / norm, qw / norm);
-
-    // Sensor-Offset in die Y-Up-Welt
-    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));  // 90° Z
+    qThree.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));   // +90° Z
     qThree.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
 
     targetMesh.quaternion.copy(qThree);
 }
 
 /*
- * Breadcrumb: 2026-10-06 23:20 - Acceleration & Displacement Vector Parity (live-3d.js)
- * [CRITICAL BUGFIX FLAG - SENSOR TO MODEL VECTOR MAPPING [ay, -ax, az]]:
- * 1. Übernimmt das verifizierte Hardware-Mapping aus live-3d.js:
- *    - Model X = +Sensor Y  (ay / dy)
- *    - Model Y = -Sensor X  (-ax / -dx)
- *    - Model Z = +Sensor Z  (az / dz)
- * 2. Stellt sicher, dass Beschleunigungsimpulse und Schwingwege physisch exakt entlang
- *    der echten Gehäuseachsen ausgelenkt werden.
- * [DISMISSED]: THREE.Vector3(dx, dy, dz) ignorierte die 90°-Leiterplattendrehung des BNO085.
+ * Wendet ein rohes BNO085 Sensor-Quaternion (qw, qx, qy, qz) auf ein Three.js-Mesh an.
  */
-/*
- * Breadcrumb: 2026-10-07 00:08 - Direct Pitch-Axis Vector Auslenkung [dx, dy, dz]
- * [CRITICAL BUGFIX FLAG - DISPLACEMENT VECTOR MAPPING PARITY]:
- * 1. Beseitigt Vertauschung Vector3(dy, -dx, dz) -> localVec nutzt direkt (dxD, dyD, dzD).
- * 2. Hub-Schwingweg (dx) und Beschleunigungsimpulse (ax) lenken nun physikalisch entlang der Pitch-Achse (X) aus.
- * 3. HUD-Reihenfolge auf ANG: P / R / Y vereinheitlicht (Kongruenz mit ACC X/Y/Z und HUB X/Y/Z).
- * [DISMISSED]: Vector3(dy, -dx, dz) lenkte Hub-Impulse fälschlicherweise auf die Y-Achse um.
- */
-/*
- * Breadcrumb: 2026-10-07 00:22 - Hardware-Parity Vector Mapping [ay, -ax, az] Restored
- * [CRITICAL BUGFIX FLAG - SENSOR TO 3D MODEL ALIGNMENT PARITY]:
- * 1. 3D-Auslenkung nutzt wieder das native BNO085-Hardware-Mapping:
- *    - Model X = +Sensor Y  (dy / ay)
- *    - Model Y = -Sensor X  (-dx / -ax)
- *    - Model Z = +Sensor Z  (dz / az)
- * 2. HUD-Reihenfolge standardisiert auf Roll (R), Pitch (P), Yaw (Y).
- * [DISMISSED]: Reines (dx, dy, dz) ignorierte die 90°-Leiterplattenmontage des Sensors.
- */
-/*
- * Breadcrumb: 2026-10-07 01:10 - HUD Axis Mapping & Value Parity (X = Pitch/ay/dy, Y = Roll/ax/dx)
- * [CRITICAL BUGFIX FLAG - HUD NUMERICAL VALUE & AXIS PARITY]:
- * 1. ANG: Reihenfolge auf P (Pitch / Model-X), R (Roll / Model-Y), Y (Yaw / Model-Z) vereinheitlicht.
- * 2. ACC: Wert X zeigt nun ayD (ACC(X) / Kippachse), Wert Y zeigt axD (ACC(Y) / Wankachse), Z zeigt azD.
- * 3. HUB: Wert X zeigt nun dyD (Hub X / Kippachse), Wert Y zeigt dxD (Hub Y / Wankachse), Z zeigt dzD.
- * 4. Stellt vollständige Kongruenz zwischen 3D-Achsenpfeilen, Graph-Tier-Legenden und HUD her.
- * [DISMISSED]: Direkte Ausgabe von axD/dxD auf X und ayD/dyD auf Y widersprach den Beschriftungen ACC(X) [ay] und Hub X [dy].
- */
-/*
- * Breadcrumb: 2026-10-07 01:35 - Correct HUD Mapping: Roll(X), Pitch(Y) & Graph-Derived ACC/HUB
- * [CRITICAL BUGFIX FLAG - HUD AXIS & VALUE SYNCHRONIZATION]:
- * 1. ANG: Roll liegt physikalisch auf Achse X [Roll(X) = roll], Pitch auf Achse Y [Pitch(Y) = pitch], Yaw auf Z [Yaw(Z) = yaw].
- * 2. ACC: Exakt aus den Graphen-Tiers übernommen: X zeigt ayD (ACC(X)), Y zeigt axD (ACC(Y)), Z zeigt azD.
- * 3. HUB: Exakt aus den Graphen-Tiers übernommen: X zeigt dyD (Hub X), Y zeigt dxD (Hub Y), Z zeigt dzD.
- * 4. Graph-Funktionen und Canvas-Zeichenroutinen bleiben vollständig unangetastet.
- * [DISMISSED]:
- * - Vertauschung von Roll und Pitch (P(X) / R(Y)) im HUD verworfen.
- */
-/*
- * Breadcrumb: 2026-10-07 01:45 - HUD Graph-Channel Parity (X-Channel = pitch/ay/dy, Y-Channel = roll/ax/dx)
- * [CRITICAL BUGFIX FLAG - HUD 1:1 GRAPH CURVE PARITY]:
- * 1. Graphen und Berechnungen bleiben unverändert.
- * 2. ANG: Roll(X) übernimmt exakt die rote X-Kurve aus Tier 2 (pitch), Pitch(Y) übernimmt die grüne Y-Kurve aus Tier 2 (roll).
- * 3. ACC: X übernimmt die rote X-Kurve aus Tier 1 (ayD), Y übernimmt die grüne Y-Kurve aus Tier 1 (axD), Z übernimmt azD.
- * 4. HUB: X übernimmt die rote X-Kurve aus Tier 3 (dyD), Y übernimmt die grüne Y-Kurve aus Tier 3 (dxD), Z übernimmt dzD.
- * [DISMISSED]:
- * - Zuweisung von roll auf Roll(X) und pitch auf Pitch(Y) im HUD vertauschte die Werte gegenüber den Graphen-Kurven.
- */
-/*
- * Breadcrumb: 2026-10-07 02:15 - Clean Monospace String-Padded HUD
- * [CRITICAL BUGFIX FLAG - HUD NUMERIC JITTER ELIMINATION]:
- * 1. Nutzt CSS white-space: pre für tabellarische Monospace-Ausrichtung ohne DOM-Span-Overhead.
- * 2. fmtVal sorgt für starre Vorzeichen- und Zeichenbreiten (+0.00 / -0.00).
- * 3. 1:1 Parität zu den Graphen-Tiers: X=pitch/ay/dy, Y=roll/ax/dx bleibt exakt erhalten.
- */
-/*
- * Breadcrumb: 2026-10-07 01:10 - HUD Axis Mapping & Value Parity (X = Pitch/ay/dy, Y = Roll/ax/dx)
- * [CRITICAL BUGFIX FLAG - HUD NUMERICAL VALUE & AXIS PARITY]:
- * 1. ANG: Reihenfolge auf P (Pitch / Model-X), R (Roll / Model-Y), Y (Yaw / Model-Z) vereinheitlicht.
- * 2. ACC: Wert X zeigt nun ayD (ACC(X) / Kippachse), Wert Y zeigt axD (ACC(Y) / Wankachse), Z zeigt azD.
- * 3. HUB: Wert X zeigt nun dyD (Hub X / Kippachse), Wert Y zeigt dxD (Hub Y / Wankachse), Z zeigt dzD.
- * 4. Stellt vollständige Kongruenz zwischen 3D-Achsenpfeilen, Graph-Tier-Legenden und HUD her.
- * [DISMISSED]: Direkte Ausgabe von axD/dxD auf X und ayD/dyD auf Y widersprach den Beschriftungen ACC(X) [ay] und Hub X [dy].
- */
-/*
- * Breadcrumb: 2026-10-07 01:45 - HUD Graph-Channel Parity (X-Channel = pitch/ay/dy, Y-Channel = roll/ax/dx)
- * [CRITICAL BUGFIX FLAG - HUD 1:1 GRAPH CURVE PARITY]:
- * 1. Graphen und Berechnungen bleiben unverändert.
- * 2. ANG: Roll(X) übernimmt exakt die rote X-Kurve aus Tier 2 (pitch), Pitch(Y) übernimmt die grüne Y-Kurve aus Tier 2 (roll).
- * 3. ACC: X übernimmt die rote X-Kurve aus Tier 1 (ayD), Y übernimmt die grüne Y-Kurve aus Tier 1 (axD), Z übernimmt azD.
- * 4. HUB: X übernimmt die rote X-Kurve aus Tier 3 (dyD), Y übernimmt die grüne Y-Kurve aus Tier 3 (dxD), Z übernimmt dzD.
- * [DISMISSED]:
- * - Zuweisung von roll auf Roll(X) und pitch auf Pitch(Y) im HUD vertauschte die Werte gegenüber den Graphen-Kurven.
- */
-/*
- * Breadcrumb: 2026-10-07 02:25 - HUD 3-Tier Restructuring (ACC / ANG / ZYKLUS)
- * [CRITICAL UX & LAYOUT PARITY - 3-TIER LINE ORDERING]:
- * 1. Zeile 1: ACC (Linearbeschleunigung m/s²) - synchron zu Oszilloskop-Tier 1.
- * 2. Zeile 2: ANG (Neigungswinkel Roll/Pitch/Yaw in °) - synchron zu Oszilloskop-Tier 2.
- * 3. Zeile 3: ZYKLUS (#ID) - entschlackt die Anzeige; Zyklus-ID sofort im Fokus.
- * 4. Beibehaltung von fmtVal (Monospace-Padding mit +/- Vorzeichen) gegen Zahlenflattern.
- * [DISMISSED]:
- * - ANG an oberster Position widersprach der Diagramm-Reihenfolge (ACC -> Euler -> Hub).
- * - Überfrachtete 3. Zeile mit Schwingweg-mm + Zyklus überdehnte die Box und erzeugte visuelle Unruhe.
- */
-/*
-/*
- * Breadcrumb: 2026-10-07 01:10 - HUD Axis Mapping & Value Parity (X = Pitch/ay/dy, Y = Roll/ax/dx)
- * [CRITICAL BUGFIX FLAG - HUD NUMERICAL VALUE & AXIS PARITY]:
- * 1. ANG: Reihenfolge auf P (Pitch / Model-X), R (Roll / Model-Y), Y (Yaw / Model-Z) vereinheitlicht.
- * 2. ACC: Wert X zeigt nun ayD (ACC(X) / Kippachse), Wert Y zeigt axD (ACC(Y) / Wankachse), Z zeigt azD.
- * 3. HUB: Wert X zeigt nun dyD (Hub X / Kippachse), Wert Y zeigt dxD (Hub Y / Wankachse), Z zeigt dzD.
- * 4. Stellt vollständige Kongruenz zwischen 3D-Achsenpfeilen, Graph-Tier-Legenden und HUD her.
- * [DISMISSED]: Direkte Ausgabe von axD/dxD auf X und ayD/dyD auf Y widersprach den Beschriftungen ACC(X) [ay] und Hub X [dy].
- */
-/*
- * Breadcrumb: 2026-10-07 01:45 - HUD Graph-Channel Parity (X-Channel = pitch/ay/dy, Y-Channel = roll/ax/dx)
- * [CRITICAL BUGFIX FLAG - HUD 1:1 GRAPH CURVE PARITY]:
- * 1. Graphen und Berechnungen bleiben unverändert.
- * 2. ANG: Roll(X) übernimmt exakt die rote X-Kurve aus Tier 2 (pitch), Pitch(Y) übernimmt die grüne Y-Kurve aus Tier 2 (roll).
- * 3. ACC: X übernimmt die rote X-Kurve aus Tier 1 (ayD), Y übernimmt die grüne Y-Kurve aus Tier 1 (axD), Z übernimmt azD.
- * 4. HUB: X übernimmt die rote X-Kurve aus Tier 3 (dyD), Y übernimmt die grüne Y-Kurve aus Tier 3 (dxD), Z übernimmt dzD.
- * [DISMISSED]:
- * - Zuweisung von roll auf Roll(X) und pitch auf Pitch(Y) im HUD vertauschte die Werte gegenüber den Graphen-Kurven.
- */
-/*
- * Breadcrumb: 2026-10-07 02:40 - Structured Industrial Grid HUD (Axis-Columns & Channel Parity)
- * [CRITICAL UI & LAYOUT REFACTORING - ZERO-DRIFT MATRIX]:
- * 1. Ersetzt unruhige Textzeilen durch ein 5-spaltiges CSS-Grid (Label / X / Y / Z / Einheit).
- * 2. Horizontale Bündigkeit: Alle X-, Y- und Z-Werte stehen exakt untereinander und fluchten auf die Ziffer.
- * [DISMISSED]:
- * - Asymmetrisches Plain-Text-Format ("Roll(X):" vs "X:") erzeugte diagonales Verrutschen der Spalten.
- */
-/*
- * Breadcrumb: 2026-10-07 02:55 - Ultra-Compact 2-Row Angle HUD (Achsen & ANG)
- * [CRITICAL UI MINIMIZATION - LOW HEIGHT OSD]:
- * 1. Entfernt ACC, Hub, Zyklus und separate Einheiten-Spalten komplett für minimale Bauhöhe.
- * 2. 4-Spalten-Grid (Label / X / Y / Z) mit vertikal fluchtenden Dezimalstellen.
- * 3. Header verknüpft X (Kipp / Rot), Y (Wank / Grün) und Z (Hoch / Blau) direkt mit dem 3D-Modell.
- */
-/*
- * Breadcrumb: 2026-10-11 14:45 - Dynamic Displacement 3D Motion & HUD Axis Parity
- * [CRITICAL BUGFIX & FEATURE FLAG - DYNAMIC SCHWINGWEG DISPLACEMENT MAPPING]:
- * 1. 3D-Auslenkung repMesh.position basiert nun rein und direkt auf dem dynamischen Schwingweg (dx, dy, dz in mm):
- *    - Model X (Kippachse / Rot)   = +dyD * mmToSceneScale
- *    - Model Y (Wankachse / Grün)  = -dxD * mmToSceneScale (BNO085-Hardwareorientierung)
- *    - Model Z (Hochachse / Blau)  = +dzD * mmToSceneScale
- * 2. Skalierungsfaktor von 0.025 auf 0.08 erhöht: Bringt Schwingungsamplituden (0.2 bis 5 mm) plastisch
- *    und ruckelfrei im 3D-Viewport zur Geltung (geclampt auf ±0.85).
- * 3. Fallback auf Rohbeschleunigung (axF, ayF, azF) vollständig entfernt.
- * 4. HUD-Matrix erweitert um Zeile 'HUB' (mm) mit 1:1 Parität zu Tier 3 des Oszilloskops.
- * [DISMISSED]:
- * - Fallback auf Rohbeschleunigung verfälschte die reale Bewegungsamplitude und überlagerte den Schwingweg.
- * - Statische Subskalierung 0.025 ließ den dynamischen Schwingweg im Modell optisch einfrieren.
- */
-/*
- * Breadcrumb: 2026-10-11 16:15 - Smooth Non-Linear 3D Motion Scaling (Anti-Jitter / Teleport Fix)
- * [CRITICAL BUGFIX FLAG - ELIMINATION OF HARD BOX CLAMPING & 3D TELEPORTATION]:
- * 1. Ursache des Verspringens behoben:
- *    - Das bisherige komponentenweise Clamping Math.max(-0.85, Math.min(0.85, ...)) auf einer 40 Einheiten
- *      großen Auslenkung wirkte wie ein bistabiler Rechteck-Begrenzer. Bei Richtungsumkehr oder Verkippung
- *      sprang das Mesh schlagartig zwischen den Begrenzungswänden (+0.85 <-> -0.85) hin und her.
- * 2. Sanfte Tangens-Hyperbolicus-Skalierung (tanh):
- *    - Skaliert kleine Schwingwege (1–30 mm) linear und dämpft große Translationshübe (100–500 mm)
- *      harmonisch und stetig ab (maxRadius = 1.5 Einheiten im Three.js-Raum).
- *    - Garantiert kontinuierliche, C∞-glatte Bewegungen ohne harte Anschläge oder Teleport-Sprünge.
- * 3. 1:1 Parität zu den Oszilloskop-Kurven: Richtungsvektor und Phase bleiben exakt erhalten.
- * [DISMISSED]:
- * - Math.max(-0.85, Math.min(0.85, localVec.x)) erzeugte bei Amplituden > 50 mm bistabile Sprünge (Square-Wave-Bouncing).
- * - Fester linearer Faktor 0.08 ohne vektorielle Radius-Kompression schleuderte das Modell aus dem Kamerafokus.
- */
+function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
+    const qMod = sensorToModelQuat(qw, qx, qy, qz);
+    applyModelQuaternionToMesh(targetMesh, qMod.w, qMod.x, qMod.y, qMod.z);
+}
+
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
 
+    ensureFrequencyBadgeDOM();
+
     const sampleInterval = replaySampleIntervalSec;
     const exactIndex = tSec / sampleInterval;
-    const iA = Math.min(Math.floor(exactIndex), total - 1);
+    const iA = Math.max(0, Math.min(Math.floor(exactIndex), total - 1));
     const iB = Math.min(iA + 1, total - 1);
-    const alpha = (iA === iB) ? 0 : (exactIndex - iA);
 
     const ptA = replayFilteredData[iA];
     const ptB = replayFilteredData[iB];
 
-    // Interpolierte Winkel (Tier 2)
+    // Keine Interpolation über eine Schlafpause hinweg
+    const gapBetweenFrames = ((ptB.tsMs - ptA.tsMs) / 1000.0) > REPLAY_GAP_THRESHOLD_SEC;
+    const alpha = (iA === iB || gapBetweenFrames) ? 0.0 : (exactIndex - iA);
+
     const roll = ptA.roll + (ptB.roll - ptA.roll) * alpha;
     const pitch = ptA.pitch + (ptB.pitch - ptA.pitch) * alpha;
     const yaw = ptA.yaw + (ptB.yaw - ptA.yaw) * alpha;
 
-    // Interpolierte Beschleunigungen (Tier 1)
     const axD = ptA.ax + (ptB.ax - ptA.ax) * alpha;
     const ayD = ptA.ay + (ptB.ay - ptA.ay) * alpha;
     const azD = ptA.az + (ptB.az - ptA.az) * alpha;
 
-    // Interpolierter dynamischer Schwingweg in mm (Tier 3)
-    const dxD = ((ptA.dx || 0) + ((ptB.dx || 0) - (ptA.dx || 0)) * alpha);
-    const dyD = ((ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha);
-    const dzD = ((ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha);
+    const dxD = (ptA.dx || 0) + ((ptB.dx || 0) - (ptA.dx || 0)) * alpha;
+    const dyD = (ptA.dy || 0) + ((ptB.dy || 0) - (ptA.dy || 0)) * alpha;
+    const dzD = (ptA.dz || 0) + ((ptB.dz || 0) - (ptA.dz || 0)) * alpha;
 
-    // 3D-Modell: Orientierung & dynamischer Schwingweg
     if (repMesh && repScene && repCamera) {
-        const normA = Math.hypot(ptA.qw, ptA.qx, ptA.qy, ptA.qz) || 1.0;
-        const normB = Math.hypot(ptB.qw, ptB.qx, ptB.qy, ptB.qz) || 1.0;
+        const mA = sensorToModelQuat(ptA.qw, ptA.qx, ptA.qy, ptA.qz);
+        const mB = sensorToModelQuat(ptB.qw, ptB.qx, ptB.qy, ptB.qz);
 
-        const qA = new THREE.Quaternion(-ptA.qy / normA, ptA.qx / normA, ptA.qz / normA, ptA.qw / normA);
-        const qB = new THREE.Quaternion(-ptB.qy / normB, ptB.qx / normB, ptB.qz / normB, ptB.qw / normB);
+        const qA = new THREE.Quaternion(mA.x, mA.y, mA.z, mA.w);
+        const qB = new THREE.Quaternion(mB.x, mB.y, mB.z, mB.w);
 
         if (qA.dot(qB) < 0) qB.set(-qB.x, -qB.y, -qB.z, -qB.w);
         qA.slerp(qB, alpha);
 
-        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));   // 90° Z
+        qA.premultiply(new THREE.Quaternion(0, 0, 0.707107, 0.707107));   // +90° Z
         qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
         repMesh.quaternion.copy(qA);
 
@@ -1441,7 +1319,14 @@ function renderInterpolatedFrame(tSec) {
         repRenderer.render(repScene, repCamera);
     }
 
-    // HUD: 4-Zeilen-Matrix (ACHSE / ANG / HUB / ACC)
+    // Toolbar Frequenz-Badge aktualisieren
+    const freqValEl = document.getElementById('replay-freq-val');
+    if (freqValEl) {
+        const curDom = ptA.freqDom || Math.max(ptA.freqX || 0, ptA.freqY || 0, ptA.freqZ || 0);
+        freqValEl.innerText = curDom >= 0.15 ? `${curDom.toFixed(2)} Hz` : '-- Hz';
+    }
+
+    // HUD: 5-Zeilen-Matrix (ACHSE / ANG / HUB / ACC / FRQ)
     const hud = document.getElementById('replay-overlay-hud');
     if (hud) {
         const fmt = (v, dec) => {
@@ -1450,18 +1335,22 @@ function renderInterpolatedFrame(tSec) {
             return (clean >= 0 ? '+' : '') + clean.toFixed(dec);
         };
 
+        const fX = (ptA.freqX && ptA.freqX >= 0.15) ? `${ptA.freqX.toFixed(1)}Hz` : '--';
+        const fY = (ptA.freqY && ptA.freqY >= 0.15) ? `${ptA.freqY.toFixed(1)}Hz` : '--';
+        const fZ = (ptA.freqZ && ptA.freqZ >= 0.15) ? `${ptA.freqZ.toFixed(1)}Hz` : '--';
+
         hud.innerHTML = `
-            <div style="display:grid;grid-template-columns:30px 68px 68px 68px;column-gap:6px;row-gap:2px;font-family:monospace;font-size:10px;line-height:1.2;white-space:nowrap;">
+            <div style="display:grid;grid-template-columns:32px 68px 68px 68px;column-gap:6px;row-gap:2px;font-family:monospace;font-size:10px;line-height:1.2;white-space:nowrap;">
                 <!-- Zeile 1: Farbcodierte Achsen -->
                 <div style="color:#94a3b8;font-size:9px;">ACHSE</div>
-                <div style="text-align:right;color:#dc2626;font-weight:bold;font-size:9px;">● X (Kipp)</div>
-                <div style="text-align:right;color:#009B4C;font-weight:bold;font-size:9px;">● Y (Wank)</div>
-                <div style="text-align:right;color:#2563eb;font-weight:bold;font-size:9px;">● Z (Hoch)</div>
+                <div style="text-align:right;color:#dc2626;font-weight:bold;font-size:9px;">● X (Roll)</div>
+                <div style="text-align:right;color:#009B4C;font-weight:bold;font-size:9px;">● Y (Pitch)</div>
+                <div style="text-align:right;color:#2563eb;font-weight:bold;font-size:9px;">● Z (Yaw)</div>
 
-                <!-- Zeile 2: Winkel (ANG) -->
+                <!-- Zeile 2: Winkel (ANG: Roll auf X, Pitch auf Y, Yaw auf Z) -->
                 <div style="font-weight:bold;color:#334155;font-size:9px;">ANG</div>
-                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(pitch, 1)}°</div>
                 <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(roll, 1)}°</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(pitch, 1)}°</div>
                 <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(yaw, 1)}°</div>
 
                 <!-- Zeile 3: Dynamischer Schwingweg (HUB in mm) -->
@@ -1475,6 +1364,12 @@ function renderInterpolatedFrame(tSec) {
                 <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(ayD, 2)}</div>
                 <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(axD, 2)}</div>
                 <div style="text-align:right;font-variant-numeric:tabular-nums;color:#0f172a;">${fmt(azD, 2)}</div>
+
+                <!-- Zeile 5: Dominante FFT-Frequenz -->
+                <div style="font-weight:bold;color:#2563eb;font-size:9px;">FRQ</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#1e3a8a;">${fX}</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#1e3a8a;">${fY}</div>
+                <div style="text-align:right;font-variant-numeric:tabular-nums;color:#1e3a8a;">${fZ}</div>
             </div>
         `;
     }
@@ -1556,6 +1451,11 @@ function resetReplayZoom() {
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
 
+/*
+ * Breadcrumb: 2026-10-15 20:15 - Adaptive Sample Interval in Scrubber & Wheel Stepping
+ * [CRITICAL BUGFIX FLAG - DYNAMIC DT IN ZOOM & WHEEL]:
+ * Replaced hardcoded 0.1s divisions with replaySampleIntervalSec so 25Hz logs scrub accurately.
+ */
 function attachCanvasInteraction() {
     const canvases = [
         document.getElementById('replayGraphCanvasAcc'),
@@ -1609,9 +1509,9 @@ function attachCanvasInteraction() {
 
                 const scrubber = document.getElementById('replay-scrubber');
                 if (scrubber) {
-                    scrubber.min = Math.floor(t1 / 0.1);
-                    scrubber.max = Math.ceil(t2 / 0.1);
-                    scrubber.value = Math.round(t1 / 0.1);
+                    scrubber.min = Math.floor(t1 / replaySampleIntervalSec);
+                    scrubber.max = Math.ceil(t2 / replaySampleIntervalSec);
+                    scrubber.value = Math.round(t1 / replaySampleIntervalSec);
                 }
 
                 renderInterpolatedFrame(replayCurrentTimeSec);
@@ -1644,10 +1544,10 @@ function attachCanvasInteraction() {
 
             const { tStart, tEnd } = getTimeBounds();
             const direction = e.deltaY > 0 ? 1 : -1;
-            const stepSec = 0.1;
+            const stepSec = replaySampleIntervalSec;
 
             let newTime = replayCurrentTimeSec + (direction * stepSec);
-            newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime * 10) / 10));
+            newTime = Math.max(tStart, Math.min(tEnd, Math.round(newTime / stepSec) * stepSec));
 
             replayCurrentTimeSec = newTime;
             renderInterpolatedFrame(replayCurrentTimeSec);
@@ -1691,80 +1591,19 @@ function getNiceScale(maxVal, minScale, steps) {
     return Math.ceil(target);
 }
 
-/*
- * Breadcrumb: 2026-10-07 00:35 - Graph Tier Curve Colors Synced to Physical Model
- * [CRITICAL BUGFIX FLAG - GRAPH COLOR PARITY]:
- * 1. ACC X (Pitch) & Hub X (Pitch): Grün (#009B4C).
- * 2. ACC Y (Roll) & Hub Y (Roll): Rot (#dc2626).
- * 3. Euler: Pitch (Y) in Grün (#009B4C), Roll (X) in Rot (#dc2626).
- * 4. Z-Achsen / Yaw unverändert Blau (#2563eb) bzw. Lila (#7c3aed).
- * [DISMISSED]: Vertauschte Kurvenfarben zwischen ACC X (Rot) und 3D-Auslenkungsvektor (Grün).
- */
-/*
- * Breadcrumb: 2026-10-07 00:45 - Graph Tier Color Parity (Pitch/X = Red, Roll/Y = Green)
- * [CRITICAL BUGFIX FLAG - CANVAS TIER COLOR SYNCHRONIZATION]:
- * 1. ACC X (Pitch) & Hub X (Pitch): Rot (#dc2626).
- * 2. ACC Y (Roll) & Hub Y (Roll): Grün (#009B4C).
- * 3. Euler: Pitch (X) in Rot (#dc2626), Roll (Y) in Grün (#009B4C).
- * [DISMISSED]: Pitch in Grün darzustellen widersprach der Drehung um die rote Modellachse.
- */
-/*
- * Breadcrumb: 2026-10-07 00:55 - Graph Tier ACC Rebranding & Color Alignment
- * [CRITICAL BUGFIX FLAG - ACC PLOT PARITY]:
- * 1. Beschleunigung Tier:
- *    - ax wird in Grün (#009B4C) gezeichnet und als 'ACC(Y)' beschriftet.
- *    - ay wird in Rot (#dc2626) gezeichnet und als 'ACC(X)' beschriftet.
- *    - az bleibt in Blau (#2563eb) als 'ACC(Z)'.
- * 2. Drehung Tier (Euler) bleibt unangetastet: Pitch (X) in Rot (#dc2626), Roll (Y) in Grün (#009B4C).
- * [DISMISSED]: Beschriftung von ax als ACC X in Rot erzeugte Verwechslung mit der Pitch-Drehachse.
- */
 // ============================================================================
 // PERFORMANCE-CACHE & OFFSCREEN-PUFFER FÜR 60-FPS OSZILLOSKOP-PLAYBACK
 // ============================================================================
-let replayOffscreenAcc = null;
-let replayOffscreenEuler = null;
-let replayOffscreenDisp = null;
-let replayGraphCacheKey = '';
-let replayCachedScales = { scaleAcc: 1.0, scaleEuler: 2.0, scaleDisp: 0.5 };
 
 /*
  * Breadcrumb: 2026-10-11 15:10 - 60 FPS Offscreen Graph Caching & Peak-Preserving Min-Max Decimation
- * [CRITICAL PERFORMANCE & PLAYBACK OPTIMIZATION - 50K+ SAMPLE SMOOTHING]:
- * 1. 2-Ebenen Render-Engine (Offscreen Canvas Caching):
- *    - Statische Diagrammelemente (Raster, Zeitachsen-Ticks, Schwellenwert-Bänder und Kurvenzüge)
- *      werden auf Offscreen-Canvas gerendert und gecacht.
- *    - Während des Abspielens (Playback/Scrubbing) ändert sich nur die Cursor-Nadel und das Messwert-Badge.
- *      Die 50.000 Datenpunkte werden NICHT mehr bei jedem Frame (60 Hz) neu berechnet und gerendert.
- * 2. Peak-Preserving Min-Max Decimation (Envelope-Downsampling):
- *    - Bei visibleCount > plotW * 2 werden Kurven pro Pixel-Spalte auf Min/Max-Hüllkurven aggregiert.
- *    - Reduziert 50.000 lineTo-Befehle pro Kurve auf ~1.500 Punkte ohne jeden Verlust von Beschleunigungs-Peaks.
- * 3. Schwellenwert-Intervall-Verschmelzung:
- *    - Fasst zusammenhängende Überschreitungen in kontinuierliche Bänder zusammen statt tausender Einzel-fillRects.
- * 4. Beseitigt Ruckeln bei Ganztages-Logs (>50.000 Punkte) vollständig; butterweiche 60 FPS bei voller Zoom- und Filterfunktionalität.
- * [DISMISSED]:
- * - Reines Auslassen von Samples (Stride i += step) übersah kurze Schock-Peaks.
- * - Vollständiges Neuzeichnen aller 9 Kurvenpfade bei jedem Animationsframe brachte den Browser-Thread zum Erliegen.
- */
-/*
  * Breadcrumb: 2026-10-11 15:30 - Enhanced Ordinate Grid Lines & Axis Ticks
- * [CRITICAL BUGFIX & VISUAL PARITY - ORDINATE HORIZONTAL GRID & TICKS]:
- * 1. Horizontale Gitterlinien über die gesamte Diagrammbreite verstärkt:
- *    - Amplitudenstufen (±1.0, ±0.5): Kräftigeres, sauberes Raster (rgba(15, 23, 42, 0.15)) statt 0.07.
- *    - Nulllinie (0.0): Prägnant hervorgehoben (rgba(15, 23, 42, 0.35)) mit [4, 3] Linienstrichelung.
- * 2. Horizontale Teilstriche (Ticks) direkt an der Ordinate:
- *    - Verbindet jeden Zahlenwert links der Y-Achse direkt mit der Skala (leftMargin - 5 bis leftMargin).
- * 3. Vertikale Ordinatenachse:
- *    - Trennt Beschriftung und Plotbereich durch eine definierte Y-Achsenlinie bei x = leftMargin.
- * 4. Volle Beibehaltung der 60-FPS Offscreen-Canvas-Engine und Min-Max-Dezimierung.
- * [DISMISSED]:
- * - rgba(15, 23, 42, 0.07) war auf hellen Monitoren und IPS-Panels nahezu unsichtbar.
- * - Fehlende Achsen-Ticks erzeugten den Eindruck, als ob die Ordinatenwerte frei im Raum schwebten.
- */
-/*
  * Breadcrumb: 2026-10-11 15:35 - Dynamic Sample-Interval Graph Plotter
- * [FEATURE PARITY - ADAPTIVE GRAPH INDICES & CACHE-KEY]:
- * 1. Index- und Zeitgrenzen nutzen replaySampleIntervalSec statt 0.1s.
- * 2. Schwellenwertbänder und Kurven rendern zeitgenau mit px = timeToX(i * replaySampleIntervalSec).
+ * Breadcrumb: 2026-10-15 20:15 - Measurement Gap Visualizer & Discontinuous Decimation Engine
+ * [CRITICAL PERFORMANCE & VISUALIZATION FLAG - GAP MARKERS + 60 FPS DECIMATION]:
+ * 1. Erkennt echte Zeitlücken (> 2.5s) zwischen Messpunkten und zeichnet gestrichelte Pausen-Bänder inkl. Dauer-Badge.
+ * 2. Unterbricht den Canvas-Linienpfad (first = true) an Messpausen sowohl im Detailmodus als auch in der Min-Max-Dezimierung.
+ * 3. Erweitert die Skalen-Stufen für den FFT-Schwingweg auf bis zu 500 mm.
  */
 function drawReplayGraph(curTimeSec) {
     const cvAcc = document.getElementById('replayGraphCanvasAcc');
@@ -1786,7 +1625,7 @@ function drawReplayGraph(curTimeSec) {
     const h = cvAcc.clientHeight;
     if (w === 0 || h === 0) return;
 
-    const currentCacheKey = `${tStart.toFixed(3)}_${tEnd.toFixed(3)}_${w}x${h}_${replayAccThreshold}_${JSON.stringify(replayVisibleCurves)}_${count}_${dt}_${replayFilteredData[0]?.ts || ''}`;
+    const currentCacheKey = `${tStart.toFixed(3)}_${tEnd.toFixed(3)}_${w}x${h}_${replayAccThreshold}_${JSON.stringify(replayVisibleCurves)}_${count}_${dt}_${replayFilteredData[0]?.ts || ''}_${replayMountConfig.roll}_${replayMountConfig.pitch}_${replayMountConfig.yaw}`;
 
     if (currentCacheKey !== replayGraphCacheKey || !replayOffscreenAcc) {
         let maxAcc = 0.1, maxAngle = 0.1, maxDisp = 0.05;
@@ -1811,7 +1650,7 @@ function drawReplayGraph(curTimeSec) {
 
         replayCachedScales.scaleAcc = getNiceScale(maxAcc, 0.5, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0]);
         replayCachedScales.scaleEuler = getNiceScale(maxAngle, 2.0, [2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180]);
-        replayCachedScales.scaleDisp = getNiceScale(maxDisp, 0.5, [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0]);
+        replayCachedScales.scaleDisp = getNiceScale(maxDisp, 0.5, [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0, 200.0, 500.0]);
 
         if (!replayOffscreenAcc) replayOffscreenAcc = document.createElement('canvas');
         if (!replayOffscreenEuler) replayOffscreenEuler = document.createElement('canvas');
@@ -1836,6 +1675,7 @@ function drawReplayGraph(curTimeSec) {
 
             const activeCurves = allCurves.filter(c => replayVisibleCurves[c.key]);
 
+            // 1. Schwellenwert-Überschreitungen (Rot hinterlegt)
             if (isAccTier && replayAccThreshold > 0 && activeCurves.length > 0) {
                 ctx.save();
                 ctx.beginPath();
@@ -1872,7 +1712,57 @@ function drawReplayGraph(curTimeSec) {
                 ctx.restore();
             }
 
-            // Vertikale Y-Achse
+            // 2. Messpausen visualisieren (Zeitlücken > 2.5 Sekunden)
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(leftMargin, topMargin, plotW, plotH);
+            ctx.clip();
+
+            let lastGapBadgeX = -999;
+            for (let i = startIndex; i < endIndex; i++) {
+                const t1 = new Date(replayFilteredData[i].ts).getTime();
+                const t2 = new Date(replayFilteredData[i + 1].ts).getTime();
+                const gapSec = (t2 - t1) / 1000.0;
+
+                if (!isNaN(gapSec) && gapSec > 2.5) {
+                    const px = timeToX((i + 0.5) * dt, tw, leftMargin);
+                    if (px >= leftMargin && px <= tw) {
+                        ctx.strokeStyle = 'rgba(217, 119, 6, 0.70)';
+                        ctx.lineWidth = 1.5;
+                        ctx.setLineDash([3, 3]);
+                        ctx.beginPath();
+                        ctx.moveTo(px, topMargin);
+                        ctx.lineTo(px, th - bottomMargin);
+                        ctx.stroke();
+
+                        ctx.setLineDash([]);
+                        let gapText = '';
+                        if (gapSec < 60) gapText = `⏸ ${Math.round(gapSec)}s`;
+                        else if (gapSec < 3600) gapText = `⏸ ${(gapSec / 60).toFixed(0)}m`;
+                        else gapText = `⏸ ${(gapSec / 3600).toFixed(1)}h`;
+
+                        ctx.font = 'bold 8px monospace';
+                        const txtW = ctx.measureText(gapText).width;
+                        const badgeX = Math.max(leftMargin + 2, Math.min(tw - txtW - 6, px - txtW / 2 - 3));
+
+                        // Überlappung von Pausen-Badges bei starkem Herauszoomen verhindern
+                        if (badgeX - lastGapBadgeX >= txtW + 8) {
+                            ctx.fillStyle = 'rgba(254, 243, 199, 0.95)';
+                            ctx.fillRect(badgeX, topMargin + 2, txtW + 6, 12);
+                            ctx.strokeStyle = 'rgba(217, 119, 6, 0.85)';
+                            ctx.lineWidth = 1;
+                            ctx.strokeRect(badgeX, topMargin + 2, txtW + 6, 12);
+
+                            ctx.fillStyle = '#b45309';
+                            ctx.fillText(gapText, badgeX + 3, topMargin + 11);
+                            lastGapBadgeX = badgeX;
+                        }
+                    }
+                }
+            }
+            ctx.restore();
+
+            // 3. Vertikale Y-Achse
             ctx.strokeStyle = 'rgba(15, 23, 42, 0.22)';
             ctx.lineWidth = 1;
             ctx.setLineDash([]);
@@ -1881,7 +1771,7 @@ function drawReplayGraph(curTimeSec) {
             ctx.lineTo(leftMargin, th - bottomMargin);
             ctx.stroke();
 
-            // Horizontale Ordinatenlinien & Ticks
+            // 4. Horizontale Ordinatenlinien & Ticks
             const gridPoints = [1.0, 0.5, 0.0, -0.5, -1.0];
             ctx.font = '9px monospace';
             gridPoints.forEach(ratio => {
@@ -1935,7 +1825,7 @@ function drawReplayGraph(curTimeSec) {
                 ctx.restore();
             }
 
-            // Zeitraster-Ticks
+            // 5. Zeitraster-Ticks
             const minPixelPerTick = 75;
             const maxTicks = Math.max(2, Math.floor(plotW / minPixelPerTick));
             const rawStep = tSpan / maxTicks;
@@ -1964,6 +1854,7 @@ function drawReplayGraph(curTimeSec) {
                 }
             }
 
+            // 6. Kurvenzüge mit Hüllkurven-Dezimierung & Pausen-Unterbrechung
             const visibleCount = endIndex - startIndex + 1;
             const needsDecimation = visibleCount > (plotW * 2);
 
@@ -1979,6 +1870,7 @@ function drawReplayGraph(curTimeSec) {
                 if (needsDecimation) {
                     const bucketSize = visibleCount / plotW;
                     let first = true;
+                    let prevBucketEndIdx = startIndex;
 
                     for (let b = 0; b < plotW; b++) {
                         const iStart = Math.min(endIndex, startIndex + Math.floor(b * bucketSize));
@@ -1986,12 +1878,26 @@ function drawReplayGraph(curTimeSec) {
 
                         let minVal = Infinity, maxVal = -Infinity;
                         let minIdx = iStart, maxIdx = iStart;
+                        let hasGapInBucket = false;
+
+                        const checkFrom = Math.max(startIndex + 1, prevBucketEndIdx + 1);
+                        for (let k = checkFrom; k <= iEnd; k++) {
+                            const tPrev = new Date(replayFilteredData[k - 1].ts).getTime();
+                            const tCurr = new Date(replayFilteredData[k].ts).getTime();
+                            if ((tCurr - tPrev) / 1000.0 > 2.5) {
+                                hasGapInBucket = true;
+                                break;
+                            }
+                        }
 
                         for (let k = iStart; k <= iEnd; k++) {
                             const val = replayFilteredData[k][key] || 0;
                             if (val < minVal) { minVal = val; minIdx = k; }
                             if (val > maxVal) { maxVal = val; maxIdx = k; }
                         }
+
+                        prevBucketEndIdx = iEnd;
+                        if (hasGapInBucket) first = true;
 
                         if (minVal !== Infinity) {
                             const px = leftMargin + b;
@@ -2016,6 +1922,14 @@ function drawReplayGraph(curTimeSec) {
                 } else {
                     let first = true;
                     for (let i = startIndex; i <= endIndex; i++) {
+                        if (i > startIndex) {
+                            const tPrev = new Date(replayFilteredData[i - 1].ts).getTime();
+                            const tCurr = new Date(replayFilteredData[i].ts).getTime();
+                            if ((tCurr - tPrev) / 1000.0 > 2.5) {
+                                first = true;
+                            }
+                        }
+
                         const px = timeToX(i * dt, tw, leftMargin);
                         const py = midY - ((replayFilteredData[i][key] || 0) / maxScale) * halfH;
                         if (first) { ctx.moveTo(px, py); first = false; }
@@ -2027,6 +1941,11 @@ function drawReplayGraph(curTimeSec) {
             });
         }
 
+        /*
+  * Breadcrumb: 2026-10-15 20:45 - Euler Tier Curve Mapping (Roll X = Red, Pitch Y = Green)
+  * [CRITICAL BUGFIX FLAG - GRAPH EULER CHANNEL PARITY]:
+  * Zeichnet item.roll in Rot (#dc2626) als 'Roll (X)' und item.pitch in Grün (#009B4C) als 'Pitch (Y)'.
+  */
         renderStaticTier(replayOffscreenAcc, cvAcc, replayCachedScales.scaleAcc, 'm/s²', [
             { key: 'ay', color: '#dc2626', label: 'ACC(X)', dec: 2 },
             { key: 'ax', color: '#009B4C', label: 'ACC(Y)', dec: 2 },
@@ -2034,8 +1953,8 @@ function drawReplayGraph(curTimeSec) {
         ], false, true);
 
         renderStaticTier(replayOffscreenEuler, cvEuler, replayCachedScales.scaleEuler, '°', [
-            { key: 'pitch', color: '#dc2626', label: 'Pitch (X)', dec: 1 },
-            { key: 'roll', color: '#009B4C', label: 'Roll (Y)', dec: 1 },
+            { key: 'roll', color: '#dc2626', label: 'Roll (X)', dec: 1 },
+            { key: 'pitch', color: '#009B4C', label: 'Pitch (Y)', dec: 1 },
             { key: 'yaw', color: '#7c3aed', label: 'Yaw (Z)', dec: 1 }
         ], false, false);
 
@@ -2048,7 +1967,7 @@ function drawReplayGraph(curTimeSec) {
         replayGraphCacheKey = currentCacheKey;
     }
 
-    // 2. DYNAMISCHE EBENE
+    // 2. DYNAMISCHE EBENE (Cursor & Echtzeit-Badges)
     const leftMargin = 44;
     const curTime = (curTimeSec !== undefined ? curTimeSec : replayCurrentTimeSec);
     const curExactIdx = Math.min(Math.floor(curTime / dt), count - 1);
@@ -2131,8 +2050,8 @@ function drawReplayGraph(curTimeSec) {
     ], 'BESCHLEUNIGUNG', false);
 
     drawDynamicOverlay(cvEuler, replayOffscreenEuler, '°', [
-        { key: 'pitch', color: '#dc2626', label: 'Pitch (X)', dec: 1 },
-        { key: 'roll', color: '#009B4C', label: 'Roll (Y)', dec: 1 },
+        { key: 'roll', color: '#dc2626', label: 'Roll (X)', dec: 1 },
+        { key: 'pitch', color: '#009B4C', label: 'Pitch (Y)', dec: 1 },
         { key: 'yaw', color: '#7c3aed', label: 'Yaw (Z)', dec: 1 }
     ], 'WINKEL', false);
 
@@ -2142,6 +2061,7 @@ function drawReplayGraph(curTimeSec) {
         { key: 'dz', color: '#2563eb', label: 'Hub Z', dec: 2 }
     ], 'SCHWINGWEG', true);
 }
+
 // ============================================================================
 // 6. PLAYBACK CONTROLS (PLAY, PAUSE, RESET, SCRUB)
 // ============================================================================
@@ -2253,6 +2173,12 @@ function onReplayCycleSelect(cycleVal) {
     resetReplayZoom();
     replayCurrentTimeSec = 0.0;
 
+    const totTimeLbl = document.getElementById('replay-total-time-label');
+    const durLbl = document.getElementById('replay-duration-label');
+    const totalSec = Math.max(0, (replayFilteredData.length - 1) * replaySampleIntervalSec);
+    if (totTimeLbl) totTimeLbl.innerText = totalSec.toFixed(1) + 's';
+    if (durLbl) durLbl.innerText = totalSec.toFixed(1) + ' s';
+
     const scrubber = document.getElementById('replay-scrubber');
     if (scrubber) {
         scrubber.min = 0;
@@ -2272,46 +2198,37 @@ function setReplayGraphMode(mode) {
 window.setReplayGraphMode = setReplayGraphMode;
 
 // ============================================================================
-// 7. INGESTION & DATEI-INSPEKTION
+// 7. INGESTION & DATEI-INSPEKTION (ZEITSTEMPEL-SORTIERT)
 // ============================================================================
 
 /*
  * Breadcrumb: 2026-10-06 23:55 - Antipodal Stream Ingestion & ReferenceError Fix
- * [CRITICAL BUGFIX & FEATURE PARITY - CSV INGESTION PIPELINE]:
- * 1. Behebt ReferenceError: quatToEulerDeg is not defined durch zentrale Routine parseImuCsvRecord().
- * 2. Glättet antipodale Vorzeichenwechsel (q · q_prev < 0) direkt beim Einlesen der CSV-Zeilen.
- * 3. Initialisiert roll/pitch/yaw mit 0.0; die finale Berechnung erfolgt via recalculateAllEuler().
+ * Breadcrumb: 2026-10-06 23:58 - Deduplicated Mounting Quaternion & Forced Cycle Override
+ * Breadcrumb: 2026-10-06 23:40 - Quaternion Norm Sanity Check & Zero-Order Hold
+ */
+// ============================================================================
+// 7. INGESTION & DATEI-INSPEKTION (ZEITSTEMPEL-SORTIERT)
+// ============================================================================
+
+/*
+ * Breadcrumb: 2026-10-15 20:30 - Precomputed tsMs & Post-Sort Quaternion Continuity Engine
+ * [CRITICAL BUGFIX & REFACTORING - CHRONOLOGICAL INGESTION & CYCLE SEGMENTATION]:
+ * 1. tsMs (Unix ms) wird direkt beim Parsen berechnet -> Stellt 25Hz/50Hz Auto-Detection sicher.
+ * 2. Antipodale Quaternionen-Kontinuität (q · q_prev >= 0) erfolgt NACH der Zeitstempel-Sortierung,
+ *    um Phasen- und Vorzeichensprünge bei asynchron eintreffenden Chunks auszuschließen.
+ * 3. sortAndSegmentChronologicalData() trennt Zyklen an echten Zeitlücken (> 3.0s) und erzeugt Event-Statistiken.
+ * 4. inspectImuFile() unterstützt polymorph Datei-Objekte sowie direkte URL-Strings (aus cloud-engine.js).
  */
 let lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
-let isIngestFirstSample = true;
 
-/*
- * Breadcrumb: 2026-10-06 23:58 - Deduplicated Mounting Quaternion & Forced Cycle Override
- * [CRITICAL BUGFIX FLAG - MULTI-CHUNK EVENT SEPARATION]:
- * 1. updateMountingQuaternion() greift direkt auf getMountingQuaternionFromDeg() zu (DRY).
- * 2. parseImuCsvRecord priorisiert forcedCycle, falls übergeben (trennt Tages-Chunks sauber).
- * 3. Schützt calculateAllDisplacements() und Dropdown-Filter vor BootCycle-Kollisionen.
- */
-function updateMountingQuaternion() {
-    replayMountQuat = getMountingQuaternionFromDeg(
-        replayMountConfig.roll,
-        replayMountConfig.pitch,
-        replayMountConfig.yaw
-    );
-}
-
-/*
- * Breadcrumb: 2026-10-06 23:40 - Quaternion Norm Sanity Check & Zero-Order Hold
- * [CRITICAL BUGFIX FLAG - SENSOR GLITCH & ZERO-NORM REJECTION]:
- * 1. Filtert corrupt frames (qw, qx, qy, qz ~ 0) mit norm < 0.85 heraus.
- * 2. Hält das letzte physikalisch valide Quaternion (lastIngestQuat).
- * 3. Beseitigt die Nadel-Spikes bei Yaw, Pitch und Roll vollständig.
- * [DISMISSED]: Normalisierung von Nullvektoren blies Rauschen von 0.0001 auf 1.0 auf.
- */
 function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     const sep = line.includes(';') ? ';' : ',';
     const parts = line.split(sep);
     if (parts.length < 8) return null;
+
+    const tsStr = parts[0].trim();
+    const parsedMs = Date.parse(tsStr);
+    const tsMs = isNaN(parsedMs) ? 0 : parsedMs;
 
     let qw = parseFloat(parts[1]) || 1.0;
     let qx = parseFloat(parts[2]) || 0.0;
@@ -2321,28 +2238,15 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     // Plausibilitätsprüfung: Einheitsquaternion muss Norm nahe 1.0 besitzen
     const rawNorm = Math.hypot(qw, qx, qy, qz);
     if (rawNorm < 0.85 || rawNorm > 1.15) {
-        // Bei korruptem Frame den vorherigen gültigen Zustand halten
         qw = lastIngestQuat.w;
         qx = lastIngestQuat.x;
         qy = lastIngestQuat.y;
         qz = lastIngestQuat.z;
     } else {
-        // Normalisieren
         qw /= rawNorm;
         qx /= rawNorm;
         qy /= rawNorm;
         qz /= rawNorm;
-    }
-
-    // Antipodale Kontinuität identisch zum ESP ws.onmessage (q · q_prev >= 0)
-    if (isIngestFirstSample) {
-        lastIngestQuat = { w: qw, x: qx, y: qy, z: qz };
-        isIngestFirstSample = false;
-    } else {
-        const dot = qw * lastIngestQuat.w + qx * lastIngestQuat.x + qy * lastIngestQuat.y + qz * lastIngestQuat.z;
-        if (dot < 0.0) {
-            qw = -qw; qx = -qx; qy = -qy; qz = -qz;
-        }
         lastIngestQuat = { w: qw, x: qx, y: qy, z: qz };
     }
 
@@ -2354,7 +2258,8 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     }
 
     return {
-        ts: parts[0].trim(),
+        ts: tsStr,
+        tsMs: tsMs,
         qw, qx, qy, qz,
         ax: parseFloat(parts[5]) || 0.0,
         ay: parseFloat(parts[6]) || 0.0,
@@ -2367,7 +2272,64 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     };
 }
 
-async function inspectImuFile(file) {
+/*
+ * Sortiert alle geladenen Messwerte chronologisch nach tsMs, glättet die Quaternionen
+ * in korrekter Reihenfolge und vergibt dynamische Zyklus-IDs bei Messpausen > 3.0s.
+ */
+function sortAndSegmentChronologicalData() {
+    if (!replayDataRaw || replayDataRaw.length === 0) return [];
+
+    // 1. Zwingend chronologisch nach absolutem Sensor-Zeitstempel sortieren
+    replayDataRaw.sort((a, b) => a.tsMs - b.tsMs);
+
+    // 2. Antipodale Kontinuität & Zyklus-Segmentierung entlang der wahren Zeitachse
+    let currentCycleId = 1;
+    const chunkStats = [];
+    let samplesInCurrentCycle = 0;
+    let cycleStartTs = replayDataRaw[0].ts;
+
+    for (let i = 0; i < replayDataRaw.length; i++) {
+        const cur = replayDataRaw[i];
+        if (i > 0) {
+            const prev = replayDataRaw[i - 1];
+            const gapSec = (cur.tsMs - prev.tsMs) / 1000.0;
+
+            if (gapSec > 3.0) {
+                chunkStats.push({
+                    cycleId: currentCycleId,
+                    timeStr: formatReplayTimestamp(cycleStartTs),
+                    samplesInChunk: samplesInCurrentCycle
+                });
+                currentCycleId++;
+                samplesInCurrentCycle = 0;
+                cycleStartTs = cur.ts;
+            } else {
+                // Antipodale Vorzeichen-Gleichheit (q · q_prev >= 0)
+                const dot = cur.qw * prev.qw + cur.qx * prev.qx + cur.qy * prev.qy + cur.qz * prev.qz;
+                if (dot < 0.0) {
+                    cur.qw = -cur.qw;
+                    cur.qx = -cur.qx;
+                    cur.qy = -cur.qy;
+                    cur.qz = -cur.qz;
+                }
+            }
+        }
+        cur.cycle = currentCycleId;
+        samplesInCurrentCycle++;
+    }
+
+    if (samplesInCurrentCycle > 0) {
+        chunkStats.push({
+            cycleId: currentCycleId,
+            timeStr: formatReplayTimestamp(cycleStartTs),
+            samplesInChunk: samplesInCurrentCycle
+        });
+    }
+
+    return chunkStats;
+}
+
+async function inspectImuFile(fileOrUrl, optionalFileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
 
@@ -2378,26 +2340,34 @@ async function inspectImuFile(file) {
     deck.classList.remove('hidden');
     deck.scrollIntoView({ behavior: 'smooth' });
 
+    const isStringUrl = typeof fileOrUrl === 'string';
+    const displayFileName = isStringUrl ? (optionalFileName || 'IMU Log') : (fileOrUrl.file_name || 'IMU Log');
+
     const titleEl = document.getElementById('replay-file-title');
-    if (titleEl) titleEl.innerText = `📄 ${file.file_name || 'IMU Log'}`;
+    if (titleEl) titleEl.innerText = `📄 ${displayFileName}`;
     const metaEl = document.getElementById('replay-meta-info');
     if (metaEl) metaEl.innerText = 'Lade Messdaten...';
 
     initReplay3D();
 
     try {
-        const cleanPath = file.file_path.startsWith('/') ? file.file_path.substring(1) : file.file_path;
-        const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
-        const text = await fetchCachedCsv(url);
+        let url = '';
+        if (isStringUrl) {
+            url = fileOrUrl;
+        } else {
+            const cleanPath = fileOrUrl.file_path.startsWith('/') ? fileOrUrl.file_path.substring(1) : fileOrUrl.file_path;
+            url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
+        }
 
+        const text = await fetchCachedCsv(url);
         const lines = text.split('\n');
         replayDataRaw = [];
-        isIngestFirstSample = true;
+        lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
 
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            const item = parseImuCsvRecord(line, 0, 1);
+            const item = parseImuCsvRecord(line, 0, null);
             if (item) replayDataRaw.push(item);
         }
 
@@ -2406,12 +2376,22 @@ async function inspectImuFile(file) {
             return;
         }
 
+        // Chronologisch ordnen und Zyklen trennen
+        const chunkStats = sortAndSegmentChronologicalData();
+
         calculateAllDisplacements();
         checkAndApplySavedMounting();
 
         const select = document.getElementById('replay-cycle-select');
         if (select) {
-            select.innerHTML = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
+            if (chunkStats.length > 1) {
+                select.innerHTML = `<option value="ALL">Ganze Datei (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+                chunkStats.forEach(cs => {
+                    select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+                });
+            } else {
+                select.innerHTML = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
+            }
         }
 
         if (metaEl) {
@@ -2469,35 +2449,18 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
 
         const results = await Promise.all(fetchPromises);
         replayDataRaw = [];
-        const chunkStats = [];
-        isIngestFirstSample = true;
+        lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
 
-        results.forEach(({ file, fileIdx, text }) => {
+        results.forEach(({ fileIdx, text }) => {
             if (!text) return;
-
             const lines = text.split('\n');
-            let samplesInChunk = 0;
-            const cycleId = fileIdx + 1;
-            let firstTs = null;
-
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
-                if (!firstTs && line.split(/[;,]/)[0]) firstTs = line.split(/[;,]/)[0].trim();
-
-                const item = parseImuCsvRecord(line, fileIdx, cycleId);
+                const item = parseImuCsvRecord(line, fileIdx, null);
                 if (item) {
                     replayDataRaw.push(item);
-                    samplesInChunk++;
                 }
-            }
-
-            if (samplesInChunk > 0) {
-                const eventTime = formatReplayTimestamp(firstTs);
-                const timeStr = eventTime || (file.uploaded_at
-                    ? formatReplayTimestamp(file.uploaded_at)
-                    : `Chunk #${cycleId}`);
-                chunkStats.push({ cycleId, timeStr, samplesInChunk, fileName: file.file_name });
             }
         });
 
@@ -2506,15 +2469,25 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             return;
         }
 
+        // Chronologisch ordnen und Schlaflücken in Events segmentieren
+        const chunkStats = sortAndSegmentChronologicalData();
+
         calculateAllDisplacements();
         checkAndApplySavedMounting();
 
-        const select = document.getElementById('replay-cycle-select');
-        select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+        const metaEl = document.getElementById('replay-meta-info');
+        if (metaEl) {
+            const dur = ((replayDataRaw.length - 1) * replaySampleIntervalSec).toFixed(1);
+            metaEl.innerText = `${replayDataRaw.length} Samples (${chunkStats.length} Events) | Aktive Messzeit: ${dur}s @ ${replaySampleRateHz} Hz`;
+        }
 
-        chunkStats.forEach(cs => {
-            select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
-        });
+        const select = document.getElementById('replay-cycle-select');
+        if (select) {
+            select.innerHTML = `<option value="ALL">Gesamter Tag (${replayDataRaw.length} Punkte, ${chunkStats.length} Events)</option>`;
+            chunkStats.forEach(cs => {
+                select.innerHTML += `<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`;
+            });
+        }
 
         onReplayCycleSelect('ALL');
     } catch (err) {
@@ -2534,8 +2507,8 @@ function exportReplayVisibleCsv() {
     let exportRows = [];
 
     if (isReplayZoomed) {
-        const startIdx = Math.max(0, Math.floor(tStart / 0.1));
-        const endIdx = Math.min(replayFilteredData.length - 1, Math.ceil(tEnd / 0.1));
+        const startIdx = Math.max(0, Math.floor(tStart / replaySampleIntervalSec));
+        const endIdx = Math.min(replayFilteredData.length - 1, Math.ceil(tEnd / replaySampleIntervalSec));
         exportRows = replayFilteredData.slice(startIdx, endIdx + 1);
     } else {
         exportRows = replayFilteredData;
@@ -2546,9 +2519,9 @@ function exportReplayVisibleCsv() {
         return;
     }
 
-    const header = 'timestamp,qw,qx,qy,qz,ax,ay,az,cycle\n';
+    const header = 'timestamp,qw,qx,qy,qz,ax,ay,az,dx_mm,dy_mm,dz_mm,freq_dom_hz,cycle\n';
     const csvContent = header + exportRows.map(r =>
-        `${r.ts},${r.qw.toFixed(4)},${r.qx.toFixed(4)},${r.qy.toFixed(4)},${r.qz.toFixed(4)},${r.ax.toFixed(3)},${r.ay.toFixed(3)},${r.az.toFixed(3)},${r.cycle}`
+        `${r.ts},${r.qw.toFixed(4)},${r.qx.toFixed(4)},${r.qy.toFixed(4)},${r.qz.toFixed(4)},${r.ax.toFixed(3)},${r.ay.toFixed(3)},${r.az.toFixed(3)},${(r.dx || 0).toFixed(2)},${(r.dy || 0).toFixed(2)},${(r.dz || 0).toFixed(2)},${(r.freqDom || 0).toFixed(2)},${r.cycle}`
     ).join('\n');
 
     const titleEl = document.getElementById('replay-file-title');
