@@ -964,11 +964,24 @@ function quatToEulerRawDeg(nw, nx, ny, nz) {
 }
 
 
+/*
+ * Breadcrumb: 2026-10-16 08:40 - Canonical Principal-Angle Tare & Anti-360° Wind-Up Guard
+ * [CRITICAL BUGFIX FLAG - ELIMINATE -360° EULER WIND-UP & CLAMP CORRUPTION]:
+ * 1. Stores rawRoll, rawPitch, rawYaw as canonical principal angles [-180°, +180°] without unwrapAngle,
+ *    preventing adoptCurrentFrameMounting() from clamping a -363.2° wind-up to -180°.
+ * 2. Keeps Roll and Pitch anchored to [-180°, +180°] when within normal tilt bounds (<150°),
+ *    eliminating permanent ±360° branch shifts after handling or Gimbal-lock transitions.
+ * [DISMISSED]: Unconditional unwrapAngle() on rawRoll/roll/yaw across Gimbal lock caused -363.2° flat offsets.
+ */
+function normalizePrincipalDeg(angle) {
+    if (!Number.isFinite(angle)) return 0.0;
+    return ((((angle + 180.0) % 360.0) + 360.0) % 360.0) - 180.0;
+}
+
 function recalculateAllEuler() {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
     let prevRoll = null, prevPitch = null, prevYaw = null;
-    let prevRawRoll = null, prevRawPitch = null, prevRawYaw = null;
     let activeCycle = null;
 
     for (let i = 0; i < replayDataRaw.length; i++) {
@@ -977,26 +990,16 @@ function recalculateAllEuler() {
         if (activeCycle === null || item.cycle !== activeCycle) {
             activeCycle = item.cycle;
             prevRoll = null; prevPitch = null; prevYaw = null;
-            prevRawRoll = null; prevRawPitch = null; prevRawYaw = null;
         }
 
         // 1. Sensor-Quaternion in das 3D-Modell-Koordinatensystem überführen
         const qMod = sensorToModelQuat(item.qw, item.qx, item.qy, item.qz);
 
-        // 2. Ungetarte Modell-Rohwinkel (für "Aus aktueller Lage" im Einbaulagen-Modal)
+        // 2. Ungetarte Modell-Rohwinkel strikt im Hauptwertbereich [-180°, +180°] halten
         const rawE = quatToEulerRawDeg(qMod.w, qMod.x, qMod.y, qMod.z);
-        if (prevRawRoll === null) {
-            item.rawRoll = rawE.roll;
-            item.rawPitch = rawE.pitch;
-            item.rawYaw = rawE.yaw;
-        } else {
-            item.rawRoll = unwrapAngle(rawE.roll, prevRawRoll);
-            item.rawPitch = unwrapAngle(rawE.pitch, prevRawPitch);
-            item.rawYaw = unwrapAngle(rawE.yaw, prevRawYaw);
-        }
-        prevRawRoll = item.rawRoll;
-        prevRawPitch = item.rawPitch;
-        prevRawYaw = item.rawYaw;
+        item.rawRoll = normalizePrincipalDeg(rawE.roll);
+        item.rawPitch = normalizePrincipalDeg(rawE.pitch);
+        item.rawYaw = normalizePrincipalDeg(rawE.yaw);
 
         // 3. Relatives Quaternion zur gewählten Einbaulage berechnen
         const qRel = computeRelativeQuat(qMod.w, qMod.x, qMod.y, qMod.z);
@@ -1005,7 +1008,7 @@ function recalculateAllEuler() {
         item.relQy = qRel.y;
         item.relQz = qRel.z;
 
-        // 4. Relative Euler-Winkel (Roll = X, Pitch = Y, Yaw = Z) extrahieren
+        // 4. Relative Euler-Winkel extrahieren und gegen ±360° Wind-Up schützen
         const eRel = quatToEulerRawDeg(qRel.w, qRel.x, qRel.y, qRel.z);
         if (prevRoll === null) {
             item.roll = eRel.roll;
@@ -1015,6 +1018,17 @@ function recalculateAllEuler() {
             item.roll = unwrapAngle(eRel.roll, prevRoll);
             item.pitch = unwrapAngle(eRel.pitch, prevPitch);
             item.yaw = unwrapAngle(eRel.yaw, prevYaw);
+
+            // Re-Anchor auf [-180°, +180°], sobald keine Überkopf-Drehung (>150°) vorliegt
+            if (Math.abs(eRel.roll) < 150.0 && Math.abs(item.roll) > 180.0) {
+                item.roll = eRel.roll;
+            }
+            if (Math.abs(eRel.pitch) < 150.0 && Math.abs(item.pitch) > 180.0) {
+                item.pitch = eRel.pitch;
+            }
+            if (Math.abs(eRel.yaw) < 150.0 && Math.abs(item.yaw) > 180.0) {
+                item.yaw = eRel.yaw;
+            }
         }
         prevRoll = item.roll;
         prevPitch = item.pitch;
@@ -1269,18 +1283,6 @@ function closeMountingConfigModal() {
 }
 window.closeMountingConfigModal = closeMountingConfigModal;
 
-function adoptCurrentFrameMounting() {
-    if (!replayFilteredData || replayFilteredData.length === 0) return;
-    const exactIndex = Math.min(Math.floor(replayCurrentTimeSec / replaySampleIntervalSec), replayFilteredData.length - 1);
-    const pt = replayFilteredData[Math.max(0, exactIndex)];
-
-    const r = (pt.rawRoll !== undefined) ? Math.round(pt.rawRoll * 10) / 10 : 0;
-    const p = (pt.rawPitch !== undefined) ? Math.round(pt.rawPitch * 10) / 10 : 0;
-    const y = (pt.rawYaw !== undefined) ? Math.round(pt.rawYaw * 10) / 10 : 0;
-
-    setMountingPreset(r, p, y);
-}
-window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
 
 function saveMountingConfig() {
     const rEl = document.getElementById('mount-roll-num');
