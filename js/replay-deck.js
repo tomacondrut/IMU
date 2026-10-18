@@ -1284,6 +1284,31 @@ function closeMountingConfigModal() {
 window.closeMountingConfigModal = closeMountingConfigModal;
 
 
+/*
+ * Breadcrumb: 2026-10-18 20:55 - Restored adoptCurrentFrameMounting() Implementation
+ * [CRITICAL BUGFIX FLAG - FIX UNCAUGHT REFERENCE ERROR ON SCRIPT LOAD]:
+ * 1. Implements adoptCurrentFrameMounting() to capture the current replay frame's rawRoll,
+ *    rawPitch, and rawYaw into the mounting configuration modal inputs.
+ * 2. Eliminates the ReferenceError at line 1168 so saveMountingConfig() and
+ *    checkAndApplySavedMounting() execute cleanly on startup.
+ */
+function adoptCurrentFrameMounting() {
+    if (!replayFilteredData || replayFilteredData.length === 0) return;
+
+    const dt = replaySampleIntervalSec > 0 ? replaySampleIntervalSec : 0.1;
+    const idx = Math.max(0, Math.min(Math.round(replayCurrentTimeSec / dt), replayFilteredData.length - 1));
+    const pt = replayFilteredData[idx];
+    if (!pt) return;
+
+    const r = Number.isFinite(pt.rawRoll) ? Number(pt.rawRoll.toFixed(1)) : 0.0;
+    const p = Number.isFinite(pt.rawPitch) ? Number(pt.rawPitch.toFixed(1)) : 0.0;
+    const y = Number.isFinite(pt.rawYaw) ? Number(pt.rawYaw.toFixed(1)) : 0.0;
+
+    setMountingPreset(r, p, y);
+    replayDiagLog('MOUNT-TARE', `Frame #${idx} als Einbaulage übernommen: R:${r}° P:${p}° Y:${y}°`);
+}
+window.adoptCurrentFrameMounting = adoptCurrentFrameMounting;
+
 function saveMountingConfig() {
     const rEl = document.getElementById('mount-roll-num');
     const pEl = document.getElementById('mount-pitch-num');
@@ -2350,16 +2375,33 @@ function yieldToMainThread() {
     return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+/*
+ * Breadcrumb: 2026-10-18 20:55 - Case-Insensitive CSV Header Filter & BOOT+ms Timestamp Fallback
+ * [CRITICAL BUGFIX FLAG - ALLOW REPLAY OF PRE-NTP BOOT+MS LOGS & SUPPRESS HEADER WARNINGS]:
+ * 1. Filters 'Timestamp' / 'timestamp' headers case-insensitively without counting them as corrupt lines.
+ * 2. Parses 'BOOT+<ms>ms' timestamps into a synthetic monotonic epoch so logs recorded prior to
+ *    cellular/WiFi clock sync can still be inspected and replayed in 3D.
+ */
 function parseImuCsvRecord(line, fileIndex, forcedCycle) {
-    if (!line || line.startsWith('timestamp') || line.startsWith('#')) return null;
+    if (!line) return null;
+    const lowerPrefix = line.substring(0, 10).toLowerCase();
+    if (lowerPrefix.startsWith('timestamp') || lowerPrefix.startsWith('#')) return null;
 
     const sep = line.includes(';') ? ';' : ',';
     const parts = line.split(sep);
     if (parts.length < 8) return null;
 
     const tsStr = parts[0].trim();
-    const parsedMs = Date.parse(tsStr);
-    // Ungültige Zeitstempel oder korrupte Zeilen strikt verwerfen
+    let parsedMs = Date.parse(tsStr);
+
+    // Fallback für Dateien, die vor der Zeitsynchronisation mit "BOOT+12345ms" aufgezeichnet wurden
+    if (isNaN(parsedMs) && tsStr.startsWith('BOOT+')) {
+        const bootMs = parseInt(tsStr.substring(5), 10);
+        if (!isNaN(bootMs) && bootMs >= 0) {
+            parsedMs = 1704067200000 + (fileIndex * 3600000) + bootMs;
+        }
+    }
+
     if (isNaN(parsedMs) || parsedMs <= 946684800000) return null;
 
     let qw = parseFloat(parts[1]);

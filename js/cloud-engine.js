@@ -470,15 +470,34 @@ function navigateCloudSdUp() {
  * 1. .synced files are ALREADY in Supabase Storage: downloads instantly from CDN URL without ESP32 radio load.
  * 2. Unsynced files (configs, active logs) are uploaded by ESP32 with an extended 60s timeout.
  */
+/*
+ * Breadcrumb: 2026-10-18 20:55 - Dual-Structure .synced CDN Resolver (Segmented & Legacy Flat)
+ * [CRITICAL BUGFIX FLAG - ZERO 404 ON SYNCED ARCHIVE DOWNLOADS]:
+ * Resolves both new segmented paths (/Logs/synced/2026-10-18/imu_...csv.synced) and legacy
+ * flat paths (/Logs/synced/2026-10-18_imu_...csv.synced) to their exact Supabase Storage URL.
+ */
 async function requestCloudDownload(path, fileName) {
     const stat = document.getElementById('sd-cloud-status-badge');
 
     // FAST-PATH: Datei wurde bereits in die Cloud synchronisiert
     if (fileName.endsWith('.synced')) {
-        const cleanName = fileName.replace('.synced', '');
-        const parts = path.split('/');
-        // Ordner ermitteln (z.B. '2026-09-12' aus '/Logs/2026-09-12/...')
-        const dayFolder = parts[parts.length - 2] || '';
+        let cleanName = fileName.replace(/\.synced$/, '');
+        const parts = path.split('/').filter(Boolean);
+        let dayFolder = parts.length >= 2 ? parts[parts.length - 2] : '';
+
+        // Falls eine ältere Datei noch flach in /Logs/synced/2026-10-18_imu_... liegt:
+        if (dayFolder.toLowerCase() === 'synced') {
+            const prefixMatch = cleanName.match(/^(\d{4}-\d{2}-\d{2}|BOOT_SESSION_\d+)_(.+)$/);
+            if (prefixMatch) {
+                dayFolder = prefixMatch[1];
+                cleanName = prefixMatch[2];
+            } else {
+                dayFolder = 'root_logs';
+            }
+        } else if (dayFolder.toLowerCase() === 'logs') {
+            dayFolder = 'root_logs';
+        }
+
         const directUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${selectedDeviceId}/${dayFolder}/${cleanName}`;
 
         appendTerminalLog(`\n[DOWNLOAD] Direkter CDN-Download aus Supabase Storage: ${cleanName}`);
@@ -742,11 +761,41 @@ function updateStorageQuotaSummaryUI() {
 }
 
 // Vereinheitlichte Datumsextraktion (bevorzugt day_folder, sonst Zeitstempel)
+/*
+ * Breadcrumb: 2026-10-18 20:55 - Filename Timestamp Parser for Second-Resolution Chunks
+ * [CRITICAL FEATURE PARITY - TRUE RECORDING TIME ON 24H TIMELINE]:
+ * Parses 'imu_YYYYMMDD_HHMMSS_c0001.csv' (and legacy 'imu_YYYYMMDD_HHMM.csv') as UTC timestamps
+ * so batch-uploaded LTE chunks appear at their true recording time on the 24h timeline bar.
+ */
+function getFileRecordedDate(f) {
+    if (f && f.file_name) {
+        // Neues Format: imu_20261018_204015_c0001.csv (UTC)
+        const mSec = f.file_name.match(/imu_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+        if (mSec) {
+            return new Date(Date.UTC(
+                parseInt(mSec[1], 10), parseInt(mSec[2], 10) - 1, parseInt(mSec[3], 10),
+                parseInt(mSec[4], 10), parseInt(mSec[5], 10), parseInt(mSec[6], 10)
+            ));
+        }
+        // Altes Format: imu_20261018_2040.csv (UTC)
+        const mMin = f.file_name.match(/imu_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+        if (mMin) {
+            return new Date(Date.UTC(
+                parseInt(mMin[1], 10), parseInt(mMin[2], 10) - 1, parseInt(mMin[3], 10),
+                parseInt(mMin[4], 10), parseInt(mMin[5], 10), 0
+            ));
+        }
+    }
+    const d = new Date(f?.uploaded_at);
+    return isNaN(d.getTime()) ? new Date() : d;
+}
+window.getFileRecordedDate = getFileRecordedDate;
+
 function getFileDayKey(f) {
     if (f.day_folder && /^\d{4}-\d{2}-\d{2}$/.test(f.day_folder)) {
         return f.day_folder;
     }
-    const d = new Date(f.uploaded_at);
+    const d = getFileRecordedDate(f);
     if (!isNaN(d.getTime())) {
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
@@ -760,50 +809,47 @@ function getFileDayKey(f) {
  * 2. Hardened deleteImuCloudFile and fetchImuCloudLogs against undefined array reads.
  * 3. Dismissed code: script-scoped let currentDeviceFiles blocking replay-deck.js access.
  */
+/*
+ * Breadcrumb: 2026-10-18 16:00 - Device- & Month-Scoped Query with 10k Limit
+ * [CRITICAL BUGFIX & RETENTION PARITY - PREVENT 1000-ROW TRUNCATION]:
+ * 1. Filters directly in Postgres by device_id and month date range (with ±7 days buffer for week transitions).
+ * 2. Raises limit to 10.000 chunks to ensure zero truncation across busy months.
+ * 3. changeCalendarMonth() triggers fetchImuCloudLogs() asynchronously to pull the target month.
+ * [DISMISSED]: Unfiltered .select('*') on imu_log_files without device/date bounds; PostgREST 1000-row cap pushed September files out of view.
+ */
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
 
     container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId}...</div>`;
 
-    const { data: allFiles, error } = await sbClient
+    // Aktiven Monatsbereich aus calendarDate mit 7 Tagen Puffer ermitteln
+    const year = calendarDate.getFullYear();
+    const month = calendarDate.getMonth();
+    const startIso = new Date(year, month, 1 - 7, 0, 0, 0).toISOString();
+    const endIso = new Date(year, month + 1, 7, 23, 59, 59).toISOString();
+
+    const { data: files, error } = await sbClient
         .from('imu_log_files')
         .select('*')
-        .order('uploaded_at', { ascending: false });
+        .eq('device_id', selectedDeviceId)
+        .gte('uploaded_at', startIso)
+        .lte('uploaded_at', endIso)
+        .order('uploaded_at', { ascending: false })
+        .limit(10000);
 
     if (error) {
         container.innerHTML = `<div class="p-3 bg-red-50 border border-red-300 rounded text-xs text-red-700">Fehler beim Laden: ${error.message}</div>`;
         return;
     }
 
-    const FREE_TIER_LIMIT_MB = 1024;
-    const totalBytesAll = (allFiles || []).reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
-    const totalMbAll = (totalBytesAll / (1024 * 1024)).toFixed(1);
-    const pctAll = Math.min(Math.max(((totalMbAll / FREE_TIER_LIMIT_MB) * 100), 0), 100).toFixed(1);
+    currentDeviceFiles = files || [];
+    window.currentDeviceFiles = currentDeviceFiles;
 
-    currentDeviceFiles = (allFiles || []).filter(f => f.device_id === selectedDeviceId);
-    window.currentDeviceFiles = currentDeviceFiles; // Global für Replay-Deck synchronisieren
-
-    const deviceBytes = currentDeviceFiles.reduce((sum, f) => sum + Number(f.file_size_bytes || 0), 0);
-    const deviceMb = (deviceBytes / (1024 * 1024)).toFixed(1);
-    const freeMb = Math.max(0, (FREE_TIER_LIMIT_MB - totalMbAll)).toFixed(1);
-
-    const sumEl = document.getElementById('storage-used-summary');
-    const barEl = document.getElementById('storage-progress-bar');
-    const shareEl = document.getElementById('storage-device-share');
-    const freeEl = document.getElementById('storage-free-capacity');
-
-    if (sumEl) sumEl.innerText = `${totalMbAll} MB von ${FREE_TIER_LIMIT_MB} MB (${pctAll}%)`;
-    if (shareEl) shareEl.innerText = `${selectedDeviceId}: ${deviceMb} MB (${currentDeviceFiles.length} Chunks)`;
-    if (freeEl) freeEl.innerText = `Verbleibend: ${freeMb} MB frei`;
-
-    if (barEl) {
-        barEl.style.width = `${pctAll}%`;
-        barEl.className = pctAll >= 90 ? 'h-full bg-red-500 transition-all' : (pctAll >= 75 ? 'h-full bg-amber-500 transition-all' : 'h-full bg-green-600 transition-all');
-    }
+    updateStorageQuotaSummaryUI();
 
     if (!calendarInitialized && currentDeviceFiles.length > 0) {
-        const newestDate = new Date(currentDeviceFiles[0].uploaded_at);
+        const newestDate = getFileRecordedDate(currentDeviceFiles[0]);
         if (!isNaN(newestDate.getTime())) {
             calendarDate = new Date(newestDate.getFullYear(), newestDate.getMonth(), newestDate.getDate());
             calendarInitialized = true;
@@ -813,15 +859,13 @@ async function fetchImuCloudLogs() {
     renderCalendarUI();
 }
 
-
-
-function changeCalendarMonth(offset) {
+async function changeCalendarMonth(offset) {
     if (calendarViewMode === 'month') {
         calendarDate.setMonth(calendarDate.getMonth() + offset);
     } else {
         calendarDate.setDate(calendarDate.getDate() + (offset * 7));
     }
-    renderCalendarUI();
+    await fetchImuCloudLogs();
 }
 
 function setCalendarViewMode(mode) {
@@ -972,10 +1016,19 @@ function renderCalendarUI() {
  * 1. Deduplicated openDayReplay function declaration.
  * 2. Unhides 24h timeline and immediately streams merged day chunks to oscilloscope on calendar click.
  */
+/*
+ * Breadcrumb: 2026-09-20 09:15 - Auto-Launch Full Day Replay on Calendar Day Click
+ * Breadcrumb: 2026-10-18 21:00 - Recording-Timestamp Sorting & 24h Bar Positioning
+ * [CRITICAL BUGFIX & FEATURE PARITY - TRUE RECORDING TIME ON 24H TIMELINE]:
+ * 1. Sorts dayFiles by getFileRecordedDate(f) instead of uploaded_at so delayed LTE batches
+ *    are ordered strictly chronologically.
+ * 2. Positions 24h timeline markers and list badges using getFileRecordedDate(f) so chunks
+ *    appear at the exact time the vibration occurred rather than when the LTE batch uploaded.
+ */
 function openDayReplay(dateStr) {
     const dayFiles = currentDeviceFiles
         .filter(f => getFileDayKey(f) === dateStr)
-        .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+        .sort((a, b) => getFileRecordedDate(a) - getFileRecordedDate(b));
 
     if (!dayFiles || dayFiles.length === 0) {
         alert(`Keine Messdateien für den Tag ${dateStr} gefunden.`);
@@ -998,6 +1051,14 @@ window.openDayReplay = openDayReplay;
  * 3. Roter "Tag löschen"-Button im Header zum Bereinigen ganzer 24h-Blöcke.
  * 4. Dynamischer Batch-Löschen Button ("Ausgewählte löschen [X]").
  */
+/*
+ * Breadcrumb: 2026-10-18 16:25 - Restored Admin-Gated Deletion Controls in Timeline
+ * [CRITICAL FEATURE PARITY - ADMIN DELETE RESTORATION]:
+ * 1. Restored .btn-delete-log elements (day delete, batch delete, single file delete) guarded by isSessionUnlocked().
+ * 2. Integrated selection checkboxes for bulk operations with scroll-lock preservation.
+ * 3. Kept date-filtered month scope and zoom/replay integration intact.
+ * [DISMISSED]: Hard-purged read-only timeline without admin delete capability.
+ */
 function openDailyTimeline(dateStr, autoLaunchReplay = true) {
     const timelineWrapper = document.getElementById('daily-timeline-wrapper');
     if (!timelineWrapper) return;
@@ -1008,7 +1069,7 @@ function openDailyTimeline(dateStr, autoLaunchReplay = true) {
     const displayDate = new Date(dateStr + "T00:00:00").toLocaleDateString('de-CH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
     const dayFiles = currentDeviceFiles.filter(f => getFileDayKey(f) === dateStr)
-        .sort((a, b) => new Date(a.uploaded_at) - new Date(b.uploaded_at));
+        .sort((a, b) => getFileRecordedDate(a) - getFileRecordedDate(b));
 
     if (dayFiles.length === 0) {
         closeDailyTimeline();
@@ -1075,23 +1136,23 @@ function openDailyTimeline(dateStr, autoLaunchReplay = true) {
     `;
 
     dayFiles.forEach(f => {
-        const d = new Date(f.uploaded_at);
-        const minutesFromMidnight = d.getHours() * 60 + d.getMinutes();
-        const leftPercent = (minutesFromMidnight / 1440) * 100;
+        const d = getFileRecordedDate(f);
+        const minutesFromMidnight = d.getHours() * 60 + d.getMinutes() + (d.getSeconds() / 60.0);
+        const leftPercent = Math.max(0, Math.min(99.2, (minutesFromMidnight / 1440) * 100));
 
         let widthPercent = ((f.file_size_bytes / 102400) * 1) / 1440 * 100;
         if (widthPercent < 0.8) widthPercent = 0.8;
 
         const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
         const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
-        const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+        const tipTime = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const kb = (f.file_size_bytes / 1024).toFixed(0);
 
         html += `
             <div onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')"
                  class="absolute h-full bg-stag-green active:bg-emerald-600 hover:bg-emerald-500 cursor-pointer border-r border-white transition flex items-center justify-center rounded-[2px] shadow-sm touch-manipulation"
                  style="left: ${leftPercent}%; width: ${widthPercent}%; min-width: 12px;"
-                 title="${tipTime} Uhr - ${kb} KB">
+                 title="Aufnahme: ${tipTime} Uhr - ${kb} KB">
             </div>
         `;
     });
@@ -1106,7 +1167,8 @@ function openDailyTimeline(dateStr, autoLaunchReplay = true) {
 
     dayFiles.forEach(f => {
         const kb = (Number(f.file_size_bytes || 0) / 1024).toFixed(1);
-        const uploadTime = new Date(f.uploaded_at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const recDate = getFileRecordedDate(f);
+        const recordTime = recDate.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
         const downloadUrl = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
         const isChecked = selectedTimelineFiles.has(f.file_path);
@@ -1123,7 +1185,7 @@ function openDailyTimeline(dateStr, autoLaunchReplay = true) {
                     <span class="text-[10px] text-slate-500 shrink-0">(${kb} KB)</span>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
-                    <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden sm:inline mr-1">${uploadTime}</span>
+                    <span class="text-[10px] text-slate-500 font-bold bg-slate-200 px-1.5 py-0.5 rounded hidden sm:inline mr-1" title="Aufnahmezeitpunkt">${recordTime}</span>
                     <button onclick="inspectImuFile('${downloadUrl}', '${f.file_name}')" class="bg-slate-200 hover:bg-stag-green hover:text-white text-slate-700 px-2.5 py-1 rounded text-[11px] font-bold transition" title="Nur diesen Chunk öffnen">
                         📊
                     </button>
@@ -1141,7 +1203,6 @@ function openDailyTimeline(dateStr, autoLaunchReplay = true) {
     html += `</div></div>`;
     timelineWrapper.innerHTML = html;
 
-    // Replay nur beim initialen Klick starten, NICHT bei nachfolgenden Lösch-Updates
     if (autoLaunchReplay) {
         openDayReplay(dateStr);
     }
@@ -1158,6 +1219,14 @@ function closeDailyTimeline() {
 /*
  * Breadcrumb: 2026-10-11 16:30 - Batch Selection State Controller
  * [FEATURE IMPLEMENTATION]: Synchronisiert Checkbox-Änderungen und aktualisiert den Lösch-Button.
+ */
+/*
+ * Breadcrumb: 2026-10-18 16:28 - Restored Atomic Cloud Deletion Handlers
+ * [CRITICAL BUGFIX & WORKFLOW RESTORATION]:
+ * 1. Requires isSessionUnlocked() confirmation (password stag2026) prior to executing any deletion.
+ * 2. Strips bucket prefix/slashes cleanly and deletes from Supabase Storage + imu_log_files atomically.
+ * 3. Keeps timeline open and restores window.scrollY without page jumps.
+ * [DISMISSED]: Disabled dummy console.warn stubs that blocked deletion completely.
  */
 function toggleTimelineFileSelect(filePath, isChecked, dateStr) {
     if (isChecked) {
