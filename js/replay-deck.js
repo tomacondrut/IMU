@@ -612,13 +612,36 @@ function fftRadix2(re, im, inverse = false) {
     }
 }
 
+/*
+ * Breadcrumb: 2026-10-15 20:05 - Radix-2 Cooley-Tukey FFT & Ring-Free Spectral Double Integration
+ * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
+ * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
+ * Breadcrumb: 2026-10-19 12:00 - Tilt-Drift Rejection (fc=0.80Hz), Post-Taper Zero-Mean & Velocity-Weighted DomFreq
+ * [CRITICAL BUGFIX FLAG - PREVENT 0.15HZ TILT PSEUDO-DISPLACEMENT & NYQUIST FREQUENCY BIAS]:
+ * 1. Re-centers tapered signal (post-Tukey mean removal) before zero-padding to N to eliminate sinc leakage at 0.1-0.25 Hz.
+ * 2. Raises default high-pass cutoff from 0.18 Hz to 0.80 Hz (with 8th-order roll-off) so BNO085 gravity-lag during
+ *    tilting and asymmetric shock velocity steps do not explode via -1/omega^2 into 66 mm non-causal waves.
+ * 3. Evaluates spectral frequency peaks on vibration velocity magnitude (|A(f)| / (2*pi*f)) with parabolic sub-bin
+ *    interpolation in both global and local STFT windows, preventing high-frequency sensor noise (~11.7 Hz) from masking
+ *    true 3-7 Hz structural vibrations.
+ * 4. Selects item.freqDom from the axis with dominant vibration energy instead of Math.max(freqX, freqY, freqZ),
+ *    and preserves 0.0 Hz during quiet intervals instead of falling back via `||` to global cycle frequency.
+ * [DISMISSED]:
+ * - cutoffHz = 0.18 with f >= 0.05 amplified 0.15 Hz tilt transients by ~390x into 66 mm pseudo-displacements.
+ * - `item.freqX = locFy[k] || resY.domFreqHz` overwrote legitimate 0.0 Hz quiet phases with global cycle frequency.
+ * - `item.freqDom = Math.max(item.freqX, item.freqY, item.freqZ)` picked highest Hz number (noise) instead of strongest axis.
+ */
+const MAX_SINGLE_FFT_SAMPLES = 8192;
+const DEFAULT_VIB_CUTOFF_HZ = 0.80;
+const RMS_NOISE_GATE_MS2 = 0.05;
+
 function detrendAndWindowSignal(rawSignal, n, N) {
-    let sum = 0;
+    let sum = 0.0;
     for (let i = 0; i < n; i++) sum += rawSignal[i];
     const mean = sum / n;
 
-    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    let sqSum = 0;
+    let sumX = 0.0, sumY = 0.0, sumXY = 0.0, sumXX = 0.0;
+    let sqSum = 0.0;
     for (let i = 0; i < n; i++) {
         const val = rawSignal[i] - mean;
         sumX += i;
@@ -629,7 +652,7 @@ function detrendAndWindowSignal(rawSignal, n, N) {
     }
 
     const rms = Math.sqrt(sqSum / n);
-    const denom = (n * sumXX - sumX * sumX) || 1;
+    const denom = (n * sumXX - sumX * sumX) || 1.0;
     const slope = (n * sumXY - sumX * sumY) / denom;
     const intercept = (sumY - slope * sumX) / n;
 
@@ -637,6 +660,7 @@ function detrendAndWindowSignal(rawSignal, n, N) {
     const im = new Float64Array(N);
     const taperLen = Math.max(2, Math.floor(n * 0.05));
 
+    let taperedSum = 0.0;
     for (let i = 0; i < n; i++) {
         let val = (rawSignal[i] - mean) - (intercept + slope * i);
         if (i < taperLen) {
@@ -645,42 +669,47 @@ function detrendAndWindowSignal(rawSignal, n, N) {
             val *= 0.5 * (1.0 - Math.cos((Math.PI * (n - 1 - i)) / taperLen));
         }
         re[i] = val;
+        taperedSum += val;
+    }
+
+    // Nach dem Tapering zwingend mittelwertfrei halten, um sinc-Leckage beim Zero-Padding (n..N-1) zu verhindern
+    const taperedMean = taperedSum / n;
+    for (let i = 0; i < n; i++) {
+        re[i] -= taperedMean;
     }
 
     return { re, im, rms };
 }
 
-/*
- * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
- * [CRITICAL BUGFIX FLAG - SPECTRAL PEAK ACCURACY]:
- * Speichert das Amplitudenspektrum der Beschleunigung vor der -1/omega^2 Integration zwischen,
- * damit die parabolische Interpolation nicht durch die Tieffrequenz-Anhebung verzerrt wird.
- */
-/*
- * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
- * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
- * [CRITICAL BUGFIX FLAG - PREVENT FFT OOM CRASH & UNWRAP INFINITE LOOP]:
- * 1. Block-segments continuous cycles > 8192 samples in spectralDoubleIntegration() so N never exceeds 16384
- *    (prevents 32-bit shift overflow on N <<= 1 and massive Float64Array allocations).
- * 2. Scales STFT stride dynamically in computeLocalWindowFrequencies() (max ~200 windows per cycle) to prevent
- *    tens of thousands of synchronous FFTs from freezing the browser on full-day logs.
- * 3. Replaced while-loops in unwrapAngle() with finite-guarded modulo math to prevent hangs on NaN/Infinity.
- * [DISMISSED]: Unbounded while (N < n * 2) N <<= 1 and fixed step=8 STFT caused main-thread freeze on large logs;
- *              while (diff > 180) locked up if a single angle became non-finite.
- */
-const MAX_SINGLE_FFT_SAMPLES = 8192;
+function interpolateParabolicPeakHz(magArray, peakBin, halfN, deltaF, minFreqHz) {
+    if (peakBin <= 0) return 0.0;
+    let exactBin = peakBin;
+    if (peakBin > 1 && peakBin < halfN) {
+        const y0 = magArray[peakBin - 1];
+        const y1 = magArray[peakBin];
+        const y2 = magArray[peakBin + 1];
+        const denom = y0 - 2.0 * y1 + y2;
+        if (Math.abs(denom) > 1e-12) {
+            const deltaK = 0.5 * (y0 - y2) / denom;
+            if (Math.abs(deltaK) < 1.0) {
+                exactBin = peakBin + deltaK;
+            }
+        }
+    }
+    return Math.max(minFreqHz, exactBin * deltaF);
+}
 
-function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18) {
+function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = DEFAULT_VIB_CUTOFF_HZ) {
     const n = rawBlock.length;
-    if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
+    if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0, peakVelMag: 0.0 };
 
     let N = 32;
     while (N < n * 2 && N < 32768) N <<= 1;
 
     const { re, im, rms } = detrendAndWindowSignal(rawBlock, n, N);
 
-    if (!Number.isFinite(rms) || rms < 0.04) {
-        return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
+    if (!Number.isFinite(rms) || rms < RMS_NOISE_GATE_MS2) {
+        return { dispMm: new Float64Array(n), domFreqHz: 0.0, peakVelMag: 0.0 };
     }
 
     fftRadix2(re, im, false);
@@ -688,27 +717,21 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
     const deltaF = sampleRateHz / N;
     const nyquist = sampleRateHz / 2.0;
     const halfN = N >> 1;
-    const accMag = new Float64Array(halfN + 1);
+    const velMag = new Float64Array(halfN + 1);
 
-    let maxMag = 0.0;
+    let maxVelMag = 0.0;
     let peakBin = 0;
 
     re[0] = 0.0;
     im[0] = 0.0;
 
+    const minStopHz = Math.max(0.35, cutoffHz * 0.5);
+
     for (let k = 1; k <= halfN; k++) {
         const f = k * deltaF;
-        const mag = Math.hypot(re[k], im[k]);
-        accMag[k] = mag;
+        const accMag = Math.hypot(re[k], im[k]);
 
-        if (f >= cutoffHz && f <= nyquist * 0.95) {
-            if (mag > maxMag) {
-                maxMag = mag;
-                peakBin = k;
-            }
-        }
-
-        if (f < 0.05 || f > nyquist * 0.95) {
+        if (f < minStopHz || f > nyquist * 0.95) {
             re[k] = 0.0;
             im[k] = 0.0;
             if (k < halfN) {
@@ -716,11 +739,21 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
                 im[N - k] = 0.0;
             }
         } else {
-            const ratio4 = Math.pow(f / cutoffHz, 4);
-            const hpGain = ratio4 / (1.0 + ratio4);
+            // 8. Ordnung Hochpass trennt langsame Kipp-Gravitationsdrifts scharf von Strukturschwingungen
+            const ratio8 = Math.pow(f / cutoffHz, 8);
+            const hpGain = ratio8 / (1.0 + ratio8);
             const omega = 2.0 * Math.PI * f;
-            const factor = -hpGain / (omega * omega);
 
+            // Geschwindigkeitsspektrum (|A(f)| * hpGain / omega) für physikalisch unverzerrte Peak-Suche
+            const vMag = (accMag * hpGain) / omega;
+            velMag[k] = vMag;
+
+            if (f >= cutoffHz && f <= nyquist * 0.92 && vMag > maxVelMag) {
+                maxVelMag = vMag;
+                peakBin = k;
+            }
+
+            const factor = -hpGain / (omega * omega);
             re[k] *= factor;
             im[k] *= factor;
             if (k < halfN) {
@@ -730,19 +763,7 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
         }
     }
 
-    let domFreqHz = peakBin * deltaF;
-    if (peakBin > 1 && peakBin < halfN) {
-        const y0 = accMag[peakBin - 1];
-        const y1 = accMag[peakBin];
-        const y2 = accMag[peakBin + 1];
-        const denom = y0 - 2.0 * y1 + y2;
-        if (Math.abs(denom) > 1e-12) {
-            const deltaK = 0.5 * (y0 - y2) / denom;
-            if (Math.abs(deltaK) < 1.0) {
-                domFreqHz = Math.max(cutoffHz, (peakBin + deltaK) * deltaF);
-            }
-        }
-    }
+    const domFreqHz = interpolateParabolicPeakHz(velMag, peakBin, halfN, deltaF, cutoffHz);
 
     fftRadix2(re, im, true);
 
@@ -758,76 +779,93 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
         dispMm[i] -= meanDisp;
     }
 
-    return { dispMm, domFreqHz };
+    return { dispMm, domFreqHz, peakVelMag: maxVelMag };
 }
 
-function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
+function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = DEFAULT_VIB_CUTOFF_HZ) {
     const n = rawSignal.length;
     if (n <= MAX_SINGLE_FFT_SAMPLES) {
         return spectralDoubleIntegrationBlock(rawSignal, sampleRateHz, cutoffHz);
     }
 
-    // Bei überlangen Zyklen (> 8192 Samples) in Blöcke aufteilen, um RAM-Überlauf zu verhindern
     const outDisp = new Float64Array(n);
-    let maxDomFreq = 0.0;
+    let bestDomFreq = 0.0;
+    let bestVelMag = 0.0;
 
     for (let offset = 0; offset < n; offset += MAX_SINGLE_FFT_SAMPLES) {
         const end = Math.min(n, offset + MAX_SINGLE_FFT_SAMPLES);
         const sub = rawSignal.subarray(offset, end);
         const res = spectralDoubleIntegrationBlock(sub, sampleRateHz, cutoffHz);
         outDisp.set(res.dispMm, offset);
-        if (res.domFreqHz > maxDomFreq) maxDomFreq = res.domFreqHz;
+        if (res.peakVelMag > bestVelMag) {
+            bestVelMag = res.peakVelMag;
+            bestDomFreq = res.domFreqHz;
+        }
     }
 
-    return { dispMm: outDisp, domFreqHz: maxDomFreq };
+    return { dispMm: outDisp, domFreqHz: bestDomFreq, peakVelMag: bestVelMag };
 }
 
-function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) {
+function computeLocalWindowFrequencies(rawSignal, sampleRateHz, cutoffHz = DEFAULT_VIB_CUTOFF_HZ) {
     const n = rawSignal.length;
     const outFreq = new Float64Array(n);
+    const outEnergy = new Float64Array(n);
     const winSize = 64;
+    const fftSize = 128;
 
-    if (n < winSize) {
-        outFreq.fill(fallbackFreqHz);
-        return outFreq;
+    if (n < 16) {
+        return { freq: outFreq, energy: outEnergy };
     }
 
-    // Adaptiver Schritt: Maximal ~200 STFT-Fenster pro Zyklus berechnen (verhindert Main-Thread-Blockade)
+    const actualWin = Math.min(winSize, n);
     const step = Math.max(8, Math.floor(n / 200));
-    const halfWin = winSize >> 1;
-    let lastFreq = fallbackFreqHz;
+    const halfWin = actualWin >> 1;
+    const halfFft = fftSize >> 1;
+    const deltaF = sampleRateHz / fftSize;
+    const maxBin = Math.min(halfFft - 1, Math.floor((sampleRateHz * 0.46) / deltaF));
+    const velMag = new Float64Array(halfFft + 1);
 
     for (let center = 0; center < n; center += step) {
-        const start = Math.max(0, Math.min(n - winSize, center - halfWin));
-        const sub = rawSignal.subarray(start, start + winSize);
-        const { re, im, rms } = detrendAndWindowSignal(sub, winSize, 128);
+        const start = Math.max(0, Math.min(n - actualWin, center - halfWin));
+        const sub = rawSignal.subarray(start, start + actualWin);
+        const { re, im, rms } = detrendAndWindowSignal(sub, actualWin, fftSize);
 
-        if (!Number.isFinite(rms) || rms < 0.04) {
-            lastFreq = 0.0;
-        } else {
+        let localFreq = 0.0;
+        let localEnergy = 0.0;
+
+        if (Number.isFinite(rms) && rms >= RMS_NOISE_GATE_MS2) {
             fftRadix2(re, im, false);
-            const deltaF = sampleRateHz / 128;
+            velMag.fill(0.0);
             let maxMag = 0.0;
             let peakBin = 0;
-            for (let k = 1; k <= 60; k++) {
+
+            for (let k = 1; k <= maxBin; k++) {
                 const f = k * deltaF;
-                if (f < 0.20) continue;
-                const mag = Math.hypot(re[k], im[k]);
-                if (mag > maxMag) {
-                    maxMag = mag;
+                if (f < cutoffHz) continue;
+                const ratio8 = Math.pow(f / cutoffHz, 8);
+                const hpGain = ratio8 / (1.0 + ratio8);
+                const vMag = (Math.hypot(re[k], im[k]) * hpGain) / (2.0 * Math.PI * f);
+                velMag[k] = vMag;
+                if (vMag > maxMag) {
+                    maxMag = vMag;
                     peakBin = k;
                 }
             }
-            lastFreq = peakBin * deltaF;
+
+            if (peakBin > 0) {
+                localFreq = interpolateParabolicPeakHz(velMag, peakBin, maxBin, deltaF, cutoffHz);
+                localEnergy = maxMag;
+            }
         }
 
         const fillEnd = Math.min(n, center + step);
         for (let k = center; k < fillEnd; k++) {
-            outFreq[k] = lastFreq;
+            outFreq[k] = localFreq;
+            outEnergy[k] = localEnergy;
         }
     }
 
-    return outFreq;
+    return { freq: outFreq, energy: outEnergy };
 }
 
 function calculateAllDisplacements() {
@@ -854,13 +892,13 @@ function calculateAllDisplacements() {
             rawAz[k] = Number.isFinite(item.az) ? item.az : 0.0;
         }
 
-        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, 0.18);
-        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, 0.18);
-        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, 0.18);
+        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
+        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
+        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
 
-        const locFx = computeLocalWindowFrequencies(rawAx, replaySampleRateHz, resX.domFreqHz);
-        const locFy = computeLocalWindowFrequencies(rawAy, replaySampleRateHz, resY.domFreqHz);
-        const locFz = computeLocalWindowFrequencies(rawAz, replaySampleRateHz, resZ.domFreqHz);
+        const locX = computeLocalWindowFrequencies(rawAx, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
+        const locY = computeLocalWindowFrequencies(rawAy, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
+        const locZ = computeLocalWindowFrequencies(rawAz, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
 
         for (let k = 0; k < n; k++) {
             const item = replayDataRaw[indices[k]];
@@ -868,10 +906,25 @@ function calculateAllDisplacements() {
             item.dy = resY.dispMm[k];
             item.dz = resZ.dispMm[k];
 
-            item.freqX = locFy[k] || resY.domFreqHz;
-            item.freqY = locFx[k] || resX.domFreqHz;
-            item.freqZ = locFz[k] || resZ.domFreqHz;
-            item.freqDom = Math.max(item.freqX, item.freqY, item.freqZ);
+            // Kanonische Zuordnung: X-Kanal (Roll) = Sensor Y, Y-Kanal (Pitch) = Sensor X
+            item.freqX = locY.freq[k];
+            item.freqY = locX.freq[k];
+            item.freqZ = locZ.freq[k];
+
+            // Dominante Frequenz anhand der stärksten lokalen Schwingungsenergie (statt Math.max über Hz)
+            const eX = locY.energy[k];
+            const eY = locX.energy[k];
+            const eZ = locZ.energy[k];
+
+            if (eX >= eY && eX >= eZ && eX > 0.0) {
+                item.freqDom = item.freqX;
+            } else if (eY >= eX && eY >= eZ && eY > 0.0) {
+                item.freqDom = item.freqY;
+            } else if (eZ > 0.0) {
+                item.freqDom = item.freqZ;
+            } else {
+                item.freqDom = 0.0;
+            }
         }
     }
 
