@@ -301,8 +301,29 @@ window.clearImuLogCache = clearImuLogCache;
  * 3. Extracted startReplay3DLoop() so reopening #imu-replay-deck after closeImuReplayDeck() restarts rendering.
  * [DISMISSED]: Early return in initReplay3D() when repRenderer existed left repAnimId3D permanently null after first close.
  */
+/*
+ * Breadcrumb: 2026-10-15 22:50 - WebGL Render-Loop Restart, Resize Guard & Diagnostic Logger
+ * Breadcrumb: 2026-10-25 12:05 - Dual-Projection Camera (Ortho/Iso Toggle), HiDPI Canvas Centering & True Mesh Pivot
+ * [CRITICAL BUGFIX & FEATURE FLAG - 3D MODEL CENTERING, VIEW RESET & ORTHO/ISO TOGGLE]:
+ * 1. Behebt den HiDPI-Zentrierungsfehler: repRenderer.setSize(w, h, true) setzt die CSS-Maße exakt auf
+ *    Container-Breite/Höhe, sodass (0,0,0) bei jedem devicePixelRatio exakt in der Fenstermitte liegt.
+ * 2. Implementiert eine Dual-Kamera-Architektur (repPerspCamera & repOrthoCamera) mit frustum-synchroner
+ *    Umschaltung via toggleReplayProjection() (nahtloser Wechsel zwischen Orthographisch & Isometrisch).
+ * 3. Zentriert das GLTF-Modell in normalizeAndCenterGltf() exakt über die Welt-Bounding-Box aller
+ *    Mesh-Geometrien nach der Skalierung.
+ * 4. setReplayCameraView('reset') setzt OrbitControls-Pan (target = 0,0,0), Kamera-Zoom (1.0),
+ *    Up-Vektor (0,1,0) und Blickwinkel zurück und zentriert das Modell sofort im Fenster.
+ * [DISMISSED]: repRenderer.setSize(w, h, false) ohne CSS-Größenbindung; front/side Y-Versatz von +0.3.
+ */
 let lastRepW = 0;
 let lastRepH = 0;
+
+let repPerspCamera = null;
+let repOrthoCamera = null;
+let repIsOrtho = false; // false = Isometrisch/Perspektivisch, true = Orthographisch (Parallelprojektion)
+let repActiveViewPreset = 'iso';
+const REP_CAM_REF_DIST = 3.8;
+const REP_CAM_FOV_DEG = 40.0;
 
 function replayDiagLog(stage, msg, isError = false) {
     const formatted = `[REPLAY ${stage}] ${msg}`;
@@ -317,6 +338,183 @@ function replayDiagLog(stage, msg, isError = false) {
 }
 window.replayDiagLog = replayDiagLog;
 
+function updateReplayOrthoFrustum(w, h) {
+    if (!repOrthoCamera || w <= 0 || h <= 0) return;
+    const aspect = w / h;
+    const halfH = REP_CAM_REF_DIST * Math.tan((REP_CAM_FOV_DEG * 0.5) * (Math.PI / 180.0));
+    const halfW = halfH * aspect;
+
+    repOrthoCamera.left = -halfW;
+    repOrthoCamera.right = halfW;
+    repOrthoCamera.top = halfH;
+    repOrthoCamera.bottom = -halfH;
+    repOrthoCamera.updateProjectionMatrix();
+}
+
+function updateReplayProjectionUI() {
+    const btn = document.getElementById('btn-replay-proj-toggle');
+    if (btn) {
+        if (repIsOrtho) {
+            btn.innerHTML = '📐 Orthographisch';
+            btn.className = 'px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-xs transition';
+            btn.title = 'Aktuell: Orthographische Parallelprojektion (Klicken für Isometrische 3D-Perspektive)';
+        } else {
+            btn.innerHTML = '🎲 Isometrisch';
+            btn.className = 'px-2 py-1 text-[11px] font-bold rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition';
+            btn.title = 'Aktuell: Isometrische 3D-Darstellung (Klicken für Orthographische Parallelprojektion)';
+        }
+    }
+
+    ['iso', 'top', 'front', 'side'].forEach(v => {
+        const vBtn = document.getElementById(`btn-replay-view-${v}`);
+        if (!vBtn) return;
+        if (v === repActiveViewPreset) {
+            vBtn.className = 'px-2 py-1 text-[11px] font-bold rounded bg-slate-800 text-white shadow-xs transition';
+        } else {
+            vBtn.className = 'px-2 py-1 text-[11px] font-bold rounded hover:bg-slate-200 text-slate-700 transition';
+        }
+    });
+}
+
+function ensureReplay3DToolbarDOM() {
+    const container = document.getElementById('replay-canvas-container');
+    if (!container || !container.parentElement) return;
+
+    const toolbar = container.parentElement.querySelector('.absolute.top-2.right-2');
+    if (!toolbar) return;
+
+    if (!document.getElementById('btn-replay-proj-toggle')) {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'btn-replay-proj-toggle';
+        toggleBtn.type = 'button';
+        toggleBtn.onclick = () => toggleReplayProjection();
+        toolbar.insertBefore(toggleBtn, toolbar.firstChild);
+    }
+
+    // IDs für bestehende View-Buttons nachrüsten, falls im HTML noch nicht gesetzt
+    const buttons = toolbar.querySelectorAll('button');
+    buttons.forEach(b => {
+        const oc = b.getAttribute('onclick') || '';
+        if (oc.includes("'iso'")) b.id = 'btn-replay-view-iso';
+        else if (oc.includes("'top'")) b.id = 'btn-replay-view-top';
+        else if (oc.includes("'front'")) b.id = 'btn-replay-view-front';
+        else if (oc.includes("'side'")) b.id = 'btn-replay-view-side';
+        else if (oc.includes("'reset'")) {
+            b.id = 'btn-replay-view-reset';
+            b.title = 'Modell & Kamera im Fenster zentrieren (View Reset)';
+        }
+    });
+
+    updateReplayProjectionUI();
+}
+
+/*
+ * Breadcrumb: 2026-10-25 12:30 - Duplicated Top Playback Bar & 1:1 True-to-Scale 3D Displacement
+ * [CRITICAL UX & PHYSICS FEATURE FLAG - DUAL TRANSPORT BAR & TRUE-TO-SCALE 3D MOTION]:
+ * 1. Erzeugt automatisch die obere Abspielleiste (#replay-transport-bar-top) direkt unter dem
+ *    3D-Viewport, falls sie im HTML noch nicht vorhanden ist.
+ * 2. Berechnet in normalizeAndCenterGltf() den realen 1:1 Maßstabsfaktor replaySceneUnitsPerMm
+ *    aus den CAD-Abmessungen (1.8 Einheiten = reale Gehäuselänge in mm).
+ */
+let replaySceneUnitsPerMm = 0.01; // 1.00 Scene-Unit = 100 mm (1.8 Units = 180 mm Gehäuse)
+
+function ensureTopReplayTransportBarDOM() {
+    if (document.getElementById('replay-transport-bar-top')) return;
+    const container = document.getElementById('replay-canvas-container');
+    const viewportWrapper = container ? container.parentElement : null;
+    if (!viewportWrapper || !viewportWrapper.parentElement) return;
+
+    const topBar = document.createElement('div');
+    topBar.id = 'replay-transport-bar-top';
+    topBar.className = 'bg-slate-100 p-3.5 rounded-lg border border-slate-300 flex flex-col gap-3 mb-4';
+    topBar.innerHTML = `
+        <div class="flex items-center gap-3">
+            <span id="replay-current-time-label-top" class="text-xs font-mono text-slate-700 w-14">0.0s</span>
+            <input type="range" id="replay-scrubber-top" min="0" max="100" value="0" step="1"
+                   oninput="onReplayScrub(this.value)"
+                   class="w-full h-2 bg-slate-300 rounded-lg cursor-pointer accent-green-600">
+            <span id="replay-total-time-label-top" class="text-xs font-mono text-slate-500 w-14 text-right">0.0s</span>
+        </div>
+        <div class="flex flex-wrap justify-between items-center gap-3 pt-2 border-t border-slate-200">
+            <div class="flex items-center gap-2 flex-wrap">
+                <button id="btn-replay-play-top" onclick="toggleReplayPlay()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition">
+                    ▶ Abspielen
+                </button>
+                <button onclick="resetReplayPlayback()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 border border-slate-300 px-3 py-1.5 rounded text-xs font-bold transition">
+                    ⏮ Reset
+                </button>
+                <div class="flex items-center gap-1 bg-white border border-slate-300 rounded-lg p-0.5 shadow-sm ml-1">
+                    <span class="text-[10px] text-slate-500 font-semibold px-1 hidden md:inline">Tempo:</span>
+                    <button type="button" onclick="setReplaySpeedPreset(0.1)" id="btn-spd-0.1-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.1x</button>
+                    <button type="button" onclick="setReplaySpeedPreset(0.25)" id="btn-spd-0.25-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.25x</button>
+                    <button type="button" onclick="setReplaySpeedPreset(0.5)" id="btn-spd-0.5-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.5x</button>
+                    <button type="button" onclick="setReplaySpeedPreset(1.0)" id="btn-spd-1.0-top" class="px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition">1.0x</button>
+                    <button type="button" onclick="setReplaySpeedPreset(2.0)" id="btn-spd-2.0-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">2.0x</button>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <label class="text-xs text-slate-600 font-semibold whitespace-nowrap">Aufweckzyklus:</label>
+                <select id="replay-cycle-select-top" onchange="onReplayCycleSelect(this.value)" class="bg-white border border-slate-300 rounded px-3 py-1.5 text-xs text-green-700 font-mono font-bold outline-none">
+                    <option value="ALL">Alle Zyklen der Datei</option>
+                </select>
+            </div>
+        </div>
+    `;
+    viewportWrapper.insertAdjacentElement('afterend', topBar);
+}
+
+
+function toggleReplayProjection(forceOrthoState) {
+    if (!repPerspCamera || !repOrthoCamera) return;
+
+    const nextOrtho = (typeof forceOrthoState === 'boolean') ? forceOrthoState : !repIsOrtho;
+    if (nextOrtho === repIsOrtho) {
+        updateReplayProjectionUI();
+        return;
+    }
+
+    const target = repControls ? repControls.target.clone() : new THREE.Vector3(0, 0, 0);
+    const prevCam = repCamera;
+    repIsOrtho = nextOrtho;
+    repCamera = repIsOrtho ? repOrthoCamera : repPerspCamera;
+
+    if (prevCam) {
+        const offset = prevCam.position.clone().sub(target);
+        const dist = Math.max(0.5, offset.length());
+
+        repCamera.up.copy(prevCam.up);
+
+        if (repIsOrtho) {
+            // Wechsel von Perspektive -> Orthographisch: Abstand in äquivalenten Ortho-Zoom umrechnen
+            repCamera.position.copy(prevCam.position);
+            repOrthoCamera.zoom = Math.max(0.25, Math.min(6.0, REP_CAM_REF_DIST / dist));
+            repOrthoCamera.updateProjectionMatrix();
+        } else {
+            // Wechsel von Orthographisch -> Perspektive: Ortho-Zoom in äquivalenten Kameraabstand umrechnen
+            const orthoZoom = Math.max(0.25, repOrthoCamera.zoom || 1.0);
+            const newDist = Math.max(1.2, Math.min(8.0, REP_CAM_REF_DIST / orthoZoom));
+            offset.normalize().multiplyScalar(newDist);
+            repCamera.position.copy(target).add(offset);
+            repPerspCamera.zoom = 1.0;
+            repPerspCamera.updateProjectionMatrix();
+        }
+    }
+
+    repCamera.lookAt(target);
+
+    if (repControls) {
+        repControls.object = repCamera;
+        repControls.target.copy(target);
+        repControls.update();
+    }
+
+    updateReplayProjectionUI();
+    if (repRenderer && repScene && repCamera) {
+        repRenderer.render(repScene, repCamera);
+    }
+}
+window.toggleReplayProjection = toggleReplayProjection;
+
 function resizeReplay3D() {
     const container = document.getElementById('replay-canvas-container');
     if (!container || !repRenderer || !repCamera) return;
@@ -325,9 +523,15 @@ function resizeReplay3D() {
     if (w > 0 && h > 0 && (w !== lastRepW || h !== lastRepH)) {
         lastRepW = w;
         lastRepH = h;
-        repCamera.aspect = w / h;
-        repCamera.updateProjectionMatrix();
-        repRenderer.setSize(w, h, false);
+
+        if (repPerspCamera) {
+            repPerspCamera.aspect = w / h;
+            repPerspCamera.updateProjectionMatrix();
+        }
+        updateReplayOrthoFrustum(w, h);
+
+        repRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        repRenderer.setSize(w, h, true);
         if (repScene) repRenderer.render(repScene, repCamera);
     }
 }
@@ -361,6 +565,8 @@ function startReplay3DLoop() {
 
 function initReplay3D() {
     ensureFrequencyBadgeDOM();
+    ensureReplay3DToolbarDOM();
+    ensureTopReplayTransportBarDOM(); // <-- HIER ERGÄNZEN
     const container = document.getElementById('replay-canvas-container');
     if (!container || typeof THREE === 'undefined') {
         replayDiagLog('3D-INIT', 'Container oder THREE.js nicht verfügbar!', true);
@@ -383,23 +589,37 @@ function initReplay3D() {
 
         repScene = new THREE.Scene();
         repScene.background = new THREE.Color(0xdbe2ea);
-        repCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
-        repCamera.position.set(2.4, 2.0, 2.8);
-        repCamera.lookAt(0, 0, 0);
+
+        repPerspCamera = new THREE.PerspectiveCamera(REP_CAM_FOV_DEG, w / h, 0.1, 1000);
+        repPerspCamera.position.set(2.2, 1.8, 2.5);
+        repPerspCamera.lookAt(0, 0, 0);
+
+        repOrthoCamera = new THREE.OrthographicCamera(-2, 2, 1.5, -1.5, -50, 1000);
+        updateReplayOrthoFrustum(w, h);
+        repOrthoCamera.position.set(2.2, 1.8, 2.5);
+        repOrthoCamera.lookAt(0, 0, 0);
+
+        repCamera = repIsOrtho ? repOrthoCamera : repPerspCamera;
 
         repRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-        repRenderer.setSize(w, h, false);
         repRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        repRenderer.setSize(w, h, true);
         repRenderer.setClearColor(0xdbe2ea, 1.0);
+        repRenderer.domElement.style.display = 'block';
+        repRenderer.domElement.style.width = '100%';
+        repRenderer.domElement.style.height = '100%';
+        container.innerHTML = '';
         container.appendChild(repRenderer.domElement);
 
         if (typeof THREE.OrbitControls !== 'undefined') {
             repControls = new THREE.OrbitControls(repCamera, repRenderer.domElement);
             repControls.enableDamping = true;
             repControls.dampingFactor = 0.08;
+            repControls.enablePan = true;
             repControls.target.set(0, 0, 0);
             repControls.maxDistance = 8.0;
-            repControls.minDistance = 1.2;
+            repControls.minDistance = 1.0;
+            repControls.update();
         }
 
         const l1 = new THREE.DirectionalLight(0xffffff, 1.3);
@@ -413,11 +633,12 @@ function initReplay3D() {
         repScene.add(new THREE.AmbientLight(0xffffff, 0.85));
 
         const grid = new THREE.GridHelper(6, 12, 0x009B4C, 0xcbd5e1);
-        grid.position.y = -0.5;
+        grid.position.y = -0.55;
         repScene.add(grid);
 
         createReplayFallbackCube();
         loadReplayGLBModel();
+        setReplayCameraView('iso');
 
         if (!repContainerObserver && window.ResizeObserver) {
             repContainerObserver = new ResizeObserver(() => {
@@ -447,34 +668,66 @@ function closeImuReplayDeck() {
 
 /*
  * Breadcrumb: 2026-10-06 23:15 - Camera View Parity with live-3d.js
- * [CRITICAL BUGFIX FLAG - FRONT/SIDE PERSPECTIVE RESTORATION]:
- * Synchronisiert Kamerapositionen exakt mit live-3d.js ('front': Z=3.8, 'side': X=3.8).
+ * Breadcrumb: 2026-10-25 12:05 - Exact Model-Center Alignment & Full Pan/Zoom Reset
+ * [CRITICAL BUGFIX FLAG - VIEW RESET & AXIS-CENTERED PRESETS]:
+ * 1. Zentriert das Kameraziel (repControls.target) bei jedem Preset und bei 'reset' exakt auf
+ *    den Modellursprung (0, 0, 0).
+ * 2. Setzt bei 'front' und 'side' die Kamerahöhe exakt auf y = 0.0 (statt 0.3), damit das Modell
+ *    ohne vertikalen Versatz exakt in der Bildmitte steht.
+ * 3. 'reset' stellt Pan, Zoom (1.0) und Up-Vektor wieder her und zentriert das Modell im Viewport.
+ */
+/*
+ * Breadcrumb: 2026-10-06 23:15 - Camera View Parity with live-3d.js
+ * Breadcrumb: 2026-10-25 12:05 - Exact Model-Center Alignment & Full Pan/Zoom Reset
+ * Breadcrumb: 2026-10-25 12:20 - Swapped Front/Side Camera Axes & Fixed Origin Target (0,0,0)
+ * [CRITICAL BUGFIX FLAG - FRONT/SIDE VIEW ORIENTATION & ORIGIN-LOCKED VIEW RESET]:
+ * 1. Tauscht 'front' ([3.8, 0.0, 0]) und 'side' ([0, 0.0, 3.8]), damit Front- und Seitenansicht
+ *    exakt mit der 3D-Welttransformation des Gehäuses übereinstimmen.
+ * 2. Verankert das Kameraziel (targetCenter) strikt am Ruhe-Ursprung (0, 0, 0) statt an der
+ *    momentanen Schwingungsauslenkung repMesh.position, sodass 'reset' das Modell immer sauber
+ *    im Fadenkreuz zentriert und Schwingungen relativ zur Fenstermitte sichtbar bleiben.
  */
 function setReplayCameraView(viewName) {
-    if (!repCamera) return;
+    if (!repCamera || !repPerspCamera || !repOrthoCamera) return;
 
     const presets = {
-        iso: [2.4, 2.0, 2.8],
-        reset: [2.4, 2.0, 2.8],
-        top: [0, 4.0, 0.001],
-        front: [0, 0.3, 3.8],
-        side: [3.8, 0.3, 0]
+        iso: { pos: [2.2, 1.8, 2.5], up: [0, 1, 0] },
+        top: { pos: [0, 3.8, 0.0001], up: [0, 0, -1] },
+        front: { pos: [3.8, 0.0, 0], up: [0, 1, 0] },
+        side: { pos: [0, 0.0, 3.8], up: [0, 1, 0] }
     };
 
-    const pos = presets[viewName] || presets.iso;
-    repCamera.position.set(pos[0], pos[1], pos[2]);
-    repCamera.lookAt(0, 0, 0);
+    if (viewName === 'reset') {
+        viewName = repActiveViewPreset || 'iso';
+    } else if (presets[viewName]) {
+        repActiveViewPreset = viewName;
+    }
+
+    const chosen = presets[viewName] || presets.iso;
+    // Kameraziel immer fest auf den Ruhe-Ursprung (0, 0, 0) richten:
+    const targetCenter = new THREE.Vector3(0, 0, 0);
+
+    [repPerspCamera, repOrthoCamera].forEach(cam => {
+        cam.up.set(chosen.up[0], chosen.up[1], chosen.up[2]);
+        cam.position.set(chosen.pos[0], chosen.pos[1], chosen.pos[2]);
+        cam.zoom = 1.0;
+        cam.lookAt(targetCenter);
+        cam.updateProjectionMatrix();
+    });
 
     if (repControls) {
-        repControls.target.set(0, 0, 0);
+        repControls.object = repCamera;
+        repControls.target.copy(targetCenter);
         repControls.update();
     }
+
+    updateReplayProjectionUI();
+
     if (repRenderer && repScene && repCamera) {
         repRenderer.render(repScene, repCamera);
     }
 }
 window.setReplayCameraView = setReplayCameraView;
-
 
 /*
  * Breadcrumb: 2026-10-07 00:40 - Canonical 3D Axis Alignment (X = Roll Red / Y = Pitch Green / Z = Yaw Blue)
@@ -550,17 +803,39 @@ function createReplayFallbackCube() {
 
 /*
  * Breadcrumb: 2026-10-06 23:50 - ESP Captive Portal Parity: Native CAD Mesh Orientation
- * [CRITICAL BUGFIX & FEATURE PARITY - GLTF BASIS ALIGNMENT]:
- * Übernimmt die native Orientierung aus setupModelMesh() ohne künstliche -90° X-Vordrehung.
+ * Breadcrumb: 2026-10-25 12:05 - Exact Post-Scale Mesh-Geometry Bounding-Box Centering
+ * [CRITICAL BUGFIX FLAG - TRUE GEOMETRIC ORIGIN CENTERING]:
+ * Berechnet die Bounding-Box ausschließlich über tatsächliche Mesh-Geometrien (child.isMesh)
+ * NACH dem Skalieren und Weltmatrix-Update, sodass versetzte CAD-Ursprünge aus Inventor/Blender
+ * zu 100% im Dreh- und Kamerazentrum (0, 0, 0) liegen.
  */
 function normalizeAndCenterGltf(gltfScene) {
+    gltfScene.position.set(0, 0, 0);
+    gltfScene.rotation.set(0, 0, 0);
+    gltfScene.scale.set(1, 1, 1);
+    gltfScene.updateMatrixWorld(true);
+
+    const rawBox = new THREE.Box3();
+    let hasMesh = false;
+
     gltfScene.traverse((child) => {
-        if (child.isMesh && child.material) child.material.side = THREE.DoubleSide;
+        if (child.isMesh) {
+            if (child.material) child.material.side = THREE.DoubleSide;
+            if (child.geometry) {
+                child.geometry.computeBoundingBox();
+                const cb = child.geometry.boundingBox.clone();
+                cb.applyMatrix4(child.matrixWorld);
+                rawBox.union(cb);
+                hasMesh = true;
+            }
+        }
     });
 
-    const box = new THREE.Box3().setFromObject(gltfScene);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
+    if (!hasMesh) {
+        rawBox.setFromObject(gltfScene);
+    }
+
+    const size = rawBox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
 
     const group = new THREE.Group();
@@ -568,8 +843,37 @@ function normalizeAndCenterGltf(gltfScene) {
     if (maxDim > 0) {
         const s = 1.8 / maxDim;
         gltfScene.scale.set(s, s, s);
-        gltfScene.position.set(-center.x * s, -center.y * s, -center.z * s);
+        gltfScene.updateMatrixWorld(true);
+
+        // Physikalische Gehäuselänge in mm aus der CAD-Einheit (mm, cm oder m) ableiten:
+        let physicalLengthMm = 180.0;
+        if (maxDim >= 50.0 && maxDim <= 500.0) {
+            physicalLengthMm = maxDim;          // CAD-Export in Millimetern (z. B. 120 - 180 mm)
+        } else if (maxDim >= 5.0 && maxDim < 50.0) {
+            physicalLengthMm = maxDim * 10.0;   // CAD-Export in Zentimetern (z. B. 12 - 18 cm)
+        } else if (maxDim >= 0.05 && maxDim < 0.50) {
+            physicalLengthMm = maxDim * 1000.0; // GLTF-Standard in Metern (z. B. 0.12 - 0.18 m)
+        }
+        replaySceneUnitsPerMm = 1.8 / physicalLengthMm;
+
+        const scaledBox = new THREE.Box3();
+        if (hasMesh) {
+            gltfScene.traverse((child) => {
+                if (child.isMesh && child.geometry && child.geometry.boundingBox) {
+                    const cb = child.geometry.boundingBox.clone();
+                    cb.applyMatrix4(child.matrixWorld);
+                    scaledBox.union(cb);
+                }
+            });
+        } else {
+            scaledBox.setFromObject(gltfScene);
+        }
+
+        const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+        gltfScene.position.set(-scaledCenter.x, -scaledCenter.y, -scaledCenter.z);
+        gltfScene.updateMatrixWorld(true);
     }
+
     group.add(gltfScene);
     attachImuAxes(group);
     return group;
@@ -580,8 +884,14 @@ function setupReplayModelMesh(gltfScene) {
     if (!rawGltfScene) rawGltfScene = gltfScene.clone(true);
 
     repMesh = normalizeAndCenterGltf(gltfScene);
+    repMesh.position.set(0, 0, 0);
     repScene.add(repMesh);
-    if (repRenderer && repScene && repCamera) repRenderer.render(repScene, repCamera);
+
+    if (replayFilteredData && replayFilteredData.length > 0) {
+        renderInterpolatedFrame(replayCurrentTimeSec);
+    } else {
+        setReplayCameraView(repActiveViewPreset || 'iso');
+    }
 
     if (mountScene && (!mountMesh || mountMesh.name !== 'imuCadGroup')) {
         setupMountingModelMesh(rawGltfScene.clone(true));
@@ -946,9 +1256,9 @@ function calculateAllDisplacements() {
             rawAz[k] = Number.isFinite(item.az) ? item.az : 0.0;
         }
 
-        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, 0.18);
-        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, 0.18);
-        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, 0.18);
+        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, 1.20);
+        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, 1.20);
+        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, 1.20);
 
         const locFx = computeLocalWindowFrequencies(rawAx, replaySampleRateHz, resX.domFreqHz);
         const locFy = computeLocalWindowFrequencies(rawAy, replaySampleRateHz, resY.domFreqHz);
@@ -1198,7 +1508,8 @@ function resizeMounting3D() {
         lastMountH = h;
         mountCamera.aspect = w / h;
         mountCamera.updateProjectionMatrix();
-        mountRenderer.setSize(w, h, false);
+        mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        mountRenderer.setSize(w, h, true);
         if (mountScene) mountRenderer.render(mountScene, mountCamera);
     }
 }
@@ -1247,8 +1558,8 @@ function initMounting3D() {
     mountCamera.lookAt(0, 0, 0);
 
     mountRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    mountRenderer.setSize(w, h, false);
     mountRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    mountRenderer.setSize(w, h, true); // <-- true statt false für HiDPI-Screens
     container.appendChild(mountRenderer.domElement);
 
     if (typeof THREE.OrbitControls !== 'undefined') {
@@ -1493,11 +1804,23 @@ function applyEspModelQuaternion(targetMesh, qw, qx, qy, qz) {
     applyModelQuaternionToMesh(targetMesh, qMod.w, qMod.x, qMod.y, qMod.z);
 }
 
+/*
+ * Breadcrumb: 2026-10-25 12:30 - True-to-Scale 1:1 3D Displacement & Dual Scrubber Sync
+ * [CRITICAL PHYSICS & UI PARITY FLAG - 1:1 GEOMETRIC DISPLACEMENT & TOP/BOTTOM SCRUBBER]:
+ * 1. Ersetzt die nichtlineare tanh-Skalierung durch den exakt linearen 1:1 Maßstab
+ *    (scale = replaySceneUnitsPerMm): 10 mm Hub entsprechen im 3D-Viewport exakt 10 mm
+ *    relativ zur realen Gehäuselänge (180 mm = 1.8 Scene-Units -> 1 mm = 0.01 Units).
+ * 2. Richtet die Vorzeichen des lokalen Verschiebungsvektors (-effDy, +effDx, +effDz)
+ *    konsistent an sensorToModelQuat (x = -qy, y = +qx, z = +qz) aus.
+ * 3. Synchronisiert Zeitanzeige und Scrubber-Position gleichzeitig in der oberen und unteren Leiste.
+ * [DISMISSED]: Nichtlineare Überhöhung via maxRadius * Math.tanh(dispMag / 20.0).
+ */
 function renderInterpolatedFrame(tSec) {
     const total = replayFilteredData.length;
     if (total === 0) return;
 
     ensureFrequencyBadgeDOM();
+    ensureTopReplayTransportBarDOM();
 
     const sampleInterval = replaySampleIntervalSec;
     const exactIndex = tSec / sampleInterval;
@@ -1537,17 +1860,18 @@ function renderInterpolatedFrame(tSec) {
         qA.premultiply(new THREE.Quaternion(-0.707107, 0, 0, 0.707107)); // -90° X
         repMesh.quaternion.copy(qA);
 
-        const dispMag = Math.hypot(dxD, dyD, dzD);
-        if (dispMag > 1e-4) {
-            const maxRadius = 1.5;
-            const refDisp = 350.0;
-            const sceneDist = maxRadius * Math.tanh(dispMag / refDisp);
-            const scale = sceneDist / dispMag;
+        const effDx = replayVisibleCurves.dx ? dxD : 0.0;
+        const effDy = replayVisibleCurves.dy ? dyD : 0.0;
+        const effDz = replayVisibleCurves.dz ? dzD : 0.0;
+        const dispMag = Math.hypot(effDx, effDy, effDz);
 
+        if (dispMag > 1e-3) {
+            // Exakter 1:1 Maßstab relativ zur realen Gehäusegröße (ohne tanh-Verzerrung)
+            const scale = replaySceneUnitsPerMm;
             const localVec = new THREE.Vector3(
-                dyD * scale,
-                -dxD * scale,
-                dzD * scale
+                -effDy * scale, // Modell X-Achse (Roll, Rot)   = -Sensor_Y
+                effDx * scale, // Modell Y-Achse (Pitch, Grün) = +Sensor_X
+                effDz * scale  // Modell Z-Achse (Yaw, Blau)   = +Sensor_Z
             );
 
             localVec.applyQuaternion(repMesh.quaternion);
@@ -1626,11 +1950,17 @@ function renderInterpolatedFrame(tSec) {
         curTimeEl.innerText = `+${tSec.toFixed(2)}s (${localTime})`;
     }
 
-    const curTimeLbl = document.getElementById('replay-current-time-label');
-    if (curTimeLbl) curTimeLbl.innerText = tSec.toFixed(1) + 's';
+    const timeStr = tSec.toFixed(1) + 's';
+    ['replay-current-time-label', 'replay-current-time-label-top'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = timeStr;
+    });
 
-    const scrubber = document.getElementById('replay-scrubber');
-    if (scrubber) scrubber.value = Math.round(exactIndex);
+    const scrubVal = Math.round(exactIndex);
+    ['replay-scrubber', 'replay-scrubber-top'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = scrubVal;
+    });
 
     drawReplayGraph(tSec);
 }
@@ -1663,11 +1993,24 @@ function xToTime(x, w, leftMargin) {
 function setReplaySpeedPreset(spd) {
     replaySpeed = parseFloat(spd);
     [0.1, 0.25, 0.5, 1.0, 2.0].forEach(s => {
-        const btn = document.getElementById(`btn-spd-${s}`);
-        if (btn) {
-            btn.className = (s === replaySpeed)
-                ? 'px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition'
-                : 'px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition';
+        ['', '-top'].forEach(suffix => {
+            const btn = document.getElementById(`btn-spd-${s}${suffix}`);
+            if (btn) {
+                btn.className = (s === replaySpeed)
+                    ? 'px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition'
+                    : 'px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition';
+            }
+        });
+    });
+}
+
+function syncReplayScrubberBounds(minIdx, maxIdx, curIdx) {
+    ['replay-scrubber', 'replay-scrubber-top'].forEach(id => {
+        const scrubber = document.getElementById(id);
+        if (scrubber) {
+            scrubber.min = minIdx;
+            scrubber.max = maxIdx;
+            scrubber.value = curIdx;
         }
     });
 }
@@ -1681,12 +2024,11 @@ function resetReplayZoom() {
     const btnReset = document.getElementById('btn-replay-reset-zoom');
     if (btnReset) btnReset.classList.add('hidden');
 
-    const scrubber = document.getElementById('replay-scrubber');
-    if (scrubber) {
-        scrubber.min = 0;
-        scrubber.max = Math.max(0, replayFilteredData.length - 1);
-        scrubber.value = Math.round(replayCurrentTimeSec / replaySampleIntervalSec);
-    }
+    syncReplayScrubberBounds(
+        0,
+        Math.max(0, replayFilteredData.length - 1),
+        Math.round(replayCurrentTimeSec / replaySampleIntervalSec)
+    );
 
     renderInterpolatedFrame(replayCurrentTimeSec);
 }
@@ -1747,12 +2089,11 @@ function attachCanvasInteraction() {
                 if (btnReset) btnReset.classList.remove('hidden');
                 if (spanLbl) spanLbl.innerText = `${(t2 - t1).toFixed(2)}s`;
 
-                const scrubber = document.getElementById('replay-scrubber');
-                if (scrubber) {
-                    scrubber.min = Math.floor(t1 / replaySampleIntervalSec);
-                    scrubber.max = Math.ceil(t2 / replaySampleIntervalSec);
-                    scrubber.value = Math.round(t1 / replaySampleIntervalSec);
-                }
+                syncReplayScrubberBounds(
+                    Math.floor(t1 / replaySampleIntervalSec),
+                    Math.ceil(t2 / replaySampleIntervalSec),
+                    Math.round(t1 / replaySampleIntervalSec)
+                );
 
                 renderInterpolatedFrame(replayCurrentTimeSec);
             }
@@ -2337,21 +2678,29 @@ function onReplayScrub(val) {
 
 function toggleReplayPlay() {
     replayIsPlaying = !replayIsPlaying;
-    const btn = document.getElementById('btn-replay-play');
     const { tStart, tEnd } = getTimeBounds();
 
-    if (replayIsPlaying) {
-        if (replayCurrentTimeSec >= tEnd) {
-            replayCurrentTimeSec = tStart;
+    if (replayIsPlaying && replayCurrentTimeSec >= tEnd) {
+        replayCurrentTimeSec = tStart;
+    }
+
+    ['btn-replay-play', 'btn-replay-play-top'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        if (replayIsPlaying) {
+            btn.innerText = '⏸ Pause';
+            btn.className = 'bg-yellow-600 text-white px-4 py-1.5 rounded text-xs font-bold transition';
+        } else {
+            btn.innerText = '▶ Abspielen';
+            btn.className = 'bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition';
         }
-        btn.innerText = '⏸ Pause';
-        btn.className = 'bg-yellow-600 text-white px-4 py-1.5 rounded text-xs font-bold transition';
+    });
+
+    if (replayIsPlaying) {
         replayLastFrameTime = performance.now();
         replayAnimId = requestAnimationFrame(playLoop);
-    } else {
-        btn.innerText = '▶ Abspielen';
-        btn.className = 'bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition';
-        if (replayAnimId) cancelAnimationFrame(replayAnimId);
+    } else if (replayAnimId) {
+        cancelAnimationFrame(replayAnimId);
     }
 }
 
@@ -2422,6 +2771,13 @@ function formatReplayTimestamp(ts) {
 function onReplayCycleSelect(cycleVal) {
     if (!replayDataRaw || replayDataRaw.length === 0) return;
 
+    ['replay-cycle-select', 'replay-cycle-select-top'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (sel && sel.value !== String(cycleVal)) {
+            sel.value = String(cycleVal);
+        }
+    });
+
     if (cycleVal === 'ALL' || !cycleVal) {
         replayFilteredData = replayDataRaw.slice();
     } else {
@@ -2436,13 +2792,15 @@ function onReplayCycleSelect(cycleVal) {
     replayCurrentTimeSec = 0.0;
     replayGraphCacheKey = '';
 
-    const totTimeLbl = document.getElementById('replay-total-time-label');
-    const durLbl = document.getElementById('replay-duration-label');
     const totalSec = Math.max(0, (replayFilteredData.length - 1) * replaySampleIntervalSec);
-    if (totTimeLbl) totTimeLbl.innerText = totalSec.toFixed(1) + 's';
+    ['replay-total-time-label', 'replay-total-time-label-top'].forEach(id => {
+        const totTimeLbl = document.getElementById(id);
+        if (totTimeLbl) totTimeLbl.innerText = totalSec.toFixed(1) + 's';
+    });
+
+    const durLbl = document.getElementById('replay-duration-label');
     if (durLbl) durLbl.innerText = totalSec.toFixed(1) + ' s';
 
-    // resetReplayZoom setzt Scrubber-Grenzen und ruft genau einmal renderInterpolatedFrame() + drawReplayGraph() auf
     resetReplayZoom();
 }
 window.onReplayCycleSelect = onReplayCycleSelect;
@@ -2607,8 +2965,8 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
 }
 
 function populateReplayCycleDropdown(chunkStats, isDayMerge) {
-    const select = document.getElementById('replay-cycle-select');
-    if (!select) return;
+    ensureTopReplayTransportBarDOM();
+    let html = '';
 
     if (isDayMerge || chunkStats.length > 1) {
         const prefixLbl = isDayMerge ? 'Gesamter Tag' : 'Ganze Datei';
@@ -2617,13 +2975,16 @@ function populateReplayCycleDropdown(chunkStats, isDayMerge) {
             const cs = chunkStats[i];
             opts.push(`<option value="${cs.cycleId}">Event #${cs.cycleId} (${cs.timeStr} Uhr - ${cs.samplesInChunk} Samples)</option>`);
         }
-        select.innerHTML = opts.join('');
+        html = opts.join('');
     } else {
-        select.innerHTML = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
+        html = `<option value="ALL">Datei (${replayDataRaw.length} Punkte)</option>`;
     }
+
+    ['replay-cycle-select', 'replay-cycle-select-top'].forEach(id => {
+        const select = document.getElementById(id);
+        if (select) select.innerHTML = html;
+    });
 }
-
-
 
 
 /*
