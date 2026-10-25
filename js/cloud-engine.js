@@ -817,6 +817,67 @@ function getFileDayKey(f) {
  * 3. changeCalendarMonth() triggers fetchImuCloudLogs() asynchronously to pull the target month.
  * [DISMISSED]: Unfiltered .select('*') on imu_log_files without device/date bounds; PostgREST 1000-row cap pushed September files out of view.
  */
+/*
+ * Breadcrumb: 2026-10-18 16:00 - Device- & Month-Scoped Query with 10k Limit
+ * Breadcrumb: 2026-10-25 09:12 - Brownout 12:00 UTC Fallback File Filter
+ * [CRITICAL BUGFIX FLAG - FILTER REPEATED 12:00 UTC BROWNOUT REBOOT CHUNKS]:
+ * 1. Erkennt Dateien, die durch Brownout-Resets auf den 12:00:00 UTC Fallback (last_date.txt)
+ *    gefallen sind (Zeitfenster 12:00:00 - 12:01:59 UTC bei mehrfach auftretenden 12:00-Chunks,
+ *    zurückgesetztem Chunk-Counter _c0001/_c0002 oder >10 Min Abweichung zu uploaded_at).
+ * 2. Filtert diese Artefakte direkt in fetchImuCloudLogs() vor Kalender- und Timeline-Rendering.
+ * [DISMISSED]: Ungefilterte Übernahme aller imu_log_files inklusive 12:00 UTC Brownout-Dubletten.
+ */
+function isBrownout12UtcFileArtifact(f, allFiles) {
+    if (!f || !f.file_name) return false;
+
+    // 1. Reine ungesyncte BOOT-Dateien ausfiltern
+    if (f.file_name.indexOf('imu_BOOT_') !== -1 || (f.day_folder && f.day_folder.startsWith('BOOT_SESSION_'))) {
+        return true;
+    }
+
+    const recDate = getFileRecordedDate(f);
+    if (isNaN(recDate.getTime())) return false;
+
+    const utcH = recDate.getUTCHours();
+    const utcM = recDate.getUTCMinutes();
+
+    // Liegt der Dateizeitstempel im typischen 12:00:00 - 12:01:59 UTC Fallback-Fenster nach Reset?
+    if (utcH === 12 && utcM <= 1) {
+        const dayKey = getFileDayKey(f);
+
+        // Prüfen, wie viele Dateien an diesem Tag im 12:00-12:01 UTC Fenster liegen
+        let sameDay12UtcCount = 0;
+        if (Array.isArray(allFiles)) {
+            for (let i = 0; i < allFiles.length; i++) {
+                const other = allFiles[i];
+                if (getFileDayKey(other) === dayKey) {
+                    const od = getFileRecordedDate(other);
+                    if (!isNaN(od.getTime()) && od.getUTCHours() === 12 && od.getUTCMinutes() <= 1) {
+                        sameDay12UtcCount++;
+                    }
+                }
+            }
+        }
+
+        // Indikator A: Mehrfach-Logs bei 12:00 UTC am selben Tag (Brownout-Schleife)
+        if (sameDay12UtcCount >= 2) return true;
+
+        // Indikator B: Zurückgesetzter RTC-Chunk-Zähler (_c0001 oder _c0002) direkt bei 12:00 UTC
+        if (/_c000[12]\.csv/i.test(f.file_name)) return true;
+
+        // Indikator C: Upload-Zeitpunkt weicht > 10 Minuten vom 12:00-UTC-Dateinamen ab (vor NITZ-Sync rotiert)
+        if (f.uploaded_at) {
+            const upMs = Date.parse(f.uploaded_at);
+            if (!isNaN(upMs) && Math.abs(upMs - recDate.getTime()) > 10 * 60 * 1000) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+window.isBrownout12UtcFileArtifact = isBrownout12UtcFileArtifact;
+
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
@@ -843,8 +904,14 @@ async function fetchImuCloudLogs() {
         return;
     }
 
-    currentDeviceFiles = files || [];
+    const rawFiles = files || [];
+    currentDeviceFiles = rawFiles.filter(f => !isBrownout12UtcFileArtifact(f, rawFiles));
     window.currentDeviceFiles = currentDeviceFiles;
+
+    const filteredCount = rawFiles.length - currentDeviceFiles.length;
+    if (filteredCount > 0 && typeof appendTerminalLog === 'function') {
+        appendTerminalLog(`[FILTER] ${filteredCount} Brownout-Artefakt(e) (12:00 UTC Fallback) automatisch ausgeblendet.`);
+    }
 
     updateStorageQuotaSummaryUI();
 

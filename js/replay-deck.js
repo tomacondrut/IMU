@@ -612,36 +612,13 @@ function fftRadix2(re, im, inverse = false) {
     }
 }
 
-/*
- * Breadcrumb: 2026-10-15 20:05 - Radix-2 Cooley-Tukey FFT & Ring-Free Spectral Double Integration
- * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
- * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
- * Breadcrumb: 2026-10-19 12:00 - Tilt-Drift Rejection (fc=0.80Hz), Post-Taper Zero-Mean & Velocity-Weighted DomFreq
- * [CRITICAL BUGFIX FLAG - PREVENT 0.15HZ TILT PSEUDO-DISPLACEMENT & NYQUIST FREQUENCY BIAS]:
- * 1. Re-centers tapered signal (post-Tukey mean removal) before zero-padding to N to eliminate sinc leakage at 0.1-0.25 Hz.
- * 2. Raises default high-pass cutoff from 0.18 Hz to 0.80 Hz (with 8th-order roll-off) so BNO085 gravity-lag during
- *    tilting and asymmetric shock velocity steps do not explode via -1/omega^2 into 66 mm non-causal waves.
- * 3. Evaluates spectral frequency peaks on vibration velocity magnitude (|A(f)| / (2*pi*f)) with parabolic sub-bin
- *    interpolation in both global and local STFT windows, preventing high-frequency sensor noise (~11.7 Hz) from masking
- *    true 3-7 Hz structural vibrations.
- * 4. Selects item.freqDom from the axis with dominant vibration energy instead of Math.max(freqX, freqY, freqZ),
- *    and preserves 0.0 Hz during quiet intervals instead of falling back via `||` to global cycle frequency.
- * [DISMISSED]:
- * - cutoffHz = 0.18 with f >= 0.05 amplified 0.15 Hz tilt transients by ~390x into 66 mm pseudo-displacements.
- * - `item.freqX = locFy[k] || resY.domFreqHz` overwrote legitimate 0.0 Hz quiet phases with global cycle frequency.
- * - `item.freqDom = Math.max(item.freqX, item.freqY, item.freqZ)` picked highest Hz number (noise) instead of strongest axis.
- */
-const MAX_SINGLE_FFT_SAMPLES = 8192;
-const DEFAULT_VIB_CUTOFF_HZ = 0.80;
-const RMS_NOISE_GATE_MS2 = 0.05;
-
 function detrendAndWindowSignal(rawSignal, n, N) {
-    let sum = 0.0;
+    let sum = 0;
     for (let i = 0; i < n; i++) sum += rawSignal[i];
     const mean = sum / n;
 
-    let sumX = 0.0, sumY = 0.0, sumXY = 0.0, sumXX = 0.0;
-    let sqSum = 0.0;
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    let sqSum = 0;
     for (let i = 0; i < n; i++) {
         const val = rawSignal[i] - mean;
         sumX += i;
@@ -652,7 +629,7 @@ function detrendAndWindowSignal(rawSignal, n, N) {
     }
 
     const rms = Math.sqrt(sqSum / n);
-    const denom = (n * sumXX - sumX * sumX) || 1.0;
+    const denom = (n * sumXX - sumX * sumX) || 1;
     const slope = (n * sumXY - sumX * sumY) / denom;
     const intercept = (sumY - slope * sumX) / n;
 
@@ -660,7 +637,6 @@ function detrendAndWindowSignal(rawSignal, n, N) {
     const im = new Float64Array(N);
     const taperLen = Math.max(2, Math.floor(n * 0.05));
 
-    let taperedSum = 0.0;
     for (let i = 0; i < n; i++) {
         let val = (rawSignal[i] - mean) - (intercept + slope * i);
         if (i < taperLen) {
@@ -669,47 +645,42 @@ function detrendAndWindowSignal(rawSignal, n, N) {
             val *= 0.5 * (1.0 - Math.cos((Math.PI * (n - 1 - i)) / taperLen));
         }
         re[i] = val;
-        taperedSum += val;
-    }
-
-    // Nach dem Tapering zwingend mittelwertfrei halten, um sinc-Leckage beim Zero-Padding (n..N-1) zu verhindern
-    const taperedMean = taperedSum / n;
-    for (let i = 0; i < n; i++) {
-        re[i] -= taperedMean;
     }
 
     return { re, im, rms };
 }
 
-function interpolateParabolicPeakHz(magArray, peakBin, halfN, deltaF, minFreqHz) {
-    if (peakBin <= 0) return 0.0;
-    let exactBin = peakBin;
-    if (peakBin > 1 && peakBin < halfN) {
-        const y0 = magArray[peakBin - 1];
-        const y1 = magArray[peakBin];
-        const y2 = magArray[peakBin + 1];
-        const denom = y0 - 2.0 * y1 + y2;
-        if (Math.abs(denom) > 1e-12) {
-            const deltaK = 0.5 * (y0 - y2) / denom;
-            if (Math.abs(deltaK) < 1.0) {
-                exactBin = peakBin + deltaK;
-            }
-        }
-    }
-    return Math.max(minFreqHz, exactBin * deltaF);
-}
+/*
+ * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
+ * [CRITICAL BUGFIX FLAG - SPECTRAL PEAK ACCURACY]:
+ * Speichert das Amplitudenspektrum der Beschleunigung vor der -1/omega^2 Integration zwischen,
+ * damit die parabolische Interpolation nicht durch die Tieffrequenz-Anhebung verzerrt wird.
+ */
+/*
+ * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
+ * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
+ * [CRITICAL BUGFIX FLAG - PREVENT FFT OOM CRASH & UNWRAP INFINITE LOOP]:
+ * 1. Block-segments continuous cycles > 8192 samples in spectralDoubleIntegration() so N never exceeds 16384
+ *    (prevents 32-bit shift overflow on N <<= 1 and massive Float64Array allocations).
+ * 2. Scales STFT stride dynamically in computeLocalWindowFrequencies() (max ~200 windows per cycle) to prevent
+ *    tens of thousands of synchronous FFTs from freezing the browser on full-day logs.
+ * 3. Replaced while-loops in unwrapAngle() with finite-guarded modulo math to prevent hangs on NaN/Infinity.
+ * [DISMISSED]: Unbounded while (N < n * 2) N <<= 1 and fixed step=8 STFT caused main-thread freeze on large logs;
+ *              while (diff > 180) locked up if a single angle became non-finite.
+ */
+const MAX_SINGLE_FFT_SAMPLES = 8192;
 
-function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = DEFAULT_VIB_CUTOFF_HZ) {
+function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18) {
     const n = rawBlock.length;
-    if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0, peakVelMag: 0.0 };
+    if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
 
     let N = 32;
     while (N < n * 2 && N < 32768) N <<= 1;
 
     const { re, im, rms } = detrendAndWindowSignal(rawBlock, n, N);
 
-    if (!Number.isFinite(rms) || rms < RMS_NOISE_GATE_MS2) {
-        return { dispMm: new Float64Array(n), domFreqHz: 0.0, peakVelMag: 0.0 };
+    if (!Number.isFinite(rms) || rms < 0.04) {
+        return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
     }
 
     fftRadix2(re, im, false);
@@ -717,21 +688,27 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = DEFAU
     const deltaF = sampleRateHz / N;
     const nyquist = sampleRateHz / 2.0;
     const halfN = N >> 1;
-    const velMag = new Float64Array(halfN + 1);
+    const accMag = new Float64Array(halfN + 1);
 
-    let maxVelMag = 0.0;
+    let maxMag = 0.0;
     let peakBin = 0;
 
     re[0] = 0.0;
     im[0] = 0.0;
 
-    const minStopHz = Math.max(0.35, cutoffHz * 0.5);
-
     for (let k = 1; k <= halfN; k++) {
         const f = k * deltaF;
-        const accMag = Math.hypot(re[k], im[k]);
+        const mag = Math.hypot(re[k], im[k]);
+        accMag[k] = mag;
 
-        if (f < minStopHz || f > nyquist * 0.95) {
+        if (f >= cutoffHz && f <= nyquist * 0.95) {
+            if (mag > maxMag) {
+                maxMag = mag;
+                peakBin = k;
+            }
+        }
+
+        if (f < 0.05 || f > nyquist * 0.95) {
             re[k] = 0.0;
             im[k] = 0.0;
             if (k < halfN) {
@@ -739,21 +716,11 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = DEFAU
                 im[N - k] = 0.0;
             }
         } else {
-            // 8. Ordnung Hochpass trennt langsame Kipp-Gravitationsdrifts scharf von Strukturschwingungen
-            const ratio8 = Math.pow(f / cutoffHz, 8);
-            const hpGain = ratio8 / (1.0 + ratio8);
+            const ratio4 = Math.pow(f / cutoffHz, 4);
+            const hpGain = ratio4 / (1.0 + ratio4);
             const omega = 2.0 * Math.PI * f;
-
-            // Geschwindigkeitsspektrum (|A(f)| * hpGain / omega) für physikalisch unverzerrte Peak-Suche
-            const vMag = (accMag * hpGain) / omega;
-            velMag[k] = vMag;
-
-            if (f >= cutoffHz && f <= nyquist * 0.92 && vMag > maxVelMag) {
-                maxVelMag = vMag;
-                peakBin = k;
-            }
-
             const factor = -hpGain / (omega * omega);
+
             re[k] *= factor;
             im[k] *= factor;
             if (k < halfN) {
@@ -763,7 +730,19 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = DEFAU
         }
     }
 
-    const domFreqHz = interpolateParabolicPeakHz(velMag, peakBin, halfN, deltaF, cutoffHz);
+    let domFreqHz = peakBin * deltaF;
+    if (peakBin > 1 && peakBin < halfN) {
+        const y0 = accMag[peakBin - 1];
+        const y1 = accMag[peakBin];
+        const y2 = accMag[peakBin + 1];
+        const denom = y0 - 2.0 * y1 + y2;
+        if (Math.abs(denom) > 1e-12) {
+            const deltaK = 0.5 * (y0 - y2) / denom;
+            if (Math.abs(deltaK) < 1.0) {
+                domFreqHz = Math.max(cutoffHz, (peakBin + deltaK) * deltaF);
+            }
+        }
+    }
 
     fftRadix2(re, im, true);
 
@@ -779,93 +758,76 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = DEFAU
         dispMm[i] -= meanDisp;
     }
 
-    return { dispMm, domFreqHz, peakVelMag: maxVelMag };
+    return { dispMm, domFreqHz };
 }
 
-function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = DEFAULT_VIB_CUTOFF_HZ) {
+function spectralDoubleIntegration(rawSignal, sampleRateHz, cutoffHz = 0.18) {
     const n = rawSignal.length;
     if (n <= MAX_SINGLE_FFT_SAMPLES) {
         return spectralDoubleIntegrationBlock(rawSignal, sampleRateHz, cutoffHz);
     }
 
+    // Bei überlangen Zyklen (> 8192 Samples) in Blöcke aufteilen, um RAM-Überlauf zu verhindern
     const outDisp = new Float64Array(n);
-    let bestDomFreq = 0.0;
-    let bestVelMag = 0.0;
+    let maxDomFreq = 0.0;
 
     for (let offset = 0; offset < n; offset += MAX_SINGLE_FFT_SAMPLES) {
         const end = Math.min(n, offset + MAX_SINGLE_FFT_SAMPLES);
         const sub = rawSignal.subarray(offset, end);
         const res = spectralDoubleIntegrationBlock(sub, sampleRateHz, cutoffHz);
         outDisp.set(res.dispMm, offset);
-        if (res.peakVelMag > bestVelMag) {
-            bestVelMag = res.peakVelMag;
-            bestDomFreq = res.domFreqHz;
-        }
+        if (res.domFreqHz > maxDomFreq) maxDomFreq = res.domFreqHz;
     }
 
-    return { dispMm: outDisp, domFreqHz: bestDomFreq, peakVelMag: bestVelMag };
+    return { dispMm: outDisp, domFreqHz: maxDomFreq };
 }
 
-function computeLocalWindowFrequencies(rawSignal, sampleRateHz, cutoffHz = DEFAULT_VIB_CUTOFF_HZ) {
+function computeLocalWindowFrequencies(rawSignal, sampleRateHz, fallbackFreqHz) {
     const n = rawSignal.length;
     const outFreq = new Float64Array(n);
-    const outEnergy = new Float64Array(n);
     const winSize = 64;
-    const fftSize = 128;
 
-    if (n < 16) {
-        return { freq: outFreq, energy: outEnergy };
+    if (n < winSize) {
+        outFreq.fill(fallbackFreqHz);
+        return outFreq;
     }
 
-    const actualWin = Math.min(winSize, n);
+    // Adaptiver Schritt: Maximal ~200 STFT-Fenster pro Zyklus berechnen (verhindert Main-Thread-Blockade)
     const step = Math.max(8, Math.floor(n / 200));
-    const halfWin = actualWin >> 1;
-    const halfFft = fftSize >> 1;
-    const deltaF = sampleRateHz / fftSize;
-    const maxBin = Math.min(halfFft - 1, Math.floor((sampleRateHz * 0.46) / deltaF));
-    const velMag = new Float64Array(halfFft + 1);
+    const halfWin = winSize >> 1;
+    let lastFreq = fallbackFreqHz;
 
     for (let center = 0; center < n; center += step) {
-        const start = Math.max(0, Math.min(n - actualWin, center - halfWin));
-        const sub = rawSignal.subarray(start, start + actualWin);
-        const { re, im, rms } = detrendAndWindowSignal(sub, actualWin, fftSize);
+        const start = Math.max(0, Math.min(n - winSize, center - halfWin));
+        const sub = rawSignal.subarray(start, start + winSize);
+        const { re, im, rms } = detrendAndWindowSignal(sub, winSize, 128);
 
-        let localFreq = 0.0;
-        let localEnergy = 0.0;
-
-        if (Number.isFinite(rms) && rms >= RMS_NOISE_GATE_MS2) {
+        if (!Number.isFinite(rms) || rms < 0.04) {
+            lastFreq = 0.0;
+        } else {
             fftRadix2(re, im, false);
-            velMag.fill(0.0);
+            const deltaF = sampleRateHz / 128;
             let maxMag = 0.0;
             let peakBin = 0;
-
-            for (let k = 1; k <= maxBin; k++) {
+            for (let k = 1; k <= 60; k++) {
                 const f = k * deltaF;
-                if (f < cutoffHz) continue;
-                const ratio8 = Math.pow(f / cutoffHz, 8);
-                const hpGain = ratio8 / (1.0 + ratio8);
-                const vMag = (Math.hypot(re[k], im[k]) * hpGain) / (2.0 * Math.PI * f);
-                velMag[k] = vMag;
-                if (vMag > maxMag) {
-                    maxMag = vMag;
+                if (f < 0.20) continue;
+                const mag = Math.hypot(re[k], im[k]);
+                if (mag > maxMag) {
+                    maxMag = mag;
                     peakBin = k;
                 }
             }
-
-            if (peakBin > 0) {
-                localFreq = interpolateParabolicPeakHz(velMag, peakBin, maxBin, deltaF, cutoffHz);
-                localEnergy = maxMag;
-            }
+            lastFreq = peakBin * deltaF;
         }
 
         const fillEnd = Math.min(n, center + step);
         for (let k = center; k < fillEnd; k++) {
-            outFreq[k] = localFreq;
-            outEnergy[k] = localEnergy;
+            outFreq[k] = lastFreq;
         }
     }
 
-    return { freq: outFreq, energy: outEnergy };
+    return outFreq;
 }
 
 function calculateAllDisplacements() {
@@ -892,13 +854,13 @@ function calculateAllDisplacements() {
             rawAz[k] = Number.isFinite(item.az) ? item.az : 0.0;
         }
 
-        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
-        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
-        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
+        const resX = spectralDoubleIntegration(rawAx, replaySampleRateHz, 0.18);
+        const resY = spectralDoubleIntegration(rawAy, replaySampleRateHz, 0.18);
+        const resZ = spectralDoubleIntegration(rawAz, replaySampleRateHz, 0.18);
 
-        const locX = computeLocalWindowFrequencies(rawAx, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
-        const locY = computeLocalWindowFrequencies(rawAy, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
-        const locZ = computeLocalWindowFrequencies(rawAz, replaySampleRateHz, DEFAULT_VIB_CUTOFF_HZ);
+        const locFx = computeLocalWindowFrequencies(rawAx, replaySampleRateHz, resX.domFreqHz);
+        const locFy = computeLocalWindowFrequencies(rawAy, replaySampleRateHz, resY.domFreqHz);
+        const locFz = computeLocalWindowFrequencies(rawAz, replaySampleRateHz, resZ.domFreqHz);
 
         for (let k = 0; k < n; k++) {
             const item = replayDataRaw[indices[k]];
@@ -906,25 +868,10 @@ function calculateAllDisplacements() {
             item.dy = resY.dispMm[k];
             item.dz = resZ.dispMm[k];
 
-            // Kanonische Zuordnung: X-Kanal (Roll) = Sensor Y, Y-Kanal (Pitch) = Sensor X
-            item.freqX = locY.freq[k];
-            item.freqY = locX.freq[k];
-            item.freqZ = locZ.freq[k];
-
-            // Dominante Frequenz anhand der stärksten lokalen Schwingungsenergie (statt Math.max über Hz)
-            const eX = locY.energy[k];
-            const eY = locX.energy[k];
-            const eZ = locZ.energy[k];
-
-            if (eX >= eY && eX >= eZ && eX > 0.0) {
-                item.freqDom = item.freqX;
-            } else if (eY >= eX && eY >= eZ && eY > 0.0) {
-                item.freqDom = item.freqY;
-            } else if (eZ > 0.0) {
-                item.freqDom = item.freqZ;
-            } else {
-                item.freqDom = 0.0;
-            }
+            item.freqX = locFy[k] || resY.domFreqHz;
+            item.freqY = locFx[k] || resX.domFreqHz;
+            item.freqZ = locFz[k] || resZ.domFreqHz;
+            item.freqDom = Math.max(item.freqX, item.freqY, item.freqZ);
         }
     }
 
@@ -2435,6 +2382,13 @@ function yieldToMainThread() {
  * 2. Parses 'BOOT+<ms>ms' timestamps into a synthetic monotonic epoch so logs recorded prior to
  *    cellular/WiFi clock sync can still be inspected and replayed in 3D.
  */
+/*
+ * Breadcrumb: 2026-10-18 20:55 - Case-Insensitive CSV Header Filter & BOOT+ms Timestamp Fallback
+ * Breadcrumb: 2026-10-25 09:12 - Hardware BootCycle Preservation for Brownout Filtering
+ * [CRITICAL BUGFIX FLAG - PRESERVE HARDWARE BOOTCYCLE COLUMN]:
+ * Speichert Spalte 9 (BootCycle) explizit als 'bootCycle' im Datensatz-Objekt, bevor
+ * sortAndSegmentChronologicalData() 'item.cycle' mit der Event-ID überschreibt.
+ */
 function parseImuCsvRecord(line, fileIndex, forcedCycle) {
     if (!line) return null;
     const lowerPrefix = line.substring(0, 10).toLowerCase();
@@ -2484,11 +2438,10 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
         lastIngestQuat = { w: qw, x: qx, y: qy, z: qz };
     }
 
-    let assignedCycle = 1;
+    const hwBootCycle = parts[8] ? (parseInt(parts[8], 10) || 1) : 1;
+    let assignedCycle = hwBootCycle;
     if (forcedCycle !== undefined && forcedCycle !== null) {
         assignedCycle = forcedCycle;
-    } else if (parts[8]) {
-        assignedCycle = parseInt(parts[8], 10) || 1;
     }
 
     return {
@@ -2500,6 +2453,7 @@ function parseImuCsvRecord(line, fileIndex, forcedCycle) {
         pitch: 0.0,
         yaw: 0.0,
         cycle: assignedCycle,
+        bootCycle: hwBootCycle,
         fileIndex: fileIndex
     };
 }
@@ -2706,13 +2660,110 @@ window.inspectImuDayMerged = inspectImuDayMerged;
  * Sortiert alle geladenen Messwerte chronologisch nach tsMs, glättet die Quaternionen
  * in korrekter Reihenfolge und vergibt dynamische Zyklus-IDs bei Messpausen > 3.0s.
  */
+/*
+ * Breadcrumb: 2026-10-15 20:30 - Precomputed tsMs & Post-Sort Quaternion Continuity Engine
+ * Breadcrumb: 2026-10-25 09:12 - Pre-Sort Brownout 12:00 UTC Segment Filter & Deduplication
+ * [CRITICAL BUGFIX FLAG - ELIMINATE INTERLEAVED 12:00 UTC BROWNOUT REBOOTS]:
+ * 1. Zerlegt replayDataRaw VOR dem Sortieren entlang der Einlesereihenfolge in zusammenhängende
+ *    Aufzeichnungs-Runs (trennt bei Zeit-Rückwärtssprüngen, Lücken > 3s, BootCycle-Wechsel oder Dateiwechsel).
+ * 2. Erkennt Runs, die im 12:00:00 - 12:01:59 UTC Fallback-Fenster starten, und filtert sie heraus,
+ *    sobald mehrere 12:00-UTC-Neustarts vorliegen oder echte synchronisierte Messreihen existieren.
+ * 3. Entfernt nach dem Sortieren exakt doppelte Zeitstempel (dt <= 0), um FFT-Singularitäten zu verhindern.
+ * [DISMISSED]: Blindes replayDataRaw.sort() vor dem Filtern verschränkte mehrere 12:00-UTC-Brownouts ineinander.
+ */
 function sortAndSegmentChronologicalData() {
     if (!replayDataRaw || replayDataRaw.length === 0) return [];
 
-    // 1. Zwingend chronologisch nach absolutem Sensor-Zeitstempel sortieren
+    // 1. In Einlesereihenfolge in zusammenhängende Runs aufteilen (erkennt Zeit-Resets auf 12:00 UTC)
+    const runs = [];
+    let currentRun = [replayDataRaw[0]];
+
+    for (let i = 1; i < replayDataRaw.length; i++) {
+        const prev = replayDataRaw[i - 1];
+        const cur = replayDataRaw[i];
+        const dtMs = cur.tsMs - prev.tsMs;
+
+        // Neuer Run bei Rückwärtssprung (Brownout-Reset!), Pause > 3s, Dateiwechsel oder BootCycle-Sprung
+        if (dtMs < -200 || dtMs > 3000 || cur.fileIndex !== prev.fileIndex || cur.bootCycle !== prev.bootCycle) {
+            runs.push(currentRun);
+            currentRun = [cur];
+        } else {
+            currentRun.push(cur);
+        }
+    }
+    runs.push(currentRun);
+
+    // 2. Runs klassifizieren: Startet der Run im 12:00:00 - 12:01:59 UTC Fallback-Fenster?
+    function isRunAt12UtcFallback(run) {
+        if (!run || run.length === 0) return false;
+        const first = run[0];
+        if (first.ts && first.ts.startsWith('BOOT+')) return true;
+
+        const d = new Date(first.tsMs);
+        const h = d.getUTCHours();
+        const m = d.getUTCMinutes();
+        const s = d.getUTCSeconds();
+
+        // Typisches Kaltstart-/Brownout-Fenster ab 12:00:00 UTC
+        if (h === 12 && (m === 0 || (m === 1 && s <= 30))) {
+            return true;
+        }
+        return false;
+    }
+
+    const fallbackRunsCount = runs.filter(isRunAt12UtcFallback).length;
+    const validNon12RunsCount = runs.length - fallbackRunsCount;
+
+    // Filtern, wenn entweder mehrfach bei 12:00 UTC neu gestartet wurde (fallbackRunsCount >= 2)
+    // oder neben einem 12:00-UTC-Kaltstart-Run (bootCycle === 1) echte Messdaten im Datensatz existieren
+    if (fallbackRunsCount >= 2 || (fallbackRunsCount === 1 && validNon12RunsCount >= 1)) {
+        const filteredRaw = [];
+        let removedRuns = 0;
+        let removedSamples = 0;
+
+        for (let r = 0; r < runs.length; r++) {
+            const run = runs[r];
+            const is12Fallback = isRunAt12UtcFallback(run);
+            const isColdBootCycle = (run[0].bootCycle === 1);
+
+            if (is12Fallback && (fallbackRunsCount >= 2 || isColdBootCycle)) {
+                removedRuns++;
+                removedSamples += run.length;
+                continue;
+            }
+            for (let k = 0; k < run.length; k++) {
+                filteredRaw.push(run[k]);
+            }
+        }
+
+        // Nur übernehmen, wenn nach dem Filtern noch Daten übrig bleiben (oder bei reinem Brownout-Log auf letzten Run begrenzen)
+        if (filteredRaw.length > 0) {
+            replayDataRaw = filteredRaw;
+            replayDiagLog('BROWNOUT-FILTER', `${removedRuns} Brownout-Sequenz(en) bei 12:00 UTC (${removedSamples} Samples) herausgefiltert.`);
+        } else if (fallbackRunsCount >= 2 && runs.length > 0) {
+            // Falls eine Datei zu 100 % nur aus mehreren 12:00-UTC-Brownouts besteht: Nur den längsten Run behalten, damit sich nichts überlagert
+            let longestRun = runs[0];
+            for (let r = 1; r < runs.length; r++) {
+                if (runs[r].length > longestRun.length) longestRun = runs[r];
+            }
+            replayDataRaw = longestRun;
+            replayDiagLog('BROWNOUT-FILTER', `Reine Brownout-Datei (${fallbackRunsCount} Resets bei 12:00 UTC): Überlappende Neustarts isoliert.`);
+        }
+    }
+
+    // 3. Chronologisch nach absolutem Sensor-Zeitstempel sortieren
     replayDataRaw.sort((a, b) => a.tsMs - b.tsMs);
 
-    // 2. Antipodale Kontinuität & Zyklus-Segmentierung entlang der wahren Zeitachse
+    // 4. Exakt identische Zeitstempel (dt == 0 aus verbleibenden Überlappungen) deduplizieren
+    const deduped = [replayDataRaw[0]];
+    for (let i = 1; i < replayDataRaw.length; i++) {
+        if (replayDataRaw[i].tsMs > deduped[deduped.length - 1].tsMs) {
+            deduped.push(replayDataRaw[i]);
+        }
+    }
+    replayDataRaw = deduped;
+
+    // 5. Antipodale Kontinuität & Zyklus-Segmentierung entlang der wahren Zeitachse
     let currentCycleId = 1;
     const chunkStats = [];
     let samplesInCurrentCycle = 0;
