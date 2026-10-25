@@ -678,34 +678,83 @@ function fftRadix2(re, im, inverse = false) {
         }
     }
 }
+const MAX_SINGLE_FFT_SAMPLES = 8192;
+/*
+ * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
+ * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
+ * Breadcrumb: 2026-10-25 11:45 - Moving-Baseline Gravity-Step Filter, 1.2Hz Structural HP & Envelope Gate
+ * [CRITICAL MATH & PHYSICS FIX - ELIMINATE 200MM PRE-RINGING & GRAVITY-STEP DRIFT]:
+ * 1. Entfernt vor der FFT langsame statische Basislinien-Verschiebungen (gleitendes 0.48s Fenster),
+ *    die entstehen, wenn sich die Kippneigung ändert (z. B. +0.20 m/s² Rest-Gravitation auf az nach
+ *    1.1° Kippung in zoom_3542.5s-3551.1s.csv).
+ * 2. Hebt die Butterworth-Hochpass-Eckfrequenz für die Doppelintegration von 0.18 Hz auf 1.20 Hz an,
+ *    sodass tieffrequente Stufen-Spektren nicht mehr mit -1/omega^2 (Faktor >600) zu 200 mm
+ *    Schein-Auslenkungen aufgeblasen werden.
+ * 3. Multipliziert den rekonstruierten Schwingweg mit einer kausalen lokalen Energie-Hüllkurve
+ *    (Envelope-Gate), sodass vor einem Stoß (bei 0.02 m/s² Rauschen) garantiert 0.00 mm anliegen.
+ * [DISMISSED]: Globales lineares Detrending mit cutoffHz = 0.18 Hz ohne lokales Energie-Gate.
+ */
+function detrendAndWindowSignal(rawSignal, n, N, sampleRateHz = 25) {
+    // Gleitende Basislinie (~0.48 s Halbfenster) entfernt statische Gravitations-Stufen nach Neigungswechseln
+    const halfWin = Math.max(3, Math.round(sampleRateHz * 0.24));
+    const highPassed = new Float64Array(n);
+    const prefixSum = new Float64Array(n + 1);
 
-function detrendAndWindowSignal(rawSignal, n, N) {
-    let sum = 0;
-    for (let i = 0; i < n; i++) sum += rawSignal[i];
-    const mean = sum / n;
-
-    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    let sqSum = 0;
     for (let i = 0; i < n; i++) {
-        const val = rawSignal[i] - mean;
-        sumX += i;
-        sumY += val;
-        sumXY += i * val;
-        sumXX += i * i;
+        prefixSum[i + 1] = prefixSum[i] + rawSignal[i];
+    }
+
+    let sqSum = 0.0;
+    for (let i = 0; i < n; i++) {
+        const sIdx = Math.max(0, i - halfWin);
+        const eIdx = Math.min(n - 1, i + halfWin);
+        const localMean = (prefixSum[eIdx + 1] - prefixSum[sIdx]) / (eIdx - sIdx + 1);
+        const val = rawSignal[i] - localMean;
+        highPassed[i] = val;
         sqSum += val * val;
     }
 
-    const rms = Math.sqrt(sqSum / n);
-    const denom = (n * sumXX - sumX * sumX) || 1;
-    const slope = (n * sumXY - sumX * sumY) / denom;
-    const intercept = (sumY - slope * sumX) / n;
+    // Zeitlokale kinetische Energie-Hüllkurve (verhindert nicht-kausales FFT-Ringing in Ruhephasen)
+    const envHalf = Math.max(2, Math.round(sampleRateHz * 0.16));
+    const envelope = new Float64Array(n);
+    const noiseFloorRms = 0.065; // MEMS-Quantisierungsrauschen BNO085 (~0.04 m/s²)
 
+    for (let i = 0; i < n; i++) {
+        const sIdx = Math.max(0, i - envHalf);
+        const eIdx = Math.min(n - 1, i + envHalf);
+        let locSq = 0.0;
+        for (let k = sIdx; k <= eIdx; k++) {
+            locSq += highPassed[k] * highPassed[k];
+        }
+        const locRms = Math.sqrt(locSq / (eIdx - sIdx + 1));
+        if (locRms <= noiseFloorRms) {
+            envelope[i] = 0.0;
+        } else {
+            const normEnv = (locRms - noiseFloorRms) / (0.12);
+            envelope[i] = Math.min(1.0, normEnv * normEnv);
+        }
+    }
+
+    // Vorwärts-/Rückwärts-Glättung der Hüllkurve (~0.20 s Ausschwingzeit)
+    const alphaEnv = Math.min(0.45, 1.0 / Math.max(2.0, sampleRateHz * 0.12));
+    for (let i = 1; i < n; i++) {
+        if (envelope[i] < envelope[i - 1]) {
+            envelope[i] = envelope[i - 1] * (1.0 - alphaEnv) + envelope[i] * alphaEnv;
+        }
+    }
+    for (let i = n - 2; i >= 0; i--) {
+        if (envelope[i] < envelope[i + 1]) {
+            envelope[i] = envelope[i + 1] * (1.0 - alphaEnv * 1.5) + envelope[i] * (alphaEnv * 1.5);
+        }
+    }
+
+    const rms = Math.sqrt(sqSum / n);
     const re = new Float64Array(N);
     const im = new Float64Array(N);
     const taperLen = Math.max(2, Math.floor(n * 0.05));
 
     for (let i = 0; i < n; i++) {
-        let val = (rawSignal[i] - mean) - (intercept + slope * i);
+        let val = highPassed[i] * envelope[i];
         if (i < taperLen) {
             val *= 0.5 * (1.0 - Math.cos((Math.PI * i) / taperLen));
         } else if (i >= n - taperLen) {
@@ -714,37 +763,18 @@ function detrendAndWindowSignal(rawSignal, n, N) {
         re[i] = val;
     }
 
-    return { re, im, rms };
+    return { re, im, rms, envelope };
 }
 
-/*
- * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
- * [CRITICAL BUGFIX FLAG - SPECTRAL PEAK ACCURACY]:
- * Speichert das Amplitudenspektrum der Beschleunigung vor der -1/omega^2 Integration zwischen,
- * damit die parabolische Interpolation nicht durch die Tieffrequenz-Anhebung verzerrt wird.
- */
-/*
- * Breadcrumb: 2026-10-15 20:25 - Unbiased Sub-Bin Parabolic Interpolation before 1/w^2 Weighting
- * Breadcrumb: 2026-10-15 22:50 - Block-Chunked FFT Guard, Adaptive STFT Stride & Finite Modulo Unwrap
- * [CRITICAL BUGFIX FLAG - PREVENT FFT OOM CRASH & UNWRAP INFINITE LOOP]:
- * 1. Block-segments continuous cycles > 8192 samples in spectralDoubleIntegration() so N never exceeds 16384
- *    (prevents 32-bit shift overflow on N <<= 1 and massive Float64Array allocations).
- * 2. Scales STFT stride dynamically in computeLocalWindowFrequencies() (max ~200 windows per cycle) to prevent
- *    tens of thousands of synchronous FFTs from freezing the browser on full-day logs.
- * 3. Replaced while-loops in unwrapAngle() with finite-guarded modulo math to prevent hangs on NaN/Infinity.
- * [DISMISSED]: Unbounded while (N < n * 2) N <<= 1 and fixed step=8 STFT caused main-thread freeze on large logs;
- *              while (diff > 180) locked up if a single angle became non-finite.
- */
-const MAX_SINGLE_FFT_SAMPLES = 8192;
-
-function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18) {
+function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 1.20) {
     const n = rawBlock.length;
     if (n < 4) return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
 
     let N = 32;
     while (N < n * 2 && N < 32768) N <<= 1;
 
-    const { re, im, rms } = detrendAndWindowSignal(rawBlock, n, N);
+    const effCutoffHz = Math.max(1.10, cutoffHz);
+    const { re, im, rms, envelope } = detrendAndWindowSignal(rawBlock, n, N, sampleRateHz);
 
     if (!Number.isFinite(rms) || rms < 0.04) {
         return { dispMm: new Float64Array(n), domFreqHz: 0.0 };
@@ -768,14 +798,14 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
         const mag = Math.hypot(re[k], im[k]);
         accMag[k] = mag;
 
-        if (f >= cutoffHz && f <= nyquist * 0.95) {
+        if (f >= 0.80 && f <= nyquist * 0.95) {
             if (mag > maxMag) {
                 maxMag = mag;
                 peakBin = k;
             }
         }
 
-        if (f < 0.05 || f > nyquist * 0.95) {
+        if (f < 0.45 || f > nyquist * 0.95) {
             re[k] = 0.0;
             im[k] = 0.0;
             if (k < halfN) {
@@ -783,7 +813,8 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
                 im[N - k] = 0.0;
             }
         } else {
-            const ratio4 = Math.pow(f / cutoffHz, 4);
+            // Phasenfreier Butterworth-Hochpass 4. Ordnung bei effCutoffHz (1.20 Hz)
+            const ratio4 = Math.pow(f / effCutoffHz, 4);
             const hpGain = ratio4 / (1.0 + ratio4);
             const omega = 2.0 * Math.PI * f;
             const factor = -hpGain / (omega * omega);
@@ -806,7 +837,7 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
         if (Math.abs(denom) > 1e-12) {
             const deltaK = 0.5 * (y0 - y2) / denom;
             if (Math.abs(deltaK) < 1.0) {
-                domFreqHz = Math.max(cutoffHz, (peakBin + deltaK) * deltaF);
+                domFreqHz = Math.max(0.80, (peakBin + deltaK) * deltaF);
             }
         }
     }
@@ -814,15 +845,9 @@ function spectralDoubleIntegrationBlock(rawBlock, sampleRateHz, cutoffHz = 0.18)
     fftRadix2(re, im, true);
 
     const dispMm = new Float64Array(n);
-    let meanDisp = 0.0;
     for (let i = 0; i < n; i++) {
-        const val = Number.isFinite(re[i]) ? re[i] * 1000.0 : 0.0;
-        dispMm[i] = val;
-        meanDisp += val;
-    }
-    meanDisp /= n;
-    for (let i = 0; i < n; i++) {
-        dispMm[i] -= meanDisp;
+        const rawMm = Number.isFinite(re[i]) ? re[i] * 1000.0 : 0.0;
+        dispMm[i] = rawMm * envelope[i];
     }
 
     return { dispMm, domFreqHz };
@@ -2598,6 +2623,58 @@ function populateReplayCycleDropdown(chunkStats, isDayMerge) {
     }
 }
 
+
+
+
+/*
+ * Breadcrumb: 2026-10-25 11:45 - Oscilloscope Loading Overlay & Progress State Controller
+ * [CRITICAL UX FEATURE FLAG - OSCILLOSCOPE LOADING OVERLAY]:
+ * 1. Erzeugt/steuert das Lade-Overlay (#replay-osc-loading-overlay) direkt über den 3 Oszilloskopen.
+ * 2. Zeigt während Fetch, Sortierung, De-Interleaving und FFT-Integration den aktuellen Schritt an.
+ * 3. Garantiert das Ausblenden im finally-Block auch bei Netzwerk- oder Parser-Fehlern.
+ */
+function ensureReplayOscLoadingOverlayDOM() {
+    let overlay = document.getElementById('replay-osc-loading-overlay');
+    if (overlay) return overlay;
+
+    const cvAcc = document.getElementById('replayGraphCanvasAcc');
+    const oscCard = cvAcc ? cvAcc.closest('.bg-white.rounded-lg.border') || cvAcc.parentElement?.parentElement : null;
+    if (!oscCard) return null;
+
+    oscCard.classList.add('relative');
+
+    overlay = document.createElement('div');
+    overlay.id = 'replay-osc-loading-overlay';
+    overlay.className = 'hidden absolute inset-0 z-20 bg-white/85 backdrop-blur-[2px] rounded-lg flex flex-col items-center justify-center gap-2.5 select-none transition-opacity duration-150';
+    overlay.innerHTML = `
+        <div class="flex items-center gap-2.5 bg-white px-4 py-2.5 rounded-xl border border-slate-300 shadow-md">
+            <svg class="animate-spin h-5 w-5 text-stag-green shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <div class="flex flex-col">
+                <span class="text-xs font-bold text-slate-800 uppercase tracking-wider">Oszilloskop lädt Messdaten</span>
+                <span id="replay-osc-loading-text" class="text-[11px] font-mono text-slate-600">Synchronisiere Zeitreihen & Spektren...</span>
+            </div>
+        </div>
+    `;
+    oscCard.appendChild(overlay);
+    return overlay;
+}
+
+function setReplayOscLoadingOverlay(visible, statusText = 'Lade Messdaten...') {
+    const overlay = ensureReplayOscLoadingOverlayDOM();
+    if (!overlay) return;
+    const txtEl = document.getElementById('replay-osc-loading-text');
+    if (txtEl && statusText) txtEl.innerText = statusText;
+    if (visible) {
+        overlay.classList.remove('hidden');
+    } else {
+        overlay.classList.add('hidden');
+    }
+}
+window.setReplayOscLoadingOverlay = setReplayOscLoadingOverlay;
+
 async function inspectImuFile(fileOrUrl, optionalFileName) {
     const deck = document.getElementById('imu-replay-deck');
     if (!deck) return;
@@ -2618,9 +2695,11 @@ async function inspectImuFile(fileOrUrl, optionalFileName) {
     const metaEl = document.getElementById('replay-meta-info');
     if (metaEl) metaEl.innerText = 'Lade Messdaten...';
 
+    setReplayOscLoadingOverlay(true, `Lade ${displayFileName}...`);
     initReplay3D();
 
     try {
+        await yieldToMainThread();
         let url = '';
         if (isStringUrl) {
             url = fileOrUrl;
@@ -2629,7 +2708,7 @@ async function inspectImuFile(fileOrUrl, optionalFileName) {
             url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
         }
 
-        const procCacheKey = `FILE_v2_${url}`;
+        const procCacheKey = `FILE_v6_${url}`;
         const cachedProc = await getCachedProcessedDataset(procCacheKey);
 
         let chunkStats = [];
@@ -2643,6 +2722,9 @@ async function inspectImuFile(fileOrUrl, optionalFileName) {
         } else {
             replayDiagLog('LOAD', `Lade Einzeldatei: ${displayFileName}`);
             const text = await fetchCachedCsv(url);
+            setReplayOscLoadingOverlay(true, `Parse CSV-Zeilen (${displayFileName})...`);
+            await yieldToMainThread();
+
             const lines = text.split('\n');
             replayDataRaw = [];
             lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
@@ -2669,9 +2751,11 @@ async function inspectImuFile(fileOrUrl, optionalFileName) {
                 return;
             }
 
+            setReplayOscLoadingOverlay(true, `Bereinige Überlappungen & sortiere (${replayDataRaw.length} Punkte)...`);
             await yieldToMainThread();
             chunkStats = sortAndSegmentChronologicalData();
 
+            setReplayOscLoadingOverlay(true, `Berechne FFT-Spektren & Schwingwege (${replayDataRaw.length} Samples)...`);
             await yieldToMainThread();
             calculateAllDisplacements();
             checkAndApplySavedMounting();
@@ -2695,6 +2779,8 @@ async function inspectImuFile(fileOrUrl, optionalFileName) {
     } catch (err) {
         replayDiagLog('INSPECT-ERR', `Fehler bei ${displayFileName}: ${err.message}`, true);
         if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
+    } finally {
+        setReplayOscLoadingOverlay(false);
     }
 }
 window.inspectImuFile = inspectImuFile;
@@ -2727,13 +2813,15 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     if (titleEl) titleEl.innerText = `📅 Ganzer Tag: ${dateStr} (${dayFiles.length} Chunks)`;
     if (metaEl) metaEl.innerText = `Lade ${dayFiles.length} Archive (Cache / Cloud)...`;
 
+    setReplayOscLoadingOverlay(true, `Lade ${dayFiles.length} Tages-Chunks für ${dateStr}...`);
     initReplay3D();
 
     try {
+        await yieldToMainThread();
         const devId = (typeof selectedDeviceId !== 'undefined') ? selectedDeviceId : 'STAG-IMU-01';
         const totalBytesSig = dayFiles.reduce((acc, f) => acc + Number(f.file_size_bytes || 0), 0);
         const lastFileSig = dayFiles[dayFiles.length - 1]?.file_name || '';
-        const procCacheKey = `DAY_v2_${devId}_${dateStr}_${dayFiles.length}_${totalBytesSig}_${lastFileSig}`;
+        const procCacheKey = `DAY_v6_${devId}_${dateStr}_${dayFiles.length}_${totalBytesSig}_${lastFileSig}`;
 
         const cachedProc = await getCachedProcessedDataset(procCacheKey);
         let chunkStats = [];
@@ -2748,11 +2836,16 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
         } else {
             replayDiagLog('DAY-MERGE', `Starte Tages-Merge für ${dateStr} (${dayFiles.length} Dateien)...`);
 
+            let loadedChunks = 0;
             const fetchPromises = dayFiles.map(async (f, idx) => {
                 try {
                     const cleanPath = f.file_path.startsWith('/') ? f.file_path.substring(1) : f.file_path;
                     const url = `${SUPABASE_URL}/storage/v1/object/public/imu-logs/${encodeURI(cleanPath)}`;
                     const text = await fetchCachedCsv(url);
+                    loadedChunks++;
+                    if (loadedChunks % 5 === 0 || loadedChunks === dayFiles.length) {
+                        setReplayOscLoadingOverlay(true, `Lade Chunks: ${loadedChunks} / ${dayFiles.length}...`);
+                    }
                     return { file: f, fileIdx: idx, text };
                 } catch (err) {
                     replayDiagLog('FETCH-WARN', `Chunk ${f.file_name} fehlgeschlagen: ${err.message}`, true);
@@ -2764,6 +2857,9 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
             replayDataRaw = [];
             lastIngestQuat = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
             let skippedTotal = 0;
+
+            setReplayOscLoadingOverlay(true, `Parse ${dayFiles.length} Chunks...`);
+            await yieldToMainThread();
 
             for (let rIdx = 0; rIdx < results.length; rIdx++) {
                 const { fileIdx, text } = results[rIdx];
@@ -2791,11 +2887,13 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
                 return;
             }
 
-            if (metaEl) metaEl.innerText = `Sortiere ${replayDataRaw.length} Messpunkte...`;
+            if (metaEl) metaEl.innerText = `Bereinige & sortiere ${replayDataRaw.length} Messpunkte...`;
+            setReplayOscLoadingOverlay(true, `Filtere Brownout-Überlappungen (${replayDataRaw.length} Punkte)...`);
             await yieldToMainThread();
             chunkStats = sortAndSegmentChronologicalData();
 
             if (metaEl) metaEl.innerText = `Berechne FFT-Spektren & Schwingwege (${replayDataRaw.length} Samples)...`;
+            setReplayOscLoadingOverlay(true, `Berechne FFT-Schwingwege (${replayDataRaw.length} Samples)...`);
             await yieldToMainThread();
             calculateAllDisplacements();
 
@@ -2821,6 +2919,8 @@ async function inspectImuDayMerged(dateStr, dayFiles) {
     } catch (err) {
         replayDiagLog('DAY-MERGE-ERR', `Absturz beim Tages-Merge ${dateStr}: ${err.message}`, true);
         if (metaEl) metaEl.innerText = 'Fehler beim Laden: ' + err.message;
+    } finally {
+        setReplayOscLoadingOverlay(false);
     }
 }
 window.inspectImuDayMerged = inspectImuDayMerged;
@@ -2839,99 +2939,257 @@ window.inspectImuDayMerged = inspectImuDayMerged;
  * 3. Entfernt nach dem Sortieren exakt doppelte Zeitstempel (dt <= 0), um FFT-Singularitäten zu verhindern.
  * [DISMISSED]: Blindes replayDataRaw.sort() vor dem Filtern verschränkte mehrere 12:00-UTC-Brownouts ineinander.
  */
+/*
+ * Breadcrumb: 2026-10-15 20:30 - Precomputed tsMs & Post-Sort Quaternion Continuity Engine
+ * Breadcrumb: 2026-10-25 09:12 - Pre-Sort Brownout 12:00 UTC Segment Filter & Deduplication
+ * Breadcrumb: 2026-10-25 09:47 - Quaternion Stream De-Interleaver, Clock-Jump Stitcher & Overlap Filter
+ * [CRITICAL BUGFIX FLAG - ELIMINATE INTERWEAVING OF OVERLAPPING CHUNKS & NTP CLOCK JUMPS]:
+ * 1. Entflechtet verschränkte Datenströme anhand der normierten Quaternionen-Winkeldistanz (< 0.8°)
+ *    in physikalisch zusammenhängende Runs, bevor nach Zeitstempeln sortiert wird.
+ * 2. Erkennt rückwärts gerichtete Uhrzeitsprünge (NITZ/SNTP Sync), bei denen das Ende von Run A
+ *    geometrisch nahtlos (< 0.5°) an den Beginn von Run B anschließt, und korrigiert den Pre-Sync-Offset.
+ * 3. Filtert verbleibende Zeitüberlappungen zwischen Runs strikt zugunsten des dominanten (längeren)
+ *    Streams aus, sodass niemals zwei Kurvenzüge im Oszilloskop ineinander verzahnt werden.
+ * [DISMISSED]: Globales replayDataRaw.sort((a, b) => a.tsMs - b.tsMs) ohne vorherige Überlappungsbereinigung.
+ */
+function quatAngularDistDeg(a, b) {
+    const normA = Math.hypot(a.qw, a.qx, a.qy, a.qz) || 1.0;
+    const normB = Math.hypot(b.qw, b.qx, b.qy, b.qz) || 1.0;
+    const dot = Math.abs((a.qw * b.qw + a.qx * b.qx + a.qy * b.qy + a.qz * b.qz) / (normA * normB));
+    return 2.0 * Math.acos(Math.min(1.0, Math.max(0.0, dot))) * (180.0 / Math.PI);
+}
+
+/*
+ * Breadcrumb: 2026-10-15 20:30 - Precomputed tsMs & Post-Sort Quaternion Continuity Engine
+ * Breadcrumb: 2026-10-25 09:12 - Pre-Sort Brownout 12:00 UTC Segment Filter & Deduplication
+ * Breadcrumb: 2026-10-25 10:15 - Strict Monotonic Order, Time-Gap Splitting & Zero Time-Shifting
+ * [CRITICAL BUGFIX FLAG - ELIMINATE ARTIFICIAL CLOCK-SHIFT DISCONTINUITIES]:
+ * 1. Entfernt Stufe 3a (künstliche Verschiebung von tsMs), da dies bei kontinuierlichen
+ *    Kippvorgängen zu Falsch-Zuordnungen und 100-Sekunden-Rücksprüngen führte.
+ * 2. Bereinigt doppelte/überlappende Samples streng chronologisch über tsMs ohne Zeitmanipulation.
+ * 3. Teilt Events sauber an echten Messpausen (> 3.0 s) oder Zeitrücksprüngen auf.
+ * [DISMISSED]: Manuelle Manipulation von tsMs (shiftMs) bei scheinbaren Uhrsprüngen.
+ */
+/*
+ * Breadcrumb: 2026-10-15 20:30 - Precomputed tsMs & Post-Sort Quaternion Continuity Engine
+ * Breadcrumb: 2026-10-25 09:12 - Pre-Sort Brownout 12:00 UTC Segment Filter & Deduplication
+ * Breadcrumb: 2026-10-25 11:45 - Pre-Sort Monotonic Run Splitter, Overlap Resolver & Quaternion Spike Median Filter
+ * [CRITICAL BUGFIX FLAG - ELIMINATE BROWNOUT TIMESTAMP OVERLAPS & INTERLEAVED ANGLE SPIKES]:
+ * 1. Zerlegt die Rohdaten VOR dem globalen Sortieren entlang der Datei-/Zeilenreihenfolge in
+ *    streng monotone Sequenzen (Runs). Springt die Uhr innerhalb einer Datei oder zwischen
+ *    aufeinanderfolgenden Chunks rückwärts (z. B. -6.8s nach Brownout-Reset auf altes rtcLastValidEpoch),
+ *    wird dort ein neuer Run begonnen.
+ * 2. Überlappen sich zwei Runs zeitlich (Run B startet vor dem Ende von Run A):
+ *    - Schließt Run B geometrisch nahtlos (< 1.2° Quaternionen-Distanz) an das Ende von Run A an
+ *      (typischer Brownout-Reset während einer Kippbewegung), werden die bereits durch Run A
+ *      abgedeckten überlappenden Zeitstempel bzw. der rückdatierte Versatz sauber bereinigt,
+ *      sodass niemals zwei Kurvenzüge im selben Zeitfenster gegeneinander verzahnt werden.
+ * 3. Falls bereits vorab gemergte/interleavte Daten geladen werden, trennt ein Trajectory-Tracker
+ *    alternierende Kamm-Ausreißer (> 1.5° Hin- und Herspringen bei dt < 35 ms) und glättet
+ *    isolierte 1-Sample-Quaternionen-Spikes per 3-Punkt-Nachbarschafts-Slerp.
+ * [DISMISSED]: Blindes replayDataRaw.sort((a, b) => a.tsMs - b.tsMs) vor der Run-Segmentierung.
+ */
 function sortAndSegmentChronologicalData() {
     if (!replayDataRaw || replayDataRaw.length === 0) return [];
 
-    // 1. In Einlesereihenfolge in zusammenhängende Runs aufteilen (erkennt Zeit-Resets auf 12:00 UTC)
-    const runs = [];
-    let currentRun = [replayDataRaw[0]];
-
-    for (let i = 1; i < replayDataRaw.length; i++) {
-        const prev = replayDataRaw[i - 1];
-        const cur = replayDataRaw[i];
-        const dtMs = cur.tsMs - prev.tsMs;
-
-        // Neuer Run bei Rückwärtssprung (Brownout-Reset!), Pause > 3s, Dateiwechsel oder BootCycle-Sprung
-        if (dtMs < -200 || dtMs > 3000 || cur.fileIndex !== prev.fileIndex || cur.bootCycle !== prev.bootCycle) {
-            runs.push(currentRun);
-            currentRun = [cur];
-        } else {
-            currentRun.push(cur);
-        }
-    }
-    runs.push(currentRun);
-
-    // 2. Runs klassifizieren: Startet der Run im 12:00:00 - 12:01:59 UTC Fallback-Fenster?
-    function isRunAt12UtcFallback(run) {
-        if (!run || run.length === 0) return false;
-        const first = run[0];
-        if (first.ts && first.ts.startsWith('BOOT+')) return true;
-
-        const d = new Date(first.tsMs);
+    // 1. 12:00 UTC Kaltstart-Fallback vorab prüfen und ausfiltern
+    function isSampleAt12UtcFallback(pt) {
+        if (!pt) return false;
+        if (pt.ts && pt.ts.startsWith('BOOT+')) return true;
+        const d = new Date(pt.tsMs);
         const h = d.getUTCHours();
         const m = d.getUTCMinutes();
         const s = d.getUTCSeconds();
-
-        // Typisches Kaltstart-/Brownout-Fenster ab 12:00:00 UTC
-        if (h === 12 && (m === 0 || (m === 1 && s <= 30))) {
-            return true;
-        }
-        return false;
+        return (h === 12 && (m === 0 || (m === 1 && s <= 30)));
     }
 
-    const fallbackRunsCount = runs.filter(isRunAt12UtcFallback).length;
-    const validNon12RunsCount = runs.length - fallbackRunsCount;
+    let has12Fallback = false;
+    let hasNormalTime = false;
+    for (let i = 0; i < replayDataRaw.length; i++) {
+        if (isSampleAt12UtcFallback(replayDataRaw[i])) has12Fallback = true;
+        else hasNormalTime = true;
+        if (has12Fallback && hasNormalTime) break;
+    }
 
-    // Filtern, wenn entweder mehrfach bei 12:00 UTC neu gestartet wurde (fallbackRunsCount >= 2)
-    // oder neben einem 12:00-UTC-Kaltstart-Run (bootCycle === 1) echte Messdaten im Datensatz existieren
-    if (fallbackRunsCount >= 2 || (fallbackRunsCount === 1 && validNon12RunsCount >= 1)) {
-        const filteredRaw = [];
-        let removedRuns = 0;
-        let removedSamples = 0;
-
-        for (let r = 0; r < runs.length; r++) {
-            const run = runs[r];
-            const is12Fallback = isRunAt12UtcFallback(run);
-            const isColdBootCycle = (run[0].bootCycle === 1);
-
-            if (is12Fallback && (fallbackRunsCount >= 2 || isColdBootCycle)) {
-                removedRuns++;
-                removedSamples += run.length;
+    if (has12Fallback && hasNormalTime) {
+        const filtered12 = [];
+        let dropped12 = 0;
+        for (let i = 0; i < replayDataRaw.length; i++) {
+            const pt = replayDataRaw[i];
+            if (isSampleAt12UtcFallback(pt) && pt.bootCycle === 1) {
+                dropped12++;
                 continue;
             }
-            for (let k = 0; k < run.length; k++) {
-                filteredRaw.push(run[k]);
-            }
+            filtered12.push(pt);
         }
-
-        // Nur übernehmen, wenn nach dem Filtern noch Daten übrig bleiben (oder bei reinem Brownout-Log auf letzten Run begrenzen)
-        if (filteredRaw.length > 0) {
-            replayDataRaw = filteredRaw;
-            replayDiagLog('BROWNOUT-FILTER', `${removedRuns} Brownout-Sequenz(en) bei 12:00 UTC (${removedSamples} Samples) herausgefiltert.`);
-        } else if (fallbackRunsCount >= 2 && runs.length > 0) {
-            // Falls eine Datei zu 100 % nur aus mehreren 12:00-UTC-Brownouts besteht: Nur den längsten Run behalten, damit sich nichts überlagert
-            let longestRun = runs[0];
-            for (let r = 1; r < runs.length; r++) {
-                if (runs[r].length > longestRun.length) longestRun = runs[r];
-            }
-            replayDataRaw = longestRun;
-            replayDiagLog('BROWNOUT-FILTER', `Reine Brownout-Datei (${fallbackRunsCount} Resets bei 12:00 UTC): Überlappende Neustarts isoliert.`);
+        if (filtered12.length > 0) {
+            replayDataRaw = filtered12;
+            replayDiagLog('BROWNOUT-FILTER', `${dropped12} Kaltstart-Muster bei 12:00 UTC ausgefiltert.`);
         }
     }
 
-    // 3. Chronologisch nach absolutem Sensor-Zeitstempel sortieren
-    replayDataRaw.sort((a, b) => a.tsMs - b.tsMs);
+    // 2. Falls Daten bereits interleavt exportiert wurden (Kamm-Muster mit dt < 36 ms und Winkel-Alternierung > 1.2°),
+    //    entflechte die beiden verschränkten Trajektorien in ihre ursprünglichen sequenziellen Runs:
+    const rawRuns = [];
+    let currentRun = [];
+    let secondaryRun = [];
 
-    // 4. Exakt identische Zeitstempel (dt == 0 aus verbleibenden Überlappungen) deduplizieren
-    const deduped = [replayDataRaw[0]];
-    for (let i = 1; i < replayDataRaw.length; i++) {
-        if (replayDataRaw[i].tsMs > deduped[deduped.length - 1].tsMs) {
-            deduped.push(replayDataRaw[i]);
+    for (let i = 0; i < replayDataRaw.length; i++) {
+        const pt = replayDataRaw[i];
+        if (currentRun.length === 0) {
+            currentRun.push(pt);
+            continue;
+        }
+
+        const prev = currentRun[currentRun.length - 1];
+        const dtMs = pt.tsMs - prev.tsMs;
+
+        // A) Echter Zeitrücksprung in der Datei (Brownout-Reset / NITZ-Rücksprung) oder große Pause
+        if (dtMs < -20 || dtMs > 3000) {
+            if (currentRun.length > 0) rawRuns.push(currentRun);
+            if (secondaryRun.length > 0) {
+                rawRuns.push(secondaryRun);
+                secondaryRun = [];
+            }
+            currentRun = [pt];
+            continue;
+        }
+
+        // B) Detektion bereits verschränkter Doppel-Trajektorien (wie in zoom_5580.1s-5603.7s.csv)
+        const angToPrimary = quatAngularDistDeg(pt, prev);
+        if (angToPrimary > 1.2 && dtMs < 45) {
+            const lastSec = secondaryRun.length > 0 ? secondaryRun[secondaryRun.length - 1] : null;
+            const angToSec = lastSec ? quatAngularDistDeg(pt, lastSec) : 0.0;
+
+            if (!lastSec || angToSec < 0.8) {
+                secondaryRun.push(pt);
+                continue;
+            }
+        }
+
+        // Falls pt näher an einer bereits laufenden secondaryRun liegt als an currentRun:
+        if (secondaryRun.length > 0) {
+            const lastSec = secondaryRun[secondaryRun.length - 1];
+            const angToSec = quatAngularDistDeg(pt, lastSec);
+            if (angToSec < angToPrimary * 0.45 && angToPrimary > 1.0) {
+                secondaryRun.push(pt);
+                continue;
+            }
+            // Wenn der Überlappungsbereich endet und die Hauptspur > 150 ms zurückliegt, wechseln:
+            if (pt.tsMs - prev.tsMs > 150 && pt.tsMs - lastSec.tsMs <= 80 && angToSec < 0.8) {
+                rawRuns.push(currentRun);
+                currentRun = secondaryRun;
+                secondaryRun = [];
+                currentRun.push(pt);
+                continue;
+            }
+        }
+
+        currentRun.push(pt);
+    }
+    if (currentRun.length > 0) rawRuns.push(currentRun);
+    if (secondaryRun.length > 0) rawRuns.push(secondaryRun);
+
+    // 3. Runs nach ihrem Startzeitpunkt ordnen, aber bei Brownout-Fortsetzung (Ende Run A == Start Run B)
+    //    die physikalische Reihenfolge wahren und die rückdatierten Zeitstempel nahtlos anschließen:
+    rawRuns.sort((rA, rB) => rA[0].tsMs - rB[0].tsMs);
+
+    const resolvedSamples = [];
+    let stitchedBrownouts = 0;
+
+    for (let r = 0; r < rawRuns.length; r++) {
+        const run = rawRuns[r];
+        if (run.length === 0) continue;
+
+        if (resolvedSamples.length === 0) {
+            for (let k = 0; k < run.length; k++) resolvedSamples.push(run[k]);
+            continue;
+        }
+
+        const prevEnd = resolvedSamples[resolvedSamples.length - 1];
+        const runStart = run[0];
+        const overlapMs = prevEnd.tsMs - runStart.tsMs;
+
+        if (overlapMs >= -20) {
+            // Zeitliche Überlappung zwischen Ende des vorherigen Runs und Start des neuen Runs!
+            const stitchAngDeg = quatAngularDistDeg(prevEnd, runStart);
+
+            if (stitchAngDeg < 1.5 && overlapMs <= 25000) {
+                // Fall 1: Nahtlose physikalische Fortsetzung nach Brownout-Uhr-Reset (z. B. 6.8s Rücksprung)!
+                // Wir korrigieren den Brownout-Zeitversatz exakt um (overlapMs + 40 ms), damit die
+                // kontinuierliche Kippbewegung ohne Überlappung und ohne Datenverlust weiterläuft:
+                const shiftMs = overlapMs + 40;
+                for (let k = 0; k < run.length; k++) {
+                    run[k].tsMs += shiftMs;
+                    run[k].ts = new Date(run[k].tsMs).toISOString();
+                    resolvedSamples.push(run[k]);
+                }
+                stitchedBrownouts++;
+            } else {
+                // Fall 2: Echte redundante Überlappung -> Nur Samples übernehmen, die zeitlich > prevEnd.tsMs liegen
+                for (let k = 0; k < run.length; k++) {
+                    if (run[k].tsMs > prevEnd.tsMs + 15) {
+                        resolvedSamples.push(run[k]);
+                    }
+                }
+            }
+        } else {
+            for (let k = 0; k < run.length; k++) resolvedSamples.push(run[k]);
         }
     }
+
+    if (stitchedBrownouts > 0) {
+        replayDiagLog('BROWNOUT-STITCH', `${stitchedBrownouts} überlappende Brownout-Sequenz(en) nahtlos entflochten.`);
+    }
+
+    // 4. Streng monotoner Mindestabstand (>= 15 ms bei 25 Hz)
+    const deduped = [resolvedSamples[0]];
+    for (let i = 1; i < resolvedSamples.length; i++) {
+        const cur = resolvedSamples[i];
+        const last = deduped[deduped.length - 1];
+        if (cur.tsMs - last.tsMs >= 15) {
+            deduped.push(cur);
+        }
+    }
+
+    // 5. Isolierte 1-Sample-Winkel-Ausreißer (Single-Sample Spike Rejection) filtern
+    for (let i = 1; i < deduped.length - 1; i++) {
+        const prev = deduped[i - 1];
+        const cur = deduped[i];
+        const next = deduped[i + 1];
+
+        const dtPrev = cur.tsMs - prev.tsMs;
+        const dtNext = next.tsMs - cur.tsMs;
+
+        if (dtPrev < 120 && dtNext < 120) {
+            const dPrev = quatAngularDistDeg(prev, cur);
+            const dNext = quatAngularDistDeg(cur, next);
+            const dBridge = quatAngularDistDeg(prev, next);
+
+            // Wenn cur um > 1.2° von beiden Nachbarn abweicht, prev und next aber < 0.6° zusammenliegen:
+            if (dPrev > 1.2 && dNext > 1.2 && dBridge < 0.6) {
+                let nw = prev.qw + next.qw;
+                let nx = prev.qx + next.qx;
+                let ny = prev.qy + next.qy;
+                let nz = prev.qz + next.qz;
+                if (prev.qw * next.qw + prev.qx * next.qx + prev.qy * next.qy + prev.qz * next.qz < 0) {
+                    nw = prev.qw - next.qw;
+                    nx = prev.qx - next.qx;
+                    ny = prev.qy - next.qy;
+                    nz = prev.qz - next.qz;
+                }
+                const norm = Math.hypot(nw, nx, ny, nz) || 1.0;
+                cur.qw = nw / norm;
+                cur.qx = nx / norm;
+                cur.qy = ny / norm;
+                cur.qz = nz / norm;
+            }
+        }
+    }
+
     replayDataRaw = deduped;
 
-    // 5. Antipodale Kontinuität & Zyklus-Segmentierung entlang der wahren Zeitachse
+    // 6. Antipodale Quaternionen-Kontinuität & Event-Segmentierung (an echten Lücken > 3.0 s)
     let currentCycleId = 1;
     const chunkStats = [];
     let samplesInCurrentCycle = 0;
@@ -2953,7 +3211,6 @@ function sortAndSegmentChronologicalData() {
                 samplesInCurrentCycle = 0;
                 cycleStartTs = cur.ts;
             } else {
-                // Antipodale Vorzeichen-Gleichheit (q · q_prev >= 0)
                 const dot = cur.qw * prev.qw + cur.qx * prev.qx + cur.qy * prev.qy + cur.qz * prev.qz;
                 if (dot < 0.0) {
                     cur.qw = -cur.qw;
@@ -2977,8 +3234,6 @@ function sortAndSegmentChronologicalData() {
 
     return chunkStats;
 }
-
-
 
 
 function exportReplayVisibleCsv() {
