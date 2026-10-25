@@ -209,9 +209,9 @@
 
             <!-- Breadcrumb: 2026-10-06 20:45 - Replay Deck Vertical Stack & Per-Channel Filter Toggles -->
             <!-- [CRITICAL WORKFLOW & VIEWPORT REFACTORING]:
-            1. 3D-Fenster oben auf voller Breite mit Raum für Drehachsen-Visualisierung.
-            2. Alle 3 Oszillographen über 100% Breite mit dedizierten Kanal-Filtern (X, Y, Z / Roll, Pitch, Yaw).
-            3. Play- und Transport-Leiste sauber am unteren Rand positioniert. -->
+    1. 3D-Fenster oben auf voller Breite mit Raum für Drehachsen-Visualisierung.
+    2. Alle 3 Oszillographen über 100% Breite mit dedizierten Kanal-Filtern (X, Y, Z / Roll, Pitch, Yaw).
+    3. Play- und Transport-Leiste sauber am unteren Rand positioniert. -->
             <!-- 1. OBERE SEKTION: 3D-VIEWPORT (Volle Breite) -->
             <div class="w-full rounded-lg border border-slate-300 relative overflow-hidden h-64 sm:h-72 mb-4" style="background-color: #dbe2ea;">
                 <!-- Schnellauswahl Blickwinkel -->
@@ -226,6 +226,48 @@
                 <div id="replay-canvas-container" class="w-full h-full"></div>
                 <div id="replay-overlay-hud" class="absolute bottom-2 left-2 bg-white/95 backdrop-blur-sm border border-slate-300 px-2.5 py-1 rounded text-[10px] font-mono text-slate-800 pointer-events-none shadow-sm">
                     ROT: W:1.00 X:0.00 Y:0.00 Z:0.00
+                </div>
+            </div>
+
+
+
+            <!-- 1B. OBERE PLAY- & TRANSPORT-LEISTE (DIREKT UNTER DEM 3D-FENSTER) -->
+            <div id="replay-transport-bar-top" class="bg-slate-100 p-3.5 rounded-lg border border-slate-300 flex flex-col gap-3 mb-4">
+                <div class="flex items-center gap-3">
+                    <span id="replay-current-time-label-top" class="text-xs font-mono text-slate-700 w-14">0.0s</span>
+                    <input type="range" id="replay-scrubber-top" min="0" max="100" value="0" step="1"
+                           oninput="onReplayScrub(this.value)"
+                           class="w-full h-2 bg-slate-300 rounded-lg cursor-pointer accent-green-600">
+                    <span id="replay-total-time-label-top" class="text-xs font-mono text-slate-500 w-14 text-right">0.0s</span>
+                </div>
+
+                <div class="flex flex-wrap justify-between items-center gap-3 pt-2 border-t border-slate-200">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button id="btn-replay-play-top" onclick="toggleReplayPlay()" class="bg-stag-green text-white px-4 py-1.5 rounded text-xs font-bold hover:opacity-90 shadow-sm transition">
+                            ▶ Abspielen
+                        </button>
+                        <button onclick="resetReplayPlayback()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 border border-slate-300 px-3 py-1.5 rounded text-xs font-bold transition">
+                            ⏮ Reset
+                        </button>
+
+                        <!-- Tempo-Presets (Oben) -->
+                        <div class="flex items-center gap-1 bg-white border border-slate-300 rounded-lg p-0.5 shadow-sm ml-1">
+                            <span class="text-[10px] text-slate-500 font-semibold px-1 hidden md:inline">Tempo:</span>
+                            <button type="button" onclick="setReplaySpeedPreset(0.1)" id="btn-spd-0.1-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.1x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(0.25)" id="btn-spd-0.25-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.25x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(0.5)" id="btn-spd-0.5-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">0.5x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(1.0)" id="btn-spd-1.0-top" class="px-2 py-1 text-[11px] font-bold rounded bg-stag-green text-white shadow-sm transition">1.0x</button>
+                            <button type="button" onclick="setReplaySpeedPreset(2.0)" id="btn-spd-2.0-top" class="px-2 py-1 text-[11px] font-bold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">2.0x</button>
+                        </div>
+                    </div>
+
+                    <!-- Zyklus-Auswahl (Oben) -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-slate-600 font-semibold whitespace-nowrap">Aufweckzyklus:</label>
+                        <select id="replay-cycle-select-top" onchange="onReplayCycleSelect(this.value)" class="bg-white border border-slate-300 rounded px-3 py-1.5 text-xs text-green-700 font-mono font-bold outline-none">
+                            <option value="ALL">Alle Zyklen der Datei</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
