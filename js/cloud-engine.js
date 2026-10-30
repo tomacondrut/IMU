@@ -901,32 +901,118 @@ function prefetchDayLogs(dateStr) {
 }
 window.prefetchDayLogs = prefetchDayLogs;
 
+/*
+ * Breadcrumb: 2026-10-18 16:00 - Device- & Month-Scoped Query with 10k Limit
+ * Breadcrumb: 2026-10-25 09:12 - Brownout 12:00 UTC Fallback File Filter
+ * Breadcrumb: 2026-10-25 09:30 - O(N) Pre-Indexed 12:00 UTC Map & Hover Prefetcher
+ * Breadcrumb: 2026-10-30 15:50 - Multi-Page Range Fetcher (30k Cap) & Dual Date-Column Filter
+ * [CRITICAL BUGFIX FLAG - BYPASS SUPABASE 1000-ROW POSTGREST CAP & LATE-SYNC DROPS]:
+ * 1. Erhöht das Monats-Limit von 10.000 auf 30.000 Datensätze (MAX_MONTH_RECORDS = 30000).
+ * 2. Implementiert eine automatische .range()-Paginierung in 1.000er-Seiten, da Supabase/PostgREST
+ *    einzelne .limit()-Requests serverseitig oft hart bei 1.000 Zeilen abschneidet.
+ * 3. Filtert kombiniert auf day_folder UND uploaded_at, damit verzögert hochgeladene LTE-Batches
+ *    nicht aus dem Monatsfenster fallen.
+ * [DISMISSED]: Einzelner .limit(10000) Call ohne .range()-Loop lief bei >1.000 Chunks/Monat in das PostgREST-Cap.
+ */
 async function fetchImuCloudLogs() {
     const container = document.getElementById('imu-logs-container');
     if (!container) return;
 
     container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId}...</div>`;
 
-    // Aktiven Monatsbereich aus calendarDate mit 7 Tagen Puffer ermitteln
+    // Aktiven Monatsbereich aus calendarDate mit ±7 Tagen Puffer für Wochenansicht/Monatswechsel ermitteln
     const year = calendarDate.getFullYear();
     const month = calendarDate.getMonth();
-    const startIso = new Date(year, month, 1 - 7, 0, 0, 0).toISOString();
-    const endIso = new Date(year, month + 1, 7, 23, 59, 59).toISOString();
+    const startDateObj = new Date(Date.UTC(year, month, 1 - 7, 0, 0, 0));
+    const endDateObj = new Date(Date.UTC(year, month + 1, 7, 23, 59, 59));
 
-    const { data: files, error } = await sbClient
-        .from('imu_log_files')
-        .select('*')
-        .eq('device_id', selectedDeviceId)
-        .gte('uploaded_at', startIso)
-        .lte('uploaded_at', endIso)
-        .order('uploaded_at', { ascending: false })
-        .limit(10000);
-    if (error) {
-        container.innerHTML = `<div class="p-3 bg-red-50 border border-red-300 rounded text-xs text-red-700">Fehler beim Laden: ${error.message}</div>`;
+    const startIso = startDateObj.toISOString();
+    const endIso = endDateObj.toISOString();
+    const startDayStr = startIso.split('T')[0];
+    const endDayStr = endIso.split('T')[0];
+
+    const PAGE_SIZE = 1000;
+    const MAX_MONTH_RECORDS = 30000; // Verdreifachtes Limit (30.000 Chunks pro Monatsabfrage)
+    let allFetchedFiles = [];
+    let fetchError = null;
+
+    // Paginierte Abfrage in 1.000er-Blöcken, um das serverseitige PostgREST-Max-Rows-Limit sicher zu durchbrechen
+    for (let offset = 0; offset < MAX_MONTH_RECORDS; offset += PAGE_SIZE) {
+        const { data: pageFiles, error } = await sbClient
+            .from('imu_log_files')
+            .select('*')
+            .eq('device_id', selectedDeviceId)
+            .or(`and(day_folder.gte.${startDayStr},day_folder.lte.${endDayStr}),and(uploaded_at.gte.${startIso},uploaded_at.lte.${endIso})`)
+            .order('uploaded_at', { ascending: false })
+            .range(offset, offset + PAGE_SIZE - 1);
+
+        if (error) {
+            fetchError = error;
+            break;
+        }
+
+        if (!pageFiles || pageFiles.length === 0) {
+            break;
+        }
+
+        allFetchedFiles = allFetchedFiles.concat(pageFiles);
+
+        if (allFetchedFiles.length >= PAGE_SIZE && container) {
+            container.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">Lade IMU-Archive für ${selectedDeviceId} (${allFetchedFiles.length} Chunks geladen)...</div>`;
+        }
+
+        // Wenn weniger als PAGE_SIZE (1000) zurückkamen, sind wir am Ende der Daten angelangt
+        if (pageFiles.length < PAGE_SIZE) {
+            break;
+        }
+    }
+
+    // Fallback, falls die Tabelle in älteren Schemata keine 'day_folder'-Spalte im .or()-Filter akzeptiert
+    if (fetchError) {
+        console.warn('[CLOUD LOGS] Fallback auf reinen uploaded_at Filter:', fetchError.message);
+        fetchError = null;
+        allFetchedFiles = [];
+
+        for (let offset = 0; offset < MAX_MONTH_RECORDS; offset += PAGE_SIZE) {
+            const { data: pageFiles, error } = await sbClient
+                .from('imu_log_files')
+                .select('*')
+                .eq('device_id', selectedDeviceId)
+                .gte('uploaded_at', startIso)
+                .lte('uploaded_at', endIso)
+                .order('uploaded_at', { ascending: false })
+                .range(offset, offset + PAGE_SIZE - 1);
+
+            if (error) {
+                fetchError = error;
+                break;
+            }
+            if (!pageFiles || pageFiles.length === 0) break;
+            allFetchedFiles = allFetchedFiles.concat(pageFiles);
+            if (pageFiles.length < PAGE_SIZE) break;
+        }
+    }
+
+    if (fetchError) {
+        container.innerHTML = `<div class="p-3 bg-red-50 border border-red-300 rounded text-xs text-red-700">Fehler beim Laden: ${fetchError.message}</div>`;
         return;
     }
 
-    const rawFiles = files || [];
+    // Dubletten-Bereinigung anhand file_path (falls .or() überlappende Zeilen geliefert hat)
+    const uniqueMap = new Map();
+    for (let i = 0; i < allFetchedFiles.length; i++) {
+        const item = allFetchedFiles[i];
+        const key = item.file_path || item.id || `${item.file_name}_${item.uploaded_at}`;
+        if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, item);
+        }
+    }
+    const rawFiles = Array.from(uniqueMap.values());
+
+    if ( typeof appendTerminalLog === 'function' ) {
+        appendTerminalLog(`[CLOUD LOGS] ${rawFiles.length} Datensätze für Monatsfenster (${startDayStr} bis ${endDayStr}) geladen.`);
+    }
+
     const countMap12Utc = build12UtcCountMap(rawFiles);
     currentDeviceFiles = rawFiles.filter(f => !isBrownout12UtcFileArtifact(f, countMap12Utc));
     window.currentDeviceFiles = currentDeviceFiles;
